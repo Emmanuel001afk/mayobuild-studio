@@ -1,6 +1,6 @@
 import { createStart, createMiddleware } from "@tanstack/react-start";
 import { renderErrorPage } from "./lib/error-page";
-import { attachAuth } from "./integrations/mysupabase/attach.client";
+import { attachAuth } from "./integrations/mysupabase/attach-auth";
 
 const errorMiddleware = createMiddleware().server(async ({ next }) => {
   try {
