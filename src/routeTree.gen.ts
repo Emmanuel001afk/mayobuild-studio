@@ -10,33 +10,43 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiPublicSupabaseConfigRouteImport } from './routes/api/public/supabase-config'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicSupabaseConfigRoute = ApiPublicSupabaseConfigRouteImport.update({
+  id: '/api/public/supabase-config',
+  path: '/api/public/supabase-config',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/public/supabase-config'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/public/supabase-config'
+  id: '__root__' | '/' | '/api/public/supabase-config'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiPublicSupabaseConfigRoute: typeof ApiPublicSupabaseConfigRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +58,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/supabase-config': {
+      id: '/api/public/supabase-config'
+      path: '/api/public/supabase-config'
+      fullPath: '/api/public/supabase-config'
+      preLoaderRoute: typeof ApiPublicSupabaseConfigRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiPublicSupabaseConfigRoute: ApiPublicSupabaseConfigRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
