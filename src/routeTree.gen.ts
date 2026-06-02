@@ -9,13 +9,31 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ProjectsNewRouteImport } from './routes/projects.new'
+import { Route as ProjectsIdRouteImport } from './routes/projects.$id'
 import { Route as ApiTranscribeRouteImport } from './routes/api/transcribe'
 import { Route as ApiPublicSupabaseConfigRouteImport } from './routes/api/public/supabase-config'
 
+const AuthRoute = AuthRouteImport.update({
+  id: '/auth',
+  path: '/auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsNewRoute = ProjectsNewRouteImport.update({
+  id: '/projects/new',
+  path: '/projects/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIdRoute = ProjectsIdRouteImport.update({
+  id: '/projects/$id',
+  path: '/projects/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiTranscribeRoute = ApiTranscribeRouteImport.update({
@@ -31,41 +49,93 @@ const ApiPublicSupabaseConfigRoute = ApiPublicSupabaseConfigRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/auth': typeof AuthRoute
   '/api/transcribe': typeof ApiTranscribeRoute
+  '/projects/$id': typeof ProjectsIdRoute
+  '/projects/new': typeof ProjectsNewRoute
   '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/auth': typeof AuthRoute
   '/api/transcribe': typeof ApiTranscribeRoute
+  '/projects/$id': typeof ProjectsIdRoute
+  '/projects/new': typeof ProjectsNewRoute
   '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/auth': typeof AuthRoute
   '/api/transcribe': typeof ApiTranscribeRoute
+  '/projects/$id': typeof ProjectsIdRoute
+  '/projects/new': typeof ProjectsNewRoute
   '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/transcribe' | '/api/public/supabase-config'
+  fullPaths:
+    | '/'
+    | '/auth'
+    | '/api/transcribe'
+    | '/projects/$id'
+    | '/projects/new'
+    | '/api/public/supabase-config'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/transcribe' | '/api/public/supabase-config'
-  id: '__root__' | '/' | '/api/transcribe' | '/api/public/supabase-config'
+  to:
+    | '/'
+    | '/auth'
+    | '/api/transcribe'
+    | '/projects/$id'
+    | '/projects/new'
+    | '/api/public/supabase-config'
+  id:
+    | '__root__'
+    | '/'
+    | '/auth'
+    | '/api/transcribe'
+    | '/projects/$id'
+    | '/projects/new'
+    | '/api/public/supabase-config'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AuthRoute: typeof AuthRoute
   ApiTranscribeRoute: typeof ApiTranscribeRoute
+  ProjectsIdRoute: typeof ProjectsIdRoute
+  ProjectsNewRoute: typeof ProjectsNewRoute
   ApiPublicSupabaseConfigRoute: typeof ApiPublicSupabaseConfigRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/new': {
+      id: '/projects/new'
+      path: '/projects/new'
+      fullPath: '/projects/new'
+      preLoaderRoute: typeof ProjectsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id': {
+      id: '/projects/$id'
+      path: '/projects/$id'
+      fullPath: '/projects/$id'
+      preLoaderRoute: typeof ProjectsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/transcribe': {
@@ -87,9 +157,22 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AuthRoute: AuthRoute,
   ApiTranscribeRoute: ApiTranscribeRoute,
+  ProjectsIdRoute: ProjectsIdRoute,
+  ProjectsNewRoute: ProjectsNewRoute,
   ApiPublicSupabaseConfigRoute: ApiPublicSupabaseConfigRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}
