@@ -8,7 +8,7 @@ import { callRouter } from "@/lib/router.functions";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
 
-export function PdfReader() {
+export default function PdfReaderClient() {
   const [file, setFile] = useState<File | null>(null);
   const [numPages, setNumPages] = useState(0);
   const [page, setPage] = useState(1);
