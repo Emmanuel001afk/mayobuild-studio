@@ -1,12 +1,14 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { useAuth, signOut } from "@/hooks/use-auth";
+import { useAuth, signIn, signUp, signOut } from "@/hooks/use-auth";
 import { listProjects } from "@/lib/projects.functions";
 import { PdfReader } from "@/components/PdfReader";
+import { ProviderHealth } from "@/components/ProviderHealth";
+import { useProjectPresence } from "@/hooks/use-presence";
 import {
   Sparkles, Plus, LogOut, Globe, Smartphone, Users, Eye, FileText,
-  Cpu, Mic, Zap,
+  Cpu, Mic, Zap, Loader2,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -16,35 +18,105 @@ export const Route = createFileRoute("/")({
       { name: "description", content: "Multi-user platform that builds websites and native mobile apps using a smart router across 8 AI providers." },
     ],
   }),
-  component: Dashboard,
+  component: Home,
 });
 
-function Dashboard() {
+function Home() {
   const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading…
+      </div>
+    );
+  }
+  return user ? <Dashboard user={user} /> : <Landing />;
+}
+
+function Landing() {
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    try {
+      if (mode === "signin") await signIn(email, password);
+      else await signUp(email, password);
+    } catch (e: any) {
+      setErr(e.message ?? "Auth failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen">
+      <header className="border-b border-border bg-background/60 backdrop-blur">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-2">
+          <Sparkles className="h-6 w-6 text-primary" />
+          <span className="font-bold text-lg mb-gradient-text">Mayobuild Studio</span>
+        </div>
+      </header>
+      <main className="max-w-6xl mx-auto px-4 py-10 grid lg:grid-cols-2 gap-10 items-center">
+        <section>
+          <h1 className="text-4xl sm:text-5xl font-bold mb-3">
+            Build <span className="mb-gradient-text">websites & native apps</span> from a prompt.
+          </h1>
+          <p className="text-muted-foreground max-w-xl mb-6">
+            Routed across 8 AI providers with automatic failover. Voice-first. PDF-ready.
+            Mobile output is a downloadable Expo project with native alarm permissions pre-wired.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <span className="mb-chip"><Cpu className="h-3 w-3" /> Smart router (8 providers)</span>
+            <span className="mb-chip"><Mic className="h-3 w-3" /> Voice prompts</span>
+            <span className="mb-chip"><FileText className="h-3 w-3" /> PDF reader</span>
+            <span className="mb-chip"><Smartphone className="h-3 w-3" /> Native app generator</span>
+            <span className="mb-chip"><Users className="h-3 w-3" /> Live presence</span>
+          </div>
+        </section>
+        <section className="mb-card p-8 w-full max-w-md justify-self-center">
+          <h2 className="text-2xl font-bold mb-1">
+            {mode === "signin" ? "Welcome back" : "Create your account"}
+          </h2>
+          <p className="text-sm text-muted-foreground mb-6">
+            {mode === "signin" ? "Sign in to your workspace" : "Start building in seconds"}
+          </p>
+          <form onSubmit={submit} className="space-y-3">
+            <input className="mb-input" type="email" required placeholder="you@email.com"
+              value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input className="mb-input" type="password" required minLength={6} placeholder="Password (min 6 chars)"
+              value={password} onChange={(e) => setPassword(e.target.value)} />
+            {err && <div className="text-sm text-destructive">{err}</div>}
+            <button className="mb-btn w-full" disabled={busy}>
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+              {mode === "signin" ? "Sign in" : "Create account"}
+            </button>
+          </form>
+          <button
+            className="mt-4 text-sm text-muted-foreground hover:text-foreground w-full text-center"
+            onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
+          >
+            {mode === "signin" ? "No account? Sign up" : "Have an account? Sign in"}
+          </button>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function Dashboard({ user }: { user: { id: string; email?: string } }) {
   const navigate = useNavigate();
   const list = useServerFn(listProjects);
   const [projects, setProjects] = useState<{ owned: any[]; shared: any[] }>({ owned: [], shared: [] });
   const [loadingProjects, setLoadingProjects] = useState(true);
 
   useEffect(() => {
-    if (!loading && !user) navigate({ to: "/auth" });
-  }, [loading, user, navigate]);
-
-  useEffect(() => {
-    if (!user) return;
-    list()
-      .then(setProjects)
-      .catch(console.error)
-      .finally(() => setLoadingProjects(false));
-  }, [user]);
-
-  if (loading || !user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-muted-foreground">
-        Loading…
-      </div>
-    );
-  }
+    list().then(setProjects).catch(console.error).finally(() => setLoadingProjects(false));
+  }, []);
 
   return (
     <div className="min-h-screen">
@@ -56,7 +128,7 @@ function Dashboard() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground hidden sm:inline">{user.email}</span>
-            <button className="mb-btn-ghost" onClick={() => signOut().then(() => navigate({ to: "/auth" }))}>
+            <button className="mb-btn-ghost" onClick={() => signOut().then(() => navigate({ to: "/" }))}>
               <LogOut className="h-4 w-4" /> Sign out
             </button>
           </div>
@@ -64,33 +136,12 @@ function Dashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8 space-y-10">
-        {/* Hero */}
-        <section className="mb-card p-8">
-          <h1 className="text-3xl sm:text-4xl font-bold mb-2">
-            Build <span className="mb-gradient-text">websites & native apps</span> from a prompt.
-          </h1>
-          <p className="text-muted-foreground mb-6 max-w-2xl">
-            Routed across 8 AI providers. Voice-first. PDF-ready. Mobile output is a downloadable Expo project you build to a Play Store .aab with one EAS command.
-          </p>
-          <div className="flex flex-wrap gap-2 mb-6">
-            <span className="mb-chip"><Cpu className="h-3 w-3" /> Smart router (8 providers)</span>
-            <span className="mb-chip"><Mic className="h-3 w-3" /> Voice prompts</span>
-            <span className="mb-chip"><FileText className="h-3 w-3" /> PDF reader</span>
-            <span className="mb-chip"><Smartphone className="h-3 w-3" /> Native app generator</span>
-            <span className="mb-chip"><Users className="h-3 w-3" /> Collaboration</span>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <Link to="/projects/new" className="mb-btn"><Plus className="h-4 w-4" /> New project</Link>
-          </div>
-        </section>
-
-        {/* Workspace */}
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold flex items-center gap-2">
               <Zap className="h-5 w-5 text-primary" /> Your workspace
             </h2>
-            <Link to="/projects/new" className="mb-btn-ghost"><Plus className="h-4 w-4" /> New</Link>
+            <Link to="/projects/new" className="mb-btn"><Plus className="h-4 w-4" /> New project</Link>
           </div>
           {loadingProjects ? (
             <div className="text-muted-foreground">Loading projects…</div>
@@ -100,13 +151,16 @@ function Dashboard() {
             </div>
           ) : (
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {projects.owned.map((p) => <ProjectCard key={p.id} p={p} />)}
-              {projects.shared.map((p) => <ProjectCard key={p.id} p={p} shared />)}
+              {projects.owned.map((p) => <ProjectCard key={p.id} p={p} me={user} />)}
+              {projects.shared.map((p) => <ProjectCard key={p.id} p={p} me={user} shared />)}
             </div>
           )}
         </section>
 
-        {/* PDF tool */}
+        <section>
+          <ProviderHealth />
+        </section>
+
         <section>
           <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
             <FileText className="h-5 w-5 text-primary" /> Instant PDF reader
@@ -118,7 +172,8 @@ function Dashboard() {
   );
 }
 
-function ProjectCard({ p, shared = false }: { p: any; shared?: boolean }) {
+function ProjectCard({ p, shared = false, me }: { p: any; shared?: boolean; me: { id: string; email?: string } }) {
+  const viewers = useProjectPresence(p.id, me);
   return (
     <Link to="/projects/$id" params={{ id: p.id }} className="mb-card p-4 hover:scale-[1.01] transition-transform block">
       <div className="flex items-start justify-between mb-2">
@@ -130,7 +185,13 @@ function ProjectCard({ p, shared = false }: { p: any; shared?: boolean }) {
       </div>
       <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{p.description || "—"}</p>
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1"><Eye className="h-3 w-3" /> 1 viewer</span>
+        <span className="flex items-center gap-1">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+          </span>
+          <Eye className="h-3 w-3" /> {viewers} {viewers === 1 ? "viewer" : "viewers"}
+        </span>
         <span className="capitalize">{p.kind}</span>
       </div>
     </Link>
