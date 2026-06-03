@@ -1,14 +1,15 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { useAuth, signIn, signUp, signOut } from "@/hooks/use-auth";
+import { useAuth, signOut } from "@/hooks/use-auth";
 import { listProjects } from "@/lib/projects.functions";
 import { PdfReader } from "@/components/PdfReader";
 import { ProviderHealth } from "@/components/ProviderHealth";
+import { AuthForm } from "@/components/AuthForm";
 import { useProjectPresence } from "@/hooks/use-presence";
 import {
   Sparkles, Plus, LogOut, Globe, Smartphone, Users, Eye, FileText,
-  Cpu, Mic, Zap, Loader2,
+  Cpu, Mic, Zap, Loader2, ShieldAlert,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -34,25 +35,6 @@ function Home() {
 }
 
 function Landing() {
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true); setErr(null);
-    try {
-      if (mode === "signin") await signIn(email, password);
-      else await signUp(email, password);
-    } catch (e: any) {
-      setErr(e.message ?? "Auth failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="min-h-screen">
       <header className="border-b border-border bg-background/60 backdrop-blur">
@@ -79,29 +61,7 @@ function Landing() {
           </div>
         </section>
         <section className="mb-card p-8 w-full max-w-md justify-self-center">
-          <h2 className="text-2xl font-bold mb-1">
-            {mode === "signin" ? "Welcome back" : "Create your account"}
-          </h2>
-          <p className="text-sm text-muted-foreground mb-6">
-            {mode === "signin" ? "Sign in to your workspace" : "Start building in seconds"}
-          </p>
-          <form onSubmit={submit} className="space-y-3">
-            <input className="mb-input" type="email" required placeholder="you@email.com"
-              value={email} onChange={(e) => setEmail(e.target.value)} />
-            <input className="mb-input" type="password" required minLength={6} placeholder="Password (min 6 chars)"
-              value={password} onChange={(e) => setPassword(e.target.value)} />
-            {err && <div className="text-sm text-destructive">{err}</div>}
-            <button className="mb-btn w-full" disabled={busy}>
-              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {mode === "signin" ? "Sign in" : "Create account"}
-            </button>
-          </form>
-          <button
-            className="mt-4 text-sm text-muted-foreground hover:text-foreground w-full text-center"
-            onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
-          >
-            {mode === "signin" ? "No account? Sign up" : "Have an account? Sign in"}
-          </button>
+          <AuthForm />
         </section>
       </main>
     </div>
@@ -111,6 +71,7 @@ function Landing() {
 function Dashboard({ user }: { user: { id: string; email?: string } }) {
   const navigate = useNavigate();
   const list = useServerFn(listProjects);
+  const { isAdmin } = useAuth();
   const [projects, setProjects] = useState<{ owned: any[]; shared: any[] }>({ owned: [], shared: [] });
   const [loadingProjects, setLoadingProjects] = useState(true);
 
