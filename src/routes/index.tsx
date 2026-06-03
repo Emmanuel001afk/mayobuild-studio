@@ -89,6 +89,9 @@ function Dashboard({ user }: { user: { id: string; email?: string } }) {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground hidden sm:inline">{user.email}</span>
+            {isAdmin && (
+              <Link to="/admin" className="mb-btn-ghost"><ShieldAlert className="h-4 w-4" /> Admin</Link>
+            )}
             <button className="mb-btn-ghost" onClick={() => signOut().then(() => navigate({ to: "/" }))}>
               <LogOut className="h-4 w-4" /> Sign out
             </button>
