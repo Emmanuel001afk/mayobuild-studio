@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { getSupabase } from "@/integrations/mysupabase/client";
 
+export const ADMIN_EMAIL = "akintundeemmanuel14@gmail.com";
+
 export function useAuth() {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -24,7 +26,8 @@ export function useAuth() {
     return () => unsub?.();
   }, []);
 
-  return { session, user, loading };
+  const isAdmin = !!user?.email && user.email.toLowerCase() === ADMIN_EMAIL;
+  return { session, user, loading, isAdmin };
 }
 
 export async function signIn(email: string, password: string) {
@@ -40,6 +43,32 @@ export async function signUp(email: string, password: string) {
     password,
     options: { emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined },
   });
+  if (error) throw error;
+}
+
+export async function signInWithGoogle() {
+  const sb = await getSupabase();
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
+    },
+  });
+  if (error) throw error;
+}
+
+export async function sendPasswordReset(email: string) {
+  const sb = await getSupabase();
+  const { error } = await sb.auth.resetPasswordForEmail(email, {
+    redirectTo:
+      typeof window !== "undefined" ? `${window.location.origin}/reset-password` : undefined,
+  });
+  if (error) throw error;
+}
+
+export async function updatePassword(password: string) {
+  const sb = await getSupabase();
+  const { error } = await sb.auth.updateUser({ password });
   if (error) throw error;
 }
 
