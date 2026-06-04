@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient, type Session } from "@supabase/supabase-js";
+import { normalizeSupabaseUrl } from "@/integrations/mysupabase/url";
 
 let _clientPromise: Promise<SupabaseClient> | null = null;
 
@@ -8,7 +9,15 @@ export function getSupabase(): Promise<SupabaseClient> {
     const res = await fetch("/api/public/supabase-config");
     if (!res.ok) throw new Error("Failed to load Supabase config");
     const { url, anonKey } = (await res.json()) as { url: string; anonKey: string };
-    return createClient(url, anonKey, {
+    const normalizedUrl = normalizeSupabaseUrl(url);
+
+    return createClient(normalizedUrl, anonKey, {
+      global: {
+        headers: {
+          apikey: anonKey,
+          Authorization: `Bearer ${anonKey}`,
+        },
+      },
       auth: {
         persistSession: true,
         autoRefreshToken: true,
