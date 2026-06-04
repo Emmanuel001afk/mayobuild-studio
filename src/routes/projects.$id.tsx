@@ -80,6 +80,8 @@ function ProjectPage() {
       const a = document.createElement("a"); a.href = url; a.download = res.filename; a.click();
       URL.revokeObjectURL(url);
       setOutput({ kind: "text", text: res.previewCode, provider: res.provider });
+      // Persist the raw generated code to the project so it survives reloads (never lose code).
+      await save({ data: { id, preview_html: res.previewCode } });
     } catch (e: any) { setErr(e.message); }
     finally { setMobileBusy(false); }
   }

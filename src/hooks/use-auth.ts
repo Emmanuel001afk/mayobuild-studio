@@ -38,12 +38,17 @@ export async function signIn(email: string, password: string) {
 
 export async function signUp(email: string, password: string) {
   const sb = await getSupabase();
-  const { error } = await sb.auth.signUp({
+  const { data, error } = await sb.auth.signUp({
     email,
     password,
     options: { emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined },
   });
   if (error) throw error;
+  // Email confirmation is disabled — auto sign in so the user lands in the dashboard immediately.
+  if (!data.session) {
+    const { error: siErr } = await sb.auth.signInWithPassword({ email, password });
+    if (siErr) throw siErr;
+  }
 }
 
 export async function signInWithGoogle() {
