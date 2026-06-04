@@ -9,7 +9,7 @@ import { AuthForm } from "@/components/AuthForm";
 import { useProjectPresence } from "@/hooks/use-presence";
 import {
   Sparkles, Plus, LogOut, Globe, Smartphone, Users, Eye, FileText,
-  Cpu, Mic, Zap, Loader2, ShieldAlert,
+  Cpu, Mic, Zap, Loader2, ShieldAlert, ExternalLink,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -158,6 +158,12 @@ function ProjectCard({ p, shared = false, me }: { p: any; shared?: boolean; me: 
         </span>
         <span className="capitalize">{p.kind}</span>
       </div>
+      {p.kind === "website" && p.liveSubdomain && (
+        <div className="mt-3 text-xs text-muted-foreground flex items-center gap-1">
+          <ExternalLink className="h-3 w-3" />
+          <span>{p.liveSubdomain}</span>
+        </div>
+      )}
     </Link>
   );
 }

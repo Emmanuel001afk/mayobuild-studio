@@ -8,6 +8,7 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { getSupabase } from "@/integrations/mysupabase/client";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -119,6 +120,22 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const router = useRouter();
+
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
+    void (async () => {
+      const supabase = await getSupabase();
+      const { data } = supabase.auth.onAuthStateChange(() => {
+        void router.invalidate();
+        void queryClient.invalidateQueries();
+      });
+      unsubscribe = () => data.subscription.unsubscribe();
+    })();
+
+    return () => unsubscribe?.();
+  }, [queryClient, router]);
 
   return (
     <QueryClientProvider client={queryClient}>

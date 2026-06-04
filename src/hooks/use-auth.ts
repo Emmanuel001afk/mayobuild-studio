@@ -11,19 +11,36 @@ export function useAuth() {
 
   useEffect(() => {
     let unsub: (() => void) | undefined;
-    (async () => {
-      const sb = await getSupabase();
-      const { data: { session } } = await sb.auth.getSession();
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-      const { data } = sb.auth.onAuthStateChange((_e, s) => {
-        setSession(s);
-        setUser(s?.user ?? null);
-      });
-      unsub = () => data.subscription.unsubscribe();
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const sb = await getSupabase();
+        const { data: { session } } = await sb.auth.getSession();
+        if (cancelled) return;
+        setSession(session);
+        setUser(session?.user ?? null);
+        setLoading(false);
+
+        const { data } = sb.auth.onAuthStateChange((_e, s) => {
+          setSession(s);
+          setUser(s?.user ?? null);
+          setLoading(false);
+        });
+        unsub = () => data.subscription.unsubscribe();
+      } catch (error) {
+        console.error("Auth initialization failed", error);
+        if (cancelled) return;
+        setSession(null);
+        setUser(null);
+        setLoading(false);
+      }
     })();
-    return () => unsub?.();
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, []);
 
   const isAdmin = !!user?.email && user.email.toLowerCase() === ADMIN_EMAIL;

@@ -44,6 +44,31 @@ export const assignFreeSubdomain = createServerFn({ method: "POST" })
   .middleware([requireUser])
   .inputValidator((d: unknown) => SubInput.parse(d))
   .handler(async ({ data }) => {
-    const sub = `${data.preferred}.mayobuild.app`;
+    const label = data.preferred
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-{2,}/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 30) || `site-${data.projectId.slice(0, 8)}`;
+    const sub = `${label}.mayobuild.app`;
     return { status: "assigned" as const, subdomain: sub, projectId: data.projectId };
+  });
+
+export const getDefaultProjectSubdomain = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .inputValidator((d: unknown) => z.object({ projectId: z.string().uuid(), projectName: z.string().min(1).max(120) }).parse(d))
+  .handler(async ({ data }) => {
+    const preferred = data.projectName
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-{2,}/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 30) || `site-${data.projectId.slice(0, 8)}`;
+
+    return {
+      status: "assigned" as const,
+      projectId: data.projectId,
+      subdomain: `${preferred}.mayobuild.app`,
+      source: "free-default" as const,
+    };
   });
