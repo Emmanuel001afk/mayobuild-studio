@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useAuth, ADMIN_EMAIL } from "@/hooks/use-auth";
 import { getAdminOverview } from "@/lib/admin.functions";
+import { AdminFeatureToggles } from "@/components/AdminFeatureToggles";
 import { ArrowLeft, Loader2, ShieldAlert, Users, FolderKanban, Cpu, DollarSign, Smartphone } from "lucide-react";
 
 export const Route = createFileRoute("/admin")({
@@ -76,6 +77,8 @@ function AdminPage() {
               <div className="text-xs text-muted-foreground">{data.revenue.totalTokens.toLocaleString()} tokens</div>
             </div>
           </div>
+
+          <AdminFeatureToggles />
 
           <Section title="All projects">
             <Table headers={["Name", "Kind", "Owner", "Updated"]} rows={data.projects.map((p: any) => [
