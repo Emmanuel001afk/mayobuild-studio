@@ -3,6 +3,17 @@ import { z } from "zod";
 import { requireUser } from "@/integrations/mysupabase/middleware.server";
 import { getAdmin } from "@/integrations/mysupabase/admin.server";
 
+function getDefaultSubdomain(project: { id: string; name: string }) {
+  const label = project.name
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 30) || `site-${project.id.slice(0, 8)}`;
+
+  return `${label}.mayobuild.app`;
+}
+
 export const listProjects = createServerFn({ method: "GET" })
   .middleware([requireUser])
   .handler(async ({ context }) => {
@@ -21,8 +32,12 @@ export const listProjects = createServerFn({ method: "GET" })
       .not("accepted_at", "is", null);
     const collabProjects = (collab ?? [])
       .map((c: any) => c.project)
-      .filter(Boolean);
-    return { owned: owned ?? [], shared: collabProjects };
+      .filter(Boolean)
+      .map((project: any) => ({ ...project, liveSubdomain: getDefaultSubdomain(project) }));
+    return {
+      owned: (owned ?? []).map((project: any) => ({ ...project, liveSubdomain: getDefaultSubdomain(project) })),
+      shared: collabProjects,
+    };
   });
 
 const CreateInput = z.object({
@@ -62,7 +77,7 @@ export const createProject = createServerFn({ method: "POST" })
       .select("*")
       .single();
     if (error) throw new Error(error.message);
-    return project;
+    return { ...project, liveSubdomain: getDefaultSubdomain(project) };
   });
 
 export const getProject = createServerFn({ method: "POST" })
@@ -92,7 +107,10 @@ export const getProject = createServerFn({ method: "POST" })
       .from("project_collaborators")
       .select("id,invited_email,role,accepted_at")
       .eq("project_id", project.id);
-    return { project, collaborators: collaborators ?? [] };
+    return {
+      project: { ...project, liveSubdomain: getDefaultSubdomain(project) },
+      collaborators: collaborators ?? [],
+    };
   });
 
 const SaveOutput = z.object({ id: z.string().uuid(), preview_html: z.string().max(500000) });
