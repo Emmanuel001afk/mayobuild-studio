@@ -37,7 +37,10 @@ export function useAuth() {
       }
     })();
 
-    return () => unsub?.();
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, []);
 
   const isAdmin = !!user?.email && user.email.toLowerCase() === ADMIN_EMAIL;
