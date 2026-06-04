@@ -20,8 +20,8 @@ export function AuthForm({ onAuthed }: { onAuthed?: () => void }) {
       if (mode === "signin") { await signIn(email, password); onAuthed?.(); }
       else if (mode === "signup") {
         await signUp(email, password);
-        setMsg("Account created. You can sign in now.");
-        setMode("signin");
+        // Auto sign-in happens inside signUp() — land straight in the dashboard.
+        onAuthed?.();
       } else {
         await sendPasswordReset(email);
         setMsg("Check your inbox for a reset link.");
