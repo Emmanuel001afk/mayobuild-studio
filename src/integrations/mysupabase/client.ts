@@ -15,7 +15,6 @@ export function getSupabase(): Promise<SupabaseClient> {
       global: {
         headers: {
           apikey: anonKey,
-          Authorization: `Bearer ${anonKey}`,
         },
       },
       auth: {
