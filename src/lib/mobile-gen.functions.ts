@@ -26,16 +26,20 @@ function extractCode(s: string): string {
 }
 
 function appJson(name: string) {
+  const slug = name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  const pkg = `com.mayobuild.${name.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
   return JSON.stringify(
     {
       expo: {
         name,
-        slug: name.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
+        slug,
         version: "1.0.0",
         orientation: "portrait",
         platforms: ["android"],
         android: {
-          package: `com.mayobuild.${name.toLowerCase().replace(/[^a-z0-9]/g, "")}`,
+          package: pkg,
+          // Multi-window / split-screen multitasking
+          androidStatusBar: { translucent: true },
           permissions: [
             "RECEIVE_BOOT_COMPLETED",
             "WAKE_LOCK",
@@ -45,13 +49,31 @@ function appJson(name: string) {
             "FOREGROUND_SERVICE",
             "VIBRATE",
             "SET_ALARM",
+            "QUERY_ALL_PACKAGES",
+          ],
+          // Declare ourselves as a candidate for: PDF viewer, default browser, link handler.
+          // The user explicitly picks us via the system "Open with" / "Default apps" prompt.
+          intentFilters: [
+            {
+              action: "VIEW",
+              category: ["DEFAULT", "BROWSABLE"],
+              data: [{ mimeType: "application/pdf" }, { scheme: "content" }, { scheme: "file" }],
+            },
+            {
+              action: "VIEW",
+              category: ["DEFAULT", "BROWSABLE"],
+              data: [{ scheme: "http" }, { scheme: "https" }],
+            },
           ],
         },
+        androidNavigationBar: { visible: "leanback" },
         plugins: [
           "expo-notifications",
           "expo-task-manager",
           "expo-background-fetch",
         ],
+        // resizeableActivity + supportsPictureInPicture for split-screen multitasking
+        extra: { resizeableActivity: true, supportsPictureInPicture: true },
       },
     },
     null,
