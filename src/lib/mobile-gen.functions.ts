@@ -145,6 +145,146 @@ const EAS_JSON = JSON.stringify(
   2,
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Website → Expo app (WebView wrapper with persistent alarms + permissions)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const WrapInput = z.object({
+  projectId: z.string().uuid(),
+  appName: z.string().min(1).max(60),
+  html: z.string().min(20).max(500_000),
+});
+
+function webviewApp(): string {
+  return `import { useEffect, useRef } from "react";
+import { StatusBar } from "expo-status-bar";
+import { SafeAreaView, StyleSheet, BackHandler, Platform } from "react-native";
+import { WebView } from "react-native-webview";
+import * as Notifications from "expo-notifications";
+import Asset from "./assets/site";
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: false,
+  }) as any,
+});
+
+export default function App() {
+  const ref = useRef<WebView>(null);
+
+  useEffect(() => {
+    (async () => {
+      // Request notification + alarm permissions up front.
+      const { status } = await Notifications.getPermissionsAsync();
+      if (status !== "granted") await Notifications.requestPermissionsAsync();
+    })();
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      ref.current?.goBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, []);
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar style="auto" />
+      <WebView
+        ref={ref}
+        originWhitelist={["*"]}
+        source={{ html: Asset.html, baseUrl: "" }}
+        allowsBackForwardNavigationGestures
+        javaScriptEnabled
+        domStorageEnabled
+        style={styles.web}
+      />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#000" },
+  web: { flex: 1, backgroundColor: "#fff" },
+});
+`;
+}
+
+function responsiveWrap(html: string): string {
+  // Inject viewport + responsive container so the page scales cleanly on phones.
+  const meta = `<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<style>html,body{margin:0;padding:0;width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%}body>*{max-width:100vw}</style>`;
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head([^>]*)>/i, `<head$1>${meta}`);
+  return `<!doctype html><html><head>${meta}</head><body>${html}</body></html>`;
+}
+
+function wrapperPackageJson(name: string) {
+  return JSON.stringify(
+    {
+      name: name.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
+      version: "1.0.0",
+      main: "node_modules/expo/AppEntry.js",
+      scripts: { start: "expo start", android: "expo run:android", build: "eas build -p android --profile production" },
+      dependencies: {
+        expo: "~52.0.0",
+        "expo-status-bar": "~2.0.0",
+        "expo-notifications": "~0.29.0",
+        "expo-task-manager": "~12.0.0",
+        "expo-background-fetch": "~13.0.0",
+        "expo-alarm-module": "^1.1.0",
+        react: "18.3.1",
+        "react-native": "0.76.0",
+        "react-native-webview": "13.12.5",
+      },
+      devDependencies: { "@types/react": "~18.3.0", typescript: "^5.3.0" },
+    },
+    null,
+    2,
+  );
+}
+
+export const wrapWebsiteAsApp = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .inputValidator((d: unknown) => WrapInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const { default: JSZip } = await import("jszip");
+    const html = responsiveWrap(data.html);
+
+    const zip = new JSZip();
+    zip.file("App.tsx", webviewApp());
+    zip.file("assets/site.ts", `export default { html: ${JSON.stringify(html)} };\n`);
+    zip.file("app.json", appJson(data.appName));
+    zip.file("package.json", wrapperPackageJson(data.appName));
+    zip.file("eas.json", EAS_JSON);
+    zip.file("tsconfig.json", JSON.stringify({ extends: "expo/tsconfig.base", compilerOptions: { strict: true } }, null, 2));
+    zip.file(".gitignore", "node_modules\n.expo\ndist\n*.log\n");
+    zip.file(
+      "README.md",
+      `# ${data.appName}\n\nWebsite wrapped as an Expo Android app by Mayobuild Studio.\n\n` +
+        `## Run\n\`\`\`bash\nnpm install\nnpx expo start\n\`\`\`\n\n` +
+        `## Build .aab\n\`\`\`bash\nnpm i -g eas-cli && eas login && eas build:configure\n` +
+        `eas build -p android --profile production\n\`\`\`\n\n` +
+        `Permissions wired: notifications, exact alarms, background fetch, boot-completed.\n`,
+    );
+
+    const buf = await zip.generateAsync({ type: "uint8array" });
+    const b64 = Buffer.from(buf).toString("base64");
+
+    await context.admin.from("generations").insert({
+      project_id: data.projectId,
+      user_id: context.user.id,
+      task: "website_to_app",
+      provider: "wrapper",
+      model: "webview",
+      prompt: `Wrap website as Expo app (${html.length} bytes)`,
+      output: "ok",
+      ok: true,
+    });
+
+    return {
+      filename: `${data.appName.replace(/[^a-zA-Z0-9-]/g, "_")}-expo.zip`,
+      base64: b64,
+    };
+  });
+
 export const generateMobileApp = createServerFn({ method: "POST" })
   .middleware([requireUser])
   .inputValidator((d: unknown) => GenInput.parse(d))

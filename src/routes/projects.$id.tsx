@@ -4,7 +4,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/hooks/use-auth";
 import { getProject, inviteCollaborator, savePreview } from "@/lib/projects.functions";
 import { callRouter } from "@/lib/router.functions";
-import { generateMobileApp } from "@/lib/mobile-gen.functions";
+import { generateMobileApp, wrapWebsiteAsApp } from "@/lib/mobile-gen.functions";
 import { MicButton } from "@/components/MicButton";
 import {
   ArrowLeft, Sparkles, Loader2, Download, Image as ImageIcon, Send, Users, Globe, Smartphone, Cpu,
@@ -24,6 +24,7 @@ function ProjectPage() {
   const save = useServerFn(savePreview);
   const invite = useServerFn(inviteCollaborator);
   const genMobile = useServerFn(generateMobileApp);
+  const wrapSite = useServerFn(wrapWebsiteAsApp);
 
   const [data, setData] = useState<any>(null);
   const [prompt, setPrompt] = useState("");
@@ -32,6 +33,7 @@ function ProjectPage() {
   const [busy, setBusy] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
   const [mobileBusy, setMobileBusy] = useState(false);
+  const [wrapBusy, setWrapBusy] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -96,6 +98,22 @@ function ProjectPage() {
     finally { setImageBusy(false); }
   }
 
+  async function exportSiteAsApp() {
+    const html = output?.kind === "text" ? output.text : data?.project?.preview_html;
+    if (!html) { setErr("Generate or save a website first, then export."); return; }
+    setWrapBusy(true); setErr(null);
+    try {
+      const res = await wrapSite({ data: { projectId: id, appName: data?.project?.name ?? "MyApp", html } });
+      const bytes = Uint8Array.from(atob(res.base64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = res.filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) { setErr(e.message); }
+    finally { setWrapBusy(false); }
+  }
+
+
   async function sendInvite() {
     if (!inviteEmail) return;
     setInviteMsg(null);
@@ -156,7 +174,19 @@ function ProjectPage() {
                 </button>
               )}
             </div>
+            {!isMobile && (
+              <button
+                className="mb-btn-ghost w-full mt-2 border border-border"
+                onClick={exportSiteAsApp}
+                disabled={wrapBusy}
+                title="Wrap this website as a native Android Expo app (WebView + alarms + notifications)"
+              >
+                {wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Smartphone className="h-4 w-4" />}
+                Export as mobile app (.zip)
+              </button>
+            )}
           </div>
+
 
           <div className="mb-card p-4">
             <h3 className="font-semibold mb-2 flex items-center gap-2">
