@@ -33,6 +33,7 @@ function ProjectPage() {
   const [busy, setBusy] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
   const [mobileBusy, setMobileBusy] = useState(false);
+  const [wrapBusy, setWrapBusy] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
