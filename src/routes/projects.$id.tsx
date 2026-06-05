@@ -98,6 +98,22 @@ function ProjectPage() {
     finally { setImageBusy(false); }
   }
 
+  async function exportSiteAsApp() {
+    const html = output?.kind === "text" ? output.text : data?.project?.preview_html;
+    if (!html) { setErr("Generate or save a website first, then export."); return; }
+    setWrapBusy(true); setErr(null);
+    try {
+      const res = await wrapSite({ data: { projectId: id, appName: data?.project?.name ?? "MyApp", html } });
+      const bytes = Uint8Array.from(atob(res.base64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = res.filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) { setErr(e.message); }
+    finally { setWrapBusy(false); }
+  }
+
+
   async function sendInvite() {
     if (!inviteEmail) return;
     setInviteMsg(null);
