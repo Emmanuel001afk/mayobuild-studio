@@ -24,6 +24,7 @@ function ProjectPage() {
   const save = useServerFn(savePreview);
   const invite = useServerFn(inviteCollaborator);
   const genMobile = useServerFn(generateMobileApp);
+  const wrapSite = useServerFn(wrapWebsiteAsApp);
 
   const [data, setData] = useState<any>(null);
   const [prompt, setPrompt] = useState("");
