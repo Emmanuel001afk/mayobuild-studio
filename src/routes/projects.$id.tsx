@@ -4,7 +4,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/hooks/use-auth";
 import { getProject, inviteCollaborator, savePreview } from "@/lib/projects.functions";
 import { callRouter } from "@/lib/router.functions";
-import { generateMobileApp } from "@/lib/mobile-gen.functions";
+import { generateMobileApp, wrapWebsiteAsApp } from "@/lib/mobile-gen.functions";
 import { MicButton } from "@/components/MicButton";
 import {
   ArrowLeft, Sparkles, Loader2, Download, Image as ImageIcon, Send, Users, Globe, Smartphone, Cpu,
