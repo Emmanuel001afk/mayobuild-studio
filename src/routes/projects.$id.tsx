@@ -174,7 +174,19 @@ function ProjectPage() {
                 </button>
               )}
             </div>
+            {!isMobile && (
+              <button
+                className="mb-btn-ghost w-full mt-2 border border-border"
+                onClick={exportSiteAsApp}
+                disabled={wrapBusy}
+                title="Wrap this website as a native Android Expo app (WebView + alarms + notifications)"
+              >
+                {wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Smartphone className="h-4 w-4" />}
+                Export as mobile app (.zip)
+              </button>
+            )}
           </div>
+
 
           <div className="mb-card p-4">
             <h3 className="font-semibold mb-2 flex items-center gap-2">
