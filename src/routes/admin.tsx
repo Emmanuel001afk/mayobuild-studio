@@ -80,7 +80,10 @@ function AdminPage() {
             </div>
           </div>
 
+          <AdminCustomDomain />
+
           <AdminFeatureToggles />
+
 
           <Section title="All projects">
             <Table headers={["Name", "Kind", "Owner", "Updated"]} rows={data.projects.map((p: any) => [
