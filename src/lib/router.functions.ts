@@ -9,6 +9,10 @@ const RouteInput = z.object({
   system: z.string().optional(),
   preferProvider: z.string().optional(),
   projectId: z.string().uuid().optional(),
+  history: z
+    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(50000) }))
+    .max(40)
+    .optional(),
 });
 
 export const callRouter = createServerFn({ method: "POST" })
@@ -37,6 +41,7 @@ export const callRouter = createServerFn({ method: "POST" })
 
       const messages = [
         ...(data.system ? [{ role: "system" as const, content: data.system }] : []),
+        ...(data.history ?? []).map((m) => ({ role: m.role, content: m.content })),
         { role: "user" as const, content: data.prompt },
       ];
       const result = await routeChat(data.task as RouteTask, messages, {
