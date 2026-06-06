@@ -226,7 +226,19 @@ function ProjectPage() {
     window.open(url, "_blank", "noopener");
   }
 
+  async function doPublish() {
+    if (!previewHtml) { setErr("Generate something first, then publish."); return; }
+    setPublishBusy(true); setErr(null);
+    try {
+      const res = await publish({ data: { projectId: id, html: previewHtml } });
+      setPublishedUrl(res.url);
+      window.open(res.url, "_blank", "noopener");
+    } catch (e: any) { setErr(e.message); }
+    finally { setPublishBusy(false); }
+  }
+
   function openInNewTab() {
+
     if (!previewHtml) return;
     const blob = new Blob([previewHtml], { type: "text/html" });
     const url = URL.createObjectURL(blob);
