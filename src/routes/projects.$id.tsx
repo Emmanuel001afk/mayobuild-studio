@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/hooks/use-auth";
-import { getProject, savePreview } from "@/lib/projects.functions";
+import { getProject, savePreview, publishSite } from "@/lib/projects.functions";
 import { callRouter } from "@/lib/router.functions";
 import { wrapWebsiteAsApp } from "@/lib/mobile-gen.functions";
 import { MicButton } from "@/components/MicButton";
@@ -23,10 +23,24 @@ type ChatMsg = {
   summary?: { added: string[]; changed: string[]; removed: string[] };
 };
 
-const SYSTEM_WEBSITE =
-  'You are Mayobuild AI. Generate complete single-file HTML with embedded CSS and JS. Always add features the user didn\'t ask for but needs. Output code in html tags.';
-const SYSTEM_MOBILE =
-  'You are Mayobuild AI. Generate a complete single-file Expo React Native App.tsx (TypeScript). Always add features the user didn\'t ask for but needs (permissions, error states, empty states). Output code in ```tsx``` tags.';
+const SYSTEM_WEBSITE = [
+  "You are Mayobuild AI, an expert front-end engineer and designer.",
+  "ALWAYS return a single complete HTML document inside one ```html ... ``` fenced block with embedded CSS and JS — no external CSS/JS files.",
+  "Make it visually rich and production-grade: a hero with a real background image (use https://images.unsplash.com/... or https://picsum.photos/seed/<word>/1600/900 URLs), gradients, SVG icons, smooth scroll, hover states, semantic HTML, accessible alt text, meta tags, Open Graph tags, mobile-first responsive layout (CSS grid + flex, clamp() typography).",
+  "ALWAYS include relevant imagery: hero image, gallery/cards with Unsplash photos matching the topic, an inline SVG logo, and at least one CSS gradient or pattern background.",
+  "ALWAYS add helpful features the user didn't ask for but obviously needs (nav, footer, contact section, favicon as data-URI, working anchor links).",
+  "BEFORE the code block, write 1-3 short sentences in plain English summarizing what you built and the key design choices. AFTER the code block, list 3 concrete suggestions the user could ask for next.",
+  "Never apologize. Never say you are an AI. Never mention Lovable.",
+].join(" ");
+
+const SYSTEM_MOBILE = [
+  "You are Mayobuild AI. Generate ONE complete Expo React Native App.tsx (TypeScript) inside a ```tsx``` fenced block.",
+  "Use only standard Expo SDK imports available on Snack: react, react-native, expo-status-bar. No external native modules.",
+  "Make it polished: SafeAreaView, StatusBar, themed colors, icons via emoji, smooth animations, empty/loading states, and at least one image via { uri: 'https://images.unsplash.com/...' }.",
+  "Always add features the user didn't ask for but needs (permissions hints, error handling).",
+  "BEFORE the code block, write 1-3 short sentences summarizing what you built. AFTER it, list 3 concrete next-step suggestions.",
+].join(" ");
+
 
 const WEBSITE_SUGGESTIONS = [
   "Landing page for a coffee shop with menu and hours",
@@ -86,8 +100,12 @@ function ProjectPage() {
   const [iframeKey, setIframeKey] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [wrapBusy, setWrapBusy] = useState(false);
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const publish = useServerFn(publishSite);
+
 
   useEffect(() => {
     if (!loading && !user) navigate({ to: "/auth" });
@@ -208,7 +226,19 @@ function ProjectPage() {
     window.open(url, "_blank", "noopener");
   }
 
+  async function doPublish() {
+    if (!previewHtml) { setErr("Generate something first, then publish."); return; }
+    setPublishBusy(true); setErr(null);
+    try {
+      const res = await publish({ data: { projectId: id, html: previewHtml } });
+      setPublishedUrl(res.url);
+      window.open(res.url, "_blank", "noopener");
+    } catch (e: any) { setErr(e.message); }
+    finally { setPublishBusy(false); }
+  }
+
   function openInNewTab() {
+
     if (!previewHtml) return;
     const blob = new Blob([previewHtml], { type: "text/html" });
     const url = URL.createObjectURL(blob);
@@ -375,6 +405,17 @@ function ProjectPage() {
               <ExternalLink className="h-4 w-4" />
             </button>
             <div className="flex-1" />
+            {publishedUrl && (
+              <a
+                href={publishedUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="hidden md:inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline mr-2 max-w-[260px] truncate"
+                title={publishedUrl}
+              >
+                ● Live: {publishedUrl.replace(/^https?:\/\//, "")}
+              </a>
+            )}
             {isMobile ? (
               <>
                 <button className="mb-btn h-8 px-3" onClick={openSnack} title="Preview on a real phone via Expo Snack">
@@ -391,17 +432,19 @@ function ProjectPage() {
                   {wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Smartphone className="h-4 w-4" />}
                   Export app
                 </button>
-                <a
-                  href="https://docs.lovable.dev/features/publishing"
-                  target="_blank"
-                  rel="noreferrer"
+                <button
                   className="mb-btn h-8 px-3"
+                  onClick={doPublish}
+                  disabled={publishBusy || !previewHtml}
+                  title="Publish to a public live URL (independent of Lovable hosting)"
                 >
-                  <Rocket className="h-4 w-4" /> Publish
-                </a>
+                  {publishBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                  Publish
+                </button>
               </>
             )}
           </div>
+
 
           <div className="flex-1 min-h-0 overflow-auto p-4 flex items-start justify-center">
             {isMobile || device === "mobile" ? (

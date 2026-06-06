@@ -165,3 +165,54 @@ export const inviteCollaborator = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     return { ok: true };
   });
+
+const PublishInput = z.object({
+  projectId: z.string().uuid(),
+  html: z.string().min(1).max(2_000_000),
+});
+
+/**
+ * Publish the project's current HTML to a public Supabase Storage bucket
+ * ("sites") and return a permanent live URL. Independent of Lovable hosting.
+ */
+export const publishSite = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .inputValidator((d: unknown) => PublishInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const { admin, user } = context;
+
+    const { data: project } = await admin
+      .from("projects")
+      .select("id,owner_id")
+      .eq("id", data.projectId)
+      .maybeSingle();
+    if (!project) throw new Error("Project not found");
+    if (project.owner_id !== user.id) throw new Error("Only the owner can publish");
+
+    try {
+      await admin.storage.createBucket("sites", {
+        public: true,
+        fileSizeLimit: 5_000_000,
+      });
+    } catch {
+      // already exists — ignore
+    }
+
+    const path = `${user.id}/${data.projectId}/index.html`;
+    const { error: upErr } = await admin.storage.from("sites").upload(path, data.html, {
+      upsert: true,
+      contentType: "text/html; charset=utf-8",
+      cacheControl: "60",
+    });
+    if (upErr) throw new Error(`Publish failed: ${upErr.message}`);
+
+    const { data: pub } = admin.storage.from("sites").getPublicUrl(path);
+
+    await admin
+      .from("projects")
+      .update({ preview_html: data.html, updated_at: new Date().toISOString() })
+      .eq("id", data.projectId);
+
+    return { ok: true as const, url: pub.publicUrl, path };
+  });
+
