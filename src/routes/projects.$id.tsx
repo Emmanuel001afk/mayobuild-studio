@@ -100,8 +100,12 @@ function ProjectPage() {
   const [iframeKey, setIframeKey] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [wrapBusy, setWrapBusy] = useState(false);
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const publish = useServerFn(publishSite);
+
 
   useEffect(() => {
     if (!loading && !user) navigate({ to: "/auth" });
