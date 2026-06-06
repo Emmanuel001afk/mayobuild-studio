@@ -9,6 +9,10 @@ const RouteInput = z.object({
   system: z.string().optional(),
   preferProvider: z.string().optional(),
   projectId: z.string().uuid().optional(),
+  history: z
+    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(50000) }))
+    .max(40)
+    .optional(),
 });
 
 export const callRouter = createServerFn({ method: "POST" })
