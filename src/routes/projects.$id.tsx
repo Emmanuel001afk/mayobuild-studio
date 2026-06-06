@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/hooks/use-auth";
-import { getProject, savePreview } from "@/lib/projects.functions";
+import { getProject, savePreview, publishSite } from "@/lib/projects.functions";
 import { callRouter } from "@/lib/router.functions";
 import { wrapWebsiteAsApp } from "@/lib/mobile-gen.functions";
 import { MicButton } from "@/components/MicButton";
