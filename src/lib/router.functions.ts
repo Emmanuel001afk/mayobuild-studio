@@ -41,6 +41,7 @@ export const callRouter = createServerFn({ method: "POST" })
 
       const messages = [
         ...(data.system ? [{ role: "system" as const, content: data.system }] : []),
+        ...(data.history ?? []).map((m) => ({ role: m.role, content: m.content })),
         { role: "user" as const, content: data.prompt },
       ];
       const result = await routeChat(data.task as RouteTask, messages, {
