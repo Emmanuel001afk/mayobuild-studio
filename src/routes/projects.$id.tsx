@@ -405,6 +405,17 @@ function ProjectPage() {
               <ExternalLink className="h-4 w-4" />
             </button>
             <div className="flex-1" />
+            {publishedUrl && (
+              <a
+                href={publishedUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="hidden md:inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline mr-2 max-w-[260px] truncate"
+                title={publishedUrl}
+              >
+                ● Live: {publishedUrl.replace(/^https?:\/\//, "")}
+              </a>
+            )}
             {isMobile ? (
               <>
                 <button className="mb-btn h-8 px-3" onClick={openSnack} title="Preview on a real phone via Expo Snack">
@@ -421,17 +432,19 @@ function ProjectPage() {
                   {wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Smartphone className="h-4 w-4" />}
                   Export app
                 </button>
-                <a
-                  href="https://docs.lovable.dev/features/publishing"
-                  target="_blank"
-                  rel="noreferrer"
+                <button
                   className="mb-btn h-8 px-3"
+                  onClick={doPublish}
+                  disabled={publishBusy || !previewHtml}
+                  title="Publish to a public live URL (independent of Lovable hosting)"
                 >
-                  <Rocket className="h-4 w-4" /> Publish
-                </a>
+                  {publishBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                  Publish
+                </button>
               </>
             )}
           </div>
+
 
           <div className="flex-1 min-h-0 overflow-auto p-4 flex items-start justify-center">
             {isMobile || device === "mobile" ? (
