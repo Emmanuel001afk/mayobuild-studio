@@ -2,15 +2,17 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useAuth, signOut } from "@/hooks/use-auth";
-import { listProjects } from "@/lib/projects.functions";
+import { listProjects, deleteProject, listEcosystem } from "@/lib/projects.functions";
 import { PdfReader } from "@/components/PdfReader";
 import { ProviderHealth } from "@/components/ProviderHealth";
 import { AuthForm } from "@/components/AuthForm";
 import { useProjectPresence } from "@/hooks/use-presence";
+import { toast } from "sonner";
 import {
   Sparkles, Plus, LogOut, Globe, Smartphone, Users, Eye, FileText,
-  Cpu, Mic, Zap, Loader2, ShieldAlert, ExternalLink,
+  Cpu, Mic, Zap, Loader2, ShieldAlert, ExternalLink, Trash2, Layers,
 } from "lucide-react";
+
 
 export const Route = createFileRoute("/")({
   head: () => ({
