@@ -163,3 +163,36 @@ drop policy if exists "mb read" on public.mobile_builds;
 create policy "mb read" on public.mobile_builds for select to authenticated using (public.has_project_access(project_id));
 drop policy if exists "mb insert own" on public.mobile_builds;
 create policy "mb insert own" on public.mobile_builds for insert to authenticated with check (user_id = auth.uid());
+
+-- =========== Mayobuild ecosystem cards ===========
+create table if not exists public.ecosystem_hubs (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  category text not null,
+  url text,
+  status text not null default 'coming_soon' check (status in ('live','coming_soon','here')),
+  sort int not null default 100,
+  created_at timestamptz default now()
+);
+alter table public.ecosystem_hubs enable row level security;
+drop policy if exists "hubs read all" on public.ecosystem_hubs;
+create policy "hubs read all" on public.ecosystem_hubs for select to anon, authenticated using (true);
+grant select on public.ecosystem_hubs to anon, authenticated;
+grant all on public.ecosystem_hubs to service_role;
+
+-- =========== Per-project API key vault ===========
+create table if not exists public.project_api_keys (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  service text not null,
+  key_value text not null,
+  created_at timestamptz default now(),
+  unique (project_id, service)
+);
+alter table public.project_api_keys enable row level security;
+drop policy if exists "pak owner all" on public.project_api_keys;
+create policy "pak owner all" on public.project_api_keys for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+grant select, insert, update, delete on public.project_api_keys to authenticated;
+grant all on public.project_api_keys to service_role;
