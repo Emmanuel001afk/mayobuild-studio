@@ -2,13 +2,17 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/hooks/use-auth";
-import { getProject, savePreview, publishSite } from "@/lib/projects.functions";
+import {
+  getProject, savePreview, publishSite, saveApiKey, listApiKeys,
+} from "@/lib/projects.functions";
 import { callRouter } from "@/lib/router.functions";
 import { wrapWebsiteAsApp } from "@/lib/mobile-gen.functions";
 import { MicButton } from "@/components/MicButton";
+import { toast } from "sonner";
 import {
   ArrowLeft, Loader2, Send, Globe, Smartphone, Monitor, RefreshCw,
   ExternalLink, Rocket, Paperclip, ChevronDown, Download, Sparkles,
+  KeyRound, X,
 } from "lucide-react";
 
 export const Route = createFileRoute("/projects/$id")({
@@ -23,24 +27,28 @@ type ChatMsg = {
   summary?: { added: string[]; changed: string[]; removed: string[] };
 };
 
-const SYSTEM_WEBSITE = [
-  "You are Mayobuild AI, an expert front-end engineer and designer.",
-  "ALWAYS return a single complete HTML document inside one ```html ... ``` fenced block with embedded CSS and JS — no external CSS/JS files.",
-  "Make it visually rich and production-grade: a hero with a real background image (use https://images.unsplash.com/... or https://picsum.photos/seed/<word>/1600/900 URLs), gradients, SVG icons, smooth scroll, hover states, semantic HTML, accessible alt text, meta tags, Open Graph tags, mobile-first responsive layout (CSS grid + flex, clamp() typography).",
-  "ALWAYS include relevant imagery: hero image, gallery/cards with Unsplash photos matching the topic, an inline SVG logo, and at least one CSS gradient or pattern background.",
-  "ALWAYS add helpful features the user didn't ask for but obviously needs (nav, footer, contact section, favicon as data-URI, working anchor links).",
-  "BEFORE the code block, write 1-3 short sentences in plain English summarizing what you built and the key design choices. AFTER the code block, list 3 concrete suggestions the user could ask for next.",
+const SYSTEM_WEBSITE_BASE = [
+  "You are Mayobuild AI. You improve and edit existing websites only.",
+  "Never rewrite from scratch unless the user explicitly says 'start over completely'.",
+  "Read the EXISTING CODE block fully before making any change.",
+  "Only modify exactly what the user requested. Preserve all existing features, colors, layout, copy, and structure.",
+  "Use rich visuals when adding new sections: Unsplash (https://images.unsplash.com/...) or Picsum (https://picsum.photos/seed/<word>/1600/900) backgrounds, CSS gradients, inline SVG icons, accessible alt text, mobile-first responsive layout.",
+  "Respond in this EXACT format and nothing else:",
+  "1) 2-3 plain English sentences describing what changed in this turn (NO code in this part).",
+  "2) A single line: 'CHANGES: Added [x] | Modified [y] | Removed [z]'",
+  "3) The complete updated HTML document inside ONE ```html ... ``` fenced block (single file, embedded CSS/JS, no external files).",
   "Never apologize. Never say you are an AI. Never mention Lovable.",
+  "If a feature requires a third-party API key (e.g. Flutterwave, Paystack, Stripe, OpenAI, Mapbox), insert the literal placeholder __API_KEY_<SERVICE>__ in the code where the key goes, and in your plain English section say: 'I need your <SERVICE> API key — click the Add API key button.'",
 ].join(" ");
 
-const SYSTEM_MOBILE = [
-  "You are Mayobuild AI. Generate ONE complete Expo React Native App.tsx (TypeScript) inside a ```tsx``` fenced block.",
-  "Use only standard Expo SDK imports available on Snack: react, react-native, expo-status-bar. No external native modules.",
-  "Make it polished: SafeAreaView, StatusBar, themed colors, icons via emoji, smooth animations, empty/loading states, and at least one image via { uri: 'https://images.unsplash.com/...' }.",
-  "Always add features the user didn't ask for but needs (permissions hints, error handling).",
-  "BEFORE the code block, write 1-3 short sentences summarizing what you built. AFTER it, list 3 concrete next-step suggestions.",
+const SYSTEM_MOBILE_BASE = [
+  "You are Mayobuild AI. You improve an existing Expo React Native App.tsx (TypeScript) only.",
+  "Read EXISTING CODE before changing it. Only modify what the user asked for. Preserve everything else.",
+  "Use only standard Expo SDK on Snack: react, react-native, expo-status-bar. No external native modules.",
+  "Respond in this EXACT format: 2-3 plain English sentences, then 'CHANGES: Added [x] | Modified [y] | Removed [z]', then ONE ```tsx``` fenced block with the complete updated App.tsx.",
 ].join(" ");
 
+const PLAN_SYSTEM = "You are Mayobuild AI in PLAN mode. Ask the user 2-3 short clarifying questions to fully understand what they want. Output ONLY the questions in plain English. Do NOT write any code.";
 
 const WEBSITE_SUGGESTIONS = [
   "Landing page for a coffee shop with menu and hours",
@@ -55,6 +63,9 @@ const MOBILE_SUGGESTIONS = [
   "Grocery list with categories and check-off",
 ];
 
+const PROVIDER_ORDER_WEB = ["openrouter", "mistral", "huggingface", "cerebras"];
+const PROVIDER_ORDER_MOBILE = ["deepseek", "openai", "groq", "gemini"];
+
 function extractHtml(text: string): string | null {
   const m = text.match(/```(?:html)?\s*\n([\s\S]*?)```/i);
   if (m) return m[1].trim();
@@ -65,19 +76,31 @@ function extractCode(text: string): string | null {
   const m = text.match(/```(?:tsx|ts|jsx|js|html)?\s*\n([\s\S]*?)```/i);
   return m ? m[1].trim() : text.trim() || null;
 }
+function parseChangesLine(text: string): string | null {
+  const m = text.match(/CHANGES:\s*([^\n]+)/i);
+  return m ? m[1].trim() : null;
+}
 function diffSummary(prev: string | null, next: string): { added: string[]; changed: string[]; removed: string[] } {
   if (!prev) return { added: ["Initial generation"], changed: [], removed: [] };
   const tags = (s: string) =>
     new Set((s.match(/<([a-z][a-z0-9-]*)/gi) ?? []).map((t) => t.slice(1).toLowerCase()));
   const a = tags(prev), b = tags(next);
-  const added = [...b].filter((x) => !a.has(x)).slice(0, 6).map((t) => `<${t}> elements`);
-  const removed = [...a].filter((x) => !b.has(x)).slice(0, 6).map((t) => `<${t}> elements`);
+  const added = [...b].filter((x) => !a.has(x)).slice(0, 6).map((t) => `<${t}>`);
+  const removed = [...a].filter((x) => !b.has(x)).slice(0, 6).map((t) => `<${t}>`);
   const sizeDelta = next.length - prev.length;
   const changed: string[] = [];
   if (Math.abs(sizeDelta) > 50)
-    changed.push(`${sizeDelta > 0 ? "Expanded" : "Trimmed"} content (${Math.abs(sizeDelta)} chars)`);
-  if (!added.length && !removed.length && !changed.length) changed.push("Refined existing markup");
+    changed.push(`${sizeDelta > 0 ? "Expanded" : "Trimmed"} (${Math.abs(sizeDelta)} chars)`);
+  if (!added.length && !removed.length && !changed.length) changed.push("Refined markup");
   return { added, changed, removed };
+}
+
+function detectKeyRequest(text: string): string | null {
+  const m = text.match(/__API_KEY_([A-Z0-9_-]+)__/);
+  if (m) return m[1].toLowerCase();
+  const phrase = text.match(/I need your\s+([A-Za-z0-9 _-]+?)\s+API key/i);
+  if (phrase) return phrase[1].trim().toLowerCase().replace(/\s+/g, "_");
+  return null;
 }
 
 function ProjectPage() {
@@ -88,6 +111,9 @@ function ProjectPage() {
   const route = useServerFn(callRouter);
   const save = useServerFn(savePreview);
   const wrapSite = useServerFn(wrapWebsiteAsApp);
+  const publish = useServerFn(publishSite);
+  const saveKey = useServerFn(saveApiKey);
+  const listKeys = useServerFn(listApiKeys);
 
   const [data, setData] = useState<any>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -95,6 +121,7 @@ function ProjectPage() {
   const [mode, setMode] = useState<"Build" | "Plan">("Build");
   const [modeOpen, setModeOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [isPhone, setIsPhone] = useState(false);
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [previewHtml, setPreviewHtml] = useState<string>("");
   const [iframeKey, setIframeKey] = useState(0);
@@ -102,14 +129,26 @@ function ProjectPage() {
   const [wrapBusy, setWrapBusy] = useState(false);
   const [publishBusy, setPublishBusy] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
+  const [keyModal, setKeyModal] = useState<{ service: string; value: string } | null>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [savedKeys, setSavedKeys] = useState<{ service: string }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const publish = useServerFn(publishSite);
-
 
   useEffect(() => {
     if (!loading && !user) navigate({ to: "/auth" });
   }, [loading, user, navigate]);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const apply = () => {
+      setIsPhone(mq.matches);
+      if (mq.matches) setDevice("mobile");
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -119,15 +158,12 @@ function ProjectPage() {
         if (d.project.preview_html) {
           setPreviewHtml(d.project.preview_html);
           setMessages([
-            {
-              role: "assistant",
-              content: "Restored your last build. Send a message to iterate.",
-              html: d.project.preview_html,
-            },
+            { role: "assistant", content: "Restored your last build. Tell me what to change." },
           ]);
         }
       })
       .catch((e) => setErr(e.message));
+    listKeys({ data: { projectId: id } }).then(setSavedKeys).catch(() => {});
   }, [user, id]);
 
   useEffect(() => {
@@ -136,6 +172,26 @@ function ProjectPage() {
 
   const isMobile = data?.project?.kind === "mobile";
   const suggestions = isMobile ? MOBILE_SUGGESTIONS : WEBSITE_SUGGESTIONS;
+  const chainOrder = isMobile ? PROVIDER_ORDER_MOBILE : PROVIDER_ORDER_WEB;
+  const showMobileOnly = isPhone || isMobile;
+
+  async function callWithFailover(payload: any): Promise<{ kind: string; text?: string; provider?: string; dataUrl?: string }> {
+    let lastErr: any;
+    for (let i = 0; i < chainOrder.length; i++) {
+      const provider = chainOrder[i];
+      try {
+        const res = await Promise.race([
+          route({ data: { ...payload, preferProvider: provider } }),
+          new Promise((_, rj) => setTimeout(() => rj(new Error("timeout 15s")), 15000)),
+        ]);
+        if (i > 0) toast(`Switched to ${provider}`, { description: "Previous provider was slow or unavailable." });
+        return res as any;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr ?? new Error("All providers failed");
+  }
 
   async function send(text: string) {
     const trimmed = text.trim();
@@ -147,28 +203,32 @@ function ProjectPage() {
     setInput("");
     setBusy(true);
     try {
-      const system =
-        mode === "Plan"
-          ? "You are Mayobuild AI. Outline a short plan in markdown with numbered steps. Do not write code yet."
-          : isMobile
-            ? SYSTEM_MOBILE
-            : SYSTEM_WEBSITE;
-      const res = await route({
-        data: {
-          task: isMobile ? "mobile_code" : "website",
-          prompt: trimmed,
-          system,
-          projectId: id,
-          history,
-        },
+      const changeContext = messages
+        .filter((m) => m.role === "assistant" && m.summary)
+        .slice(-10)
+        .map((m, i) =>
+          `Turn ${i + 1}: +${m.summary!.added.join(",")} ~${m.summary!.changed.join(",")} -${m.summary!.removed.join(",")}`,
+        )
+        .join("\n");
+      const sysBase = mode === "Plan" ? PLAN_SYSTEM : isMobile ? SYSTEM_MOBILE_BASE : SYSTEM_WEBSITE_BASE;
+      const codeBlock = previewHtml ? `\n\nEXISTING CODE (modify this, do not rewrite):\n\`\`\`${isMobile ? "tsx" : "html"}\n${previewHtml}\n\`\`\`` : "";
+      const historyBlock = changeContext ? `\n\nRECENT CHANGES SUMMARY:\n${changeContext}` : "";
+      const system = `${sysBase}${codeBlock}${historyBlock}\n\nMODE: ${mode.toUpperCase()}`;
+
+      const res = await callWithFailover({
+        task: isMobile ? "mobile_code" : "website",
+        prompt: trimmed,
+        system,
+        projectId: id,
+        history,
       });
       if (res.kind !== "text") return;
-      const raw = res.text;
+      const raw = res.text ?? "";
       let html: string | null = null;
       let summary: ChatMsg["summary"] | undefined;
+      const changesLine = parseChangesLine(raw);
       if (mode === "Build") {
         if (isMobile) {
-          // Mobile: keep code, render in preview as <pre>
           const code = extractCode(raw) ?? raw;
           html = `<!doctype html><html><body style="margin:0;font:13px ui-monospace,Menlo,monospace;background:#0b0f1a;color:#e6edf3;padding:14px;white-space:pre-wrap;word-break:break-word">${
             code.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!)
@@ -181,18 +241,24 @@ function ProjectPage() {
             summary = diffSummary(previewHtml || null, found);
           }
         }
+        if (changesLine && summary) summary.changed.unshift(changesLine);
       }
-      const reply: ChatMsg = {
-        role: "assistant",
-        content: mode === "Plan" || !html ? raw : "Here's your updated build.",
-        html: html ?? undefined,
-        summary,
-      };
+      // Plain English only — strip code fences and CHANGES line
+      const plain = raw
+        .replace(/```[\s\S]*?```/g, "")
+        .replace(/CHANGES:[^\n]*/i, "")
+        .trim() || (html ? "Updated your build." : "");
+      const reply: ChatMsg = { role: "assistant", content: plain, html: html ?? undefined, summary };
       setMessages([...next, reply]);
       if (html) {
         setPreviewHtml(html);
         setIframeKey((k) => k + 1);
         try { await save({ data: { id, preview_html: html } }); } catch {}
+      }
+      // Detect API key request
+      const wantKey = detectKeyRequest(raw);
+      if (wantKey && !savedKeys.find((k) => k.service === wantKey)) {
+        setKeyModal({ service: wantKey, value: "" });
       }
     } catch (e: any) {
       setErr(e.message);
@@ -212,14 +278,18 @@ function ProjectPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a"); a.href = url; a.download = res.filename; a.click();
       URL.revokeObjectURL(url);
-    } catch (e: any) { setErr(e.message); }
+      toast.success("Android (Capacitor) ZIP downloaded");
+    } catch (e: any) { setErr(e.message); toast.error(e.message); }
     finally { setWrapBusy(false); }
   }
 
   function openSnack() {
-    // Extract latest App.tsx-ish code from messages
-    const last = [...messages].reverse().find((m) => m.role === "assistant");
-    const code = last ? (extractCode(last.content) ?? last.content) : `export default function App(){return null}`;
+    const code = isMobile
+      ? (() => {
+          const last = [...messages].reverse().find((m) => m.role === "assistant");
+          return last ? (extractCode(last.content) ?? last.content) : `export default function App(){return null}`;
+        })()
+      : previewHtml;
     const url = `https://snack.expo.dev/?platform=android&name=${encodeURIComponent(
       data?.project?.name ?? "Mayobuild App"
     )}&code=${encodeURIComponent(code)}`;
@@ -227,18 +297,18 @@ function ProjectPage() {
   }
 
   async function doPublish() {
-    if (!previewHtml) { setErr("Generate something first, then publish."); return; }
+    if (!previewHtml) { toast.error("Generate something first, then publish."); return; }
     setPublishBusy(true); setErr(null);
     try {
       const res = await publish({ data: { projectId: id, html: previewHtml } });
       setPublishedUrl(res.url);
+      toast.success("Live!", { description: res.url });
       window.open(res.url, "_blank", "noopener");
-    } catch (e: any) { setErr(e.message); }
+    } catch (e: any) { setErr(e.message); toast.error(e.message); }
     finally { setPublishBusy(false); }
   }
 
   function openInNewTab() {
-
     if (!previewHtml) return;
     const blob = new Blob([previewHtml], { type: "text/html" });
     const url = URL.createObjectURL(blob);
@@ -258,31 +328,73 @@ function ProjectPage() {
     e.target.value = "";
   }
 
+  async function submitKey() {
+    if (!keyModal) return;
+    const v = keyModal.value.trim();
+    if (!v) { toast.error("Enter the key"); return; }
+    setKeyBusy(true);
+    try {
+      await saveKey({ data: { projectId: id, service: keyModal.service, keyValue: v } });
+      // Inject into preview HTML if placeholder present
+      if (previewHtml) {
+        const placeholder = `__API_KEY_${keyModal.service.toUpperCase()}__`;
+        if (previewHtml.includes(placeholder)) {
+          const updated = previewHtml.split(placeholder).join(v);
+          setPreviewHtml(updated);
+          setIframeKey((k) => k + 1);
+          try { await save({ data: { id, preview_html: updated } }); } catch {}
+        }
+      }
+      setSavedKeys((prev) => prev.find((k) => k.service === keyModal.service) ? prev : [...prev, { service: keyModal.service }]);
+      toast.success(`${keyModal.service} key saved`);
+      setKeyModal(null);
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setKeyBusy(false);
+    }
+  }
+
   const previewSrcDoc = useMemo(() => previewHtml || EMPTY_PREVIEW, [previewHtml]);
 
   if (loading || !data) {
     return <div className="min-h-screen flex items-center justify-center text-muted-foreground">{err ?? "Loading…"}</div>;
   }
 
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+
   return (
     <div className="h-screen flex flex-col bg-background">
       <header className="border-b border-border bg-background/70 backdrop-blur shrink-0">
-        <div className="px-4 py-2.5 flex items-center justify-between gap-3">
-          <Link to="/" className="mb-btn-ghost shrink-0"><ArrowLeft className="h-4 w-4" /> Workspace</Link>
+        <div className="px-3 py-2 flex items-center justify-between gap-2">
+          <Link to="/" className="mb-btn-ghost shrink-0 h-9"><ArrowLeft className="h-4 w-4" /> <span className="hidden sm:inline">Workspace</span></Link>
           <div className="flex items-center gap-2 min-w-0">
             {isMobile ? <Smartphone className="h-4 w-4 text-accent shrink-0" /> : <Globe className="h-4 w-4 text-primary shrink-0" />}
-            <h1 className="font-semibold truncate">{data.project.name}</h1>
+            <h1 className="font-semibold truncate text-sm sm:text-base">{data.project.name}</h1>
           </div>
-          <div className="shrink-0" />
+          <button
+            onClick={doPublish}
+            disabled={publishBusy || !previewHtml}
+            className="shrink-0 inline-flex items-center justify-center gap-1 rounded-md bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white font-medium px-3 h-9 text-sm min-w-[88px]"
+            title="Publish live"
+          >
+            {publishBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+            Publish
+          </button>
         </div>
+        {publishedUrl && (
+          <div className="px-3 pb-2 text-xs text-emerald-400 truncate">
+            ● Live: <a href={publishedUrl} target="_blank" rel="noreferrer" className="underline">{publishedUrl}</a>
+          </div>
+        )}
       </header>
 
       <div className="flex-1 flex min-h-0 flex-col md:flex-row">
         {/* LEFT: chat 35% */}
-        <aside className="md:w-[35%] md:min-w-[320px] md:max-w-[520px] border-r border-border flex flex-col min-h-0">
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+        <aside className="md:w-[35%] md:min-w-[320px] md:max-w-[520px] border-r border-border flex flex-col min-h-0 max-h-[55vh] md:max-h-none">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4">
             {messages.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-center gap-4 pt-10">
+              <div className="h-full flex flex-col items-center justify-center text-center gap-4 pt-6">
                 <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center">
                   <Sparkles className="h-6 w-6 text-primary" />
                 </div>
@@ -312,18 +424,18 @@ function ProjectPage() {
                         : "max-w-full text-sm text-foreground whitespace-pre-wrap"
                     }
                   >
-                    {m.role === "assistant" ? renderAssistant(m.content) : m.content}
+                    {m.content || (m.role === "assistant" ? "Build updated." : "")}
                     {m.summary && (
-                      <div className="mt-2 rounded-lg border border-border bg-card/60 p-2 text-xs space-y-1">
-                        {m.summary.added.length > 0 && (
-                          <div><span className="text-emerald-400 font-medium">+ Added:</span> {m.summary.added.join(", ")}</div>
-                        )}
-                        {m.summary.changed.length > 0 && (
-                          <div><span className="text-amber-400 font-medium">~ Changed:</span> {m.summary.changed.join(", ")}</div>
-                        )}
-                        {m.summary.removed.length > 0 && (
-                          <div><span className="text-rose-400 font-medium">− Removed:</span> {m.summary.removed.join(", ")}</div>
-                        )}
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {m.summary.added.map((t, j) => (
+                          <span key={`a${j}`} className="px-2 py-0.5 rounded-full text-[11px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">+ {t}</span>
+                        ))}
+                        {m.summary.changed.map((t, j) => (
+                          <span key={`c${j}`} className="px-2 py-0.5 rounded-full text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/30">~ {t}</span>
+                        ))}
+                        {m.summary.removed.map((t, j) => (
+                          <span key={`r${j}`} className="px-2 py-0.5 rounded-full text-[11px] bg-rose-500/15 text-rose-300 border border-rose-500/30">− {t}</span>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -346,17 +458,24 @@ function ProjectPage() {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
               }}
-              placeholder={isMobile ? "Describe your app…" : "Describe your website…"}
-              className="mb-input min-h-[72px] resize-none"
+              placeholder={isMobile ? "Describe what to change in your app…" : "Describe what to change on your site…"}
+              className="mb-input min-h-[68px] resize-none"
             />
             <div className="flex items-center gap-2">
               <input ref={fileRef} type="file" accept=".txt,.md,.json,.html,.csv" className="hidden" onChange={handleAttach} />
-              <button className="mb-btn-ghost h-8 w-8 p-0 justify-center" title="Attach" onClick={() => fileRef.current?.click()}>
+              <button className="mb-btn-ghost h-9 w-9 p-0 justify-center" title="Attach" onClick={() => fileRef.current?.click()}>
                 <Paperclip className="h-4 w-4" />
               </button>
               <MicButton onTranscript={(t) => setInput((p) => (p ? p + " " + t : t))} />
+              <button
+                className="mb-btn-ghost h-9 w-9 p-0 justify-center"
+                title="Add API key"
+                onClick={() => setKeyModal({ service: "", value: "" })}
+              >
+                <KeyRound className="h-4 w-4" />
+              </button>
               <div className="relative">
-                <button className="mb-btn-ghost h-8 px-2 text-xs" onClick={() => setModeOpen((v) => !v)}>
+                <button className="mb-btn-ghost h-9 px-2 text-xs" onClick={() => setModeOpen((v) => !v)}>
                   {mode} <ChevronDown className="h-3 w-3" />
                 </button>
                 {modeOpen && (
@@ -374,7 +493,7 @@ function ProjectPage() {
                 )}
               </div>
               <div className="flex-1" />
-              <button className="mb-btn h-8 px-3" onClick={() => send(input)} disabled={busy || !input.trim()}>
+              <button className="mb-btn h-9 px-3 min-w-[44px]" onClick={() => send(input)} disabled={busy || !input.trim()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               </button>
             </div>
@@ -383,72 +502,51 @@ function ProjectPage() {
 
         {/* RIGHT: preview 65% */}
         <section className="flex-1 flex flex-col min-h-0 bg-muted/20">
-          <div className="border-b border-border px-3 py-2 flex items-center gap-2 bg-background/70 backdrop-blur">
-            <div className="flex rounded-md border border-border overflow-hidden">
-              <button
-                onClick={() => setDevice("desktop")}
-                className={`px-2 py-1 text-xs flex items-center gap-1 ${device === "desktop" ? "bg-accent/30" : ""}`}
-              >
-                <Monitor className="h-3.5 w-3.5" /> Desktop
-              </button>
-              <button
-                onClick={() => setDevice("mobile")}
-                className={`px-2 py-1 text-xs flex items-center gap-1 ${device === "mobile" ? "bg-accent/30" : ""}`}
-              >
-                <Smartphone className="h-3.5 w-3.5" /> Mobile
-              </button>
-            </div>
-            <button className="mb-btn-ghost h-8 px-2" title="Refresh" onClick={() => setIframeKey((k) => k + 1)}>
+          <div className="border-b border-border px-2 py-2 flex items-center gap-2 bg-background/70 backdrop-blur overflow-x-auto">
+            {!showMobileOnly && (
+              <div className="flex rounded-md border border-border overflow-hidden shrink-0">
+                <button
+                  onClick={() => setDevice("desktop")}
+                  className={`px-3 h-11 text-xs flex items-center gap-1 min-w-[44px] ${device === "desktop" ? "bg-accent/30" : ""}`}
+                >
+                  <Monitor className="h-4 w-4" /> Desktop
+                </button>
+                <button
+                  onClick={() => setDevice("mobile")}
+                  className={`px-3 h-11 text-xs flex items-center gap-1 min-w-[44px] ${device === "mobile" ? "bg-accent/30" : ""}`}
+                >
+                  <Smartphone className="h-4 w-4" /> Mobile
+                </button>
+              </div>
+            )}
+            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Refresh" onClick={() => setIframeKey((k) => k + 1)}>
               <RefreshCw className="h-4 w-4" />
             </button>
-            <button className="mb-btn-ghost h-8 px-2" title="Open in new tab" onClick={openInNewTab} disabled={!previewHtml}>
+            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Open in new tab" onClick={openInNewTab} disabled={!previewHtml}>
               <ExternalLink className="h-4 w-4" />
             </button>
             <div className="flex-1" />
-            {publishedUrl && (
-              <a
-                href={publishedUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="hidden md:inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline mr-2 max-w-[260px] truncate"
-                title={publishedUrl}
-              >
-                ● Live: {publishedUrl.replace(/^https?:\/\//, "")}
-              </a>
-            )}
             {isMobile ? (
               <>
-                <button className="mb-btn h-8 px-3" onClick={openSnack} title="Preview on a real phone via Expo Snack">
-                  <Smartphone className="h-4 w-4" /> Preview on Phone
+                <button className="mb-btn h-11 px-3 shrink-0" onClick={openSnack} title="Test on a real phone via Expo Snack">
+                  <Smartphone className="h-4 w-4" /> <span className="hidden sm:inline">Test on Phone</span>
                 </button>
-                <button className="mb-btn-ghost h-8 px-3" onClick={exportSiteAsApp} disabled={wrapBusy} title="Download Expo .zip">
+                <button className="mb-btn-ghost h-11 px-3 shrink-0" onClick={exportSiteAsApp} disabled={wrapBusy} title="Download Expo .zip">
                   {wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                  .zip
+                  <span className="hidden sm:inline">.zip</span>
                 </button>
               </>
             ) : (
-              <>
-                <button className="mb-btn-ghost h-8 px-3" onClick={exportSiteAsApp} disabled={wrapBusy} title="Wrap as Android Expo app">
-                  {wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Smartphone className="h-4 w-4" />}
-                  Export app
-                </button>
-                <button
-                  className="mb-btn h-8 px-3"
-                  onClick={doPublish}
-                  disabled={publishBusy || !previewHtml}
-                  title="Publish to a public live URL (independent of Lovable hosting)"
-                >
-                  {publishBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
-                  Publish
-                </button>
-              </>
+              <button className="mb-btn-ghost h-11 px-3 shrink-0" onClick={exportSiteAsApp} disabled={wrapBusy} title="Download Android Capacitor ZIP">
+                {wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                <span className="hidden sm:inline">Download Android App</span>
+              </button>
             )}
           </div>
 
-
-          <div className="flex-1 min-h-0 overflow-auto p-4 flex items-start justify-center">
-            {isMobile || device === "mobile" ? (
-              <div className="relative" style={{ width: 360, maxWidth: "100%" }}>
+          <div className="flex-1 min-h-0 overflow-auto p-3 sm:p-4 flex items-start justify-center">
+            {showMobileOnly || device === "mobile" ? (
+              <div className="relative" style={{ width: 390, maxWidth: "100%" }}>
                 <div className="rounded-[2.2rem] border-[10px] border-foreground/80 bg-foreground/80 shadow-2xl overflow-hidden">
                   <div className="h-5 bg-foreground/80 flex items-center justify-center">
                     <div className="h-1.5 w-16 rounded-full bg-background/40" />
@@ -459,7 +557,7 @@ function ProjectPage() {
                     sandbox="allow-scripts allow-forms"
                     srcDoc={previewSrcDoc}
                     className="w-full bg-white"
-                    style={{ height: 640 }}
+                    style={{ height: 680 }}
                   />
                 </div>
               </div>
@@ -475,14 +573,48 @@ function ProjectPage() {
           </div>
         </section>
       </div>
+
+      {keyModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+          <div className="mb-card p-6 max-w-md w-full space-y-3 relative">
+            <button onClick={() => setKeyModal(null)} className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+            <h3 className="text-lg font-semibold flex items-center gap-2"><KeyRound className="h-5 w-5" /> Add API key</h3>
+            <p className="text-sm text-muted-foreground">
+              Stored securely in your project. The AI can wire it into your build automatically.
+            </p>
+            <label className="block text-xs text-muted-foreground">Service (e.g. flutterwave, paystack, stripe, mapbox)</label>
+            <input
+              className="mb-input"
+              value={keyModal.service}
+              onChange={(e) => setKeyModal({ ...keyModal, service: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "") })}
+              placeholder="flutterwave"
+              autoFocus={!keyModal.service}
+            />
+            <label className="block text-xs text-muted-foreground">Key</label>
+            <input
+              className="mb-input font-mono text-xs"
+              type="password"
+              value={keyModal.value}
+              onChange={(e) => setKeyModal({ ...keyModal, value: e.target.value })}
+              placeholder="sk_live_…"
+              autoFocus={!!keyModal.service}
+            />
+            {savedKeys.length > 0 && (
+              <div className="text-xs text-muted-foreground">
+                Saved: {savedKeys.map((k) => k.service).join(", ")}
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="mb-btn-ghost" onClick={() => setKeyModal(null)} disabled={keyBusy}>Cancel</button>
+              <button className="mb-btn" onClick={submitKey} disabled={keyBusy || !keyModal.service || !keyModal.value}>
+                {keyBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save key
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 const EMPTY_PREVIEW = `<!doctype html><html><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui;background:linear-gradient(135deg,#0b0f1a,#1a1033);color:#cbd5e1"><div style="text-align:center;padding:2rem"><div style="font-size:42px">✨</div><div style="margin-top:8px;font-size:14px;opacity:.7">Your preview will appear here</div></div></body></html>`;
-
-function renderAssistant(text: string) {
-  // strip code fences from inline display (the iframe shows the build)
-  const cleaned = text.replace(/```[\s\S]*?```/g, "").trim();
-  return cleaned || "Build updated.";
-}

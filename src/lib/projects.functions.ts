@@ -216,3 +216,80 @@ export const publishSite = createServerFn({ method: "POST" })
     return { ok: true as const, url: pub.publicUrl, path };
   });
 
+export const deleteProject = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { admin, user } = context;
+    const { data: p } = await admin
+      .from("projects")
+      .select("id,owner_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (!p) return { ok: true as const };
+    if (p.owner_id !== user.id) throw new Error("Only the owner can delete");
+    // Best-effort storage cleanup
+    try {
+      const prefix = `${user.id}/${data.id}`;
+      const { data: files } = await admin.storage.from("sites").list(prefix);
+      if (files?.length) {
+        await admin.storage.from("sites").remove(files.map((f) => `${prefix}/${f.name}`));
+      }
+    } catch {}
+    const { error } = await admin.from("projects").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true as const };
+  });
+
+export const listEcosystem = createServerFn({ method: "GET" })
+  .handler(async () => {
+    try {
+      const admin = getAdmin();
+      const { data } = await admin
+        .from("ecosystem_hubs")
+        .select("id,name,category,url,status,sort")
+        .order("sort", { ascending: true });
+      if (data && data.length) return data;
+    } catch {}
+    return [
+      { id: "1", name: "Hi There AI", category: "AI Chat", url: null, status: "coming_soon", sort: 1 },
+      { id: "2", name: "Halway In", category: "Marketplace", url: null, status: "coming_soon", sort: 2 },
+      { id: "3", name: "Lite Read", category: "Document Reader", url: null, status: "coming_soon", sort: 3 },
+      { id: "4", name: "Mayobuild Studio", category: "Builder", url: null, status: "here", sort: 4 },
+    ];
+  });
+
+const ApiKeyInput = z.object({
+  projectId: z.string().uuid(),
+  service: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/),
+  keyValue: z.string().min(1).max(4096),
+});
+export const saveApiKey = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .inputValidator((d: unknown) => ApiKeyInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const { admin, user } = context;
+    const { error } = await admin
+      .from("project_api_keys")
+      .upsert(
+        { project_id: data.projectId, user_id: user.id, service: data.service, key_value: data.keyValue },
+        { onConflict: "project_id,service" },
+      );
+    if (error) throw new Error(error.message);
+    return { ok: true as const };
+  });
+
+export const listApiKeys = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .inputValidator((d: unknown) => z.object({ projectId: z.string().uuid() }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { admin, user } = context;
+    const { data: rows } = await admin
+      .from("project_api_keys")
+      .select("service,created_at")
+      .eq("project_id", data.projectId)
+      .eq("user_id", user.id);
+    return rows ?? [];
+  });
+
+
