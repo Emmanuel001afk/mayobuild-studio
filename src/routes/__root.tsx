@@ -8,6 +8,7 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { Toaster } from "sonner";
 import { getSupabase } from "@/integrations/mysupabase/client";
 
 import appCss from "../styles.css?url";
