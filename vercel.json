@@ -1,5 +1,5 @@
 {
   "framework": "tanstack-start",
   "buildCommand": "vite build",
-  "outputDirectory": ".output"
+  "outputDirectory": "dist/client"
 }
