@@ -70,6 +70,28 @@ export const importZipProject = createServerFn({ method: "POST" })
       primaryHtml = firstHtml?.content ?? null;
     }
 
+    // If still no HTML found, build scaffold from React/TS source files
+    if (!primaryHtml) {
+      const srcFiles = entries
+        .filter((e) => /\.(tsx|ts|jsx|js|css)$/i.test(e.path) && !e.binary && e.content.length > 0)
+        .slice(0, 30)
+        .map((e) => `\n/* ===== FILE: ${e.path} ===== */\n${e.content.slice(0, 5000)}`)
+        .join("\n");
+      primaryHtml = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${data.name}</title>
+</head>
+<body>
+<h1 style="font-family:sans-serif">${data.name}</h1>
+<p style="font-family:sans-serif">Type: <b>"Rebuild this as a complete working HTML website with all pages, features and styles."</b></p>
+<script type="text/plain" id="react-source">${srcFiles}</script>
+</body>
+</html>`;
+    }
+
     // Ensure workspace
     let { data: ws } = await admin
       .from("workspaces").select("id").eq("owner_id", user.id).limit(1).maybeSingle();
@@ -93,7 +115,7 @@ export const importZipProject = createServerFn({ method: "POST" })
         name: data.name,
         kind: "website",
         description,
-        preview_html: primaryHtml ?? "<!doctype html><meta charset=utf-8><body><pre>Imported.</pre>",
+        preview_html: primaryHtml,
       })
       .select("*").single();
     if (error) throw new Error(error.message);
