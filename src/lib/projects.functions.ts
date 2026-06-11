@@ -199,6 +199,9 @@ export const publishSite = createServerFn({ method: "POST" })
     }
 
     const path = `${user.id}/${data.projectId}/index.html`;
+    if (data.html.includes('id="react-source"')) {
+  throw new Error("Please ask the AI to rebuild the website first before publishing.");
+    }
     const { error: upErr } = await admin.storage.from("sites").upload(path, data.html, {
       upsert: true,
       contentType: "text/html; charset=utf-8",
