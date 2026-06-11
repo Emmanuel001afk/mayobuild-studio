@@ -103,6 +103,66 @@ function detectKeyRequest(text: string): string | null {
   return null;
 }
 
+// WebContainer preview component
+function WebContainerPreview({ files, iframeKey }: { files: Record<string, string>; iframeKey: number }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [wcUrl, setWcUrl] = useState<string | null>(null);
+  const [wcLoading, setWcLoading] = useState(false);
+  const wcRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!files || Object.keys(files).length === 0) return;
+    let cancelled = false;
+    async function boot() {
+      setWcLoading(true);
+      try {
+        const { WebContainer } = await import("@webcontainer/api");
+        if (wcRef.current) {
+          try { await wcRef.current.teardown(); } catch {}
+        }
+        const wc = await WebContainer.boot();
+        wcRef.current = wc;
+        await wc.mount(
+          Object.fromEntries(
+            Object.entries(files).map(([path, contents]) => [
+              path,
+              { file: { contents } },
+            ])
+          )
+        );
+        await wc.spawn("npm", ["install"]);
+        const proc = await wc.spawn("npm", ["run", "dev"]);
+        wc.on("server-ready", (_port: number, url: string) => {
+          if (!cancelled) setWcUrl(url);
+        });
+      } catch (e) {
+        console.error("WebContainer error:", e);
+      } finally {
+        if (!cancelled) setWcLoading(false);
+      }
+    }
+    boot();
+    return () => { cancelled = true; };
+  }, [iframeKey]);
+
+  if (wcLoading) return (
+    <div className="w-full h-full flex items-center justify-center text-muted-foreground gap-2">
+      <Loader2 className="h-5 w-5 animate-spin" /> Booting live preview…
+    </div>
+  );
+
+  if (wcUrl) return (
+    <iframe
+      ref={iframeRef}
+      src={wcUrl}
+      className="w-full h-full bg-white rounded-md border border-border min-h-[70vh]"
+      allow="cross-origin-isolated"
+    />
+  );
+
+  return null;
+}
+
 function ProjectPage() {
   const { id } = Route.useParams();
   const { user, loading } = useAuth();
@@ -124,6 +184,7 @@ function ProjectPage() {
   const [isPhone, setIsPhone] = useState(false);
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [previewHtml, setPreviewHtml] = useState<string>("");
+  const [previewFiles, setPreviewFiles] = useState<Record<string, string> | null>(null);
   const [iframeKey, setIframeKey] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [wrapBusy, setWrapBusy] = useState(false);
@@ -156,10 +217,23 @@ function ProjectPage() {
       .then((d) => {
         setData(d);
         if (d.project.preview_html) {
-          setPreviewHtml(d.project.preview_html);
-          setMessages([
-            { role: "assistant", content: "Restored your last build. Tell me what to change." },
-          ]);
+          const html = d.project.preview_html;
+          setPreviewHtml(html);
+          // Check if it contains React source files — if so extract them for WebContainer
+          if (html.includes('id="react-source"') && html.includes('type="text/plain"')) {
+            try {
+              const match = html.match(/<script type="text\/plain" id="react-source">([\s\S]*?)<\/script>/);
+              if (match) {
+                const rawFiles: Record<string, string> = {};
+                const fileBlocks = match[1].matchAll(/\/\* ===== FILE: (.+?) ===== \*\/([\s\S]*?)(?=\/\* ===== FILE:|$)/g);
+                for (const block of fileBlocks) {
+                  rawFiles[block[1].trim()] = block[2].trim();
+                }
+                if (Object.keys(rawFiles).length > 0) setPreviewFiles(rawFiles);
+              }
+            } catch {}
+          }
+          setMessages([{ role: "assistant", content: "Restored your last build. Tell me what to change." }]);
         }
       })
       .catch((e) => setErr(e.message));
@@ -174,6 +248,7 @@ function ProjectPage() {
   const suggestions = isMobile ? MOBILE_SUGGESTIONS : WEBSITE_SUGGESTIONS;
   const chainOrder = isMobile ? PROVIDER_ORDER_MOBILE : PROVIDER_ORDER_WEB;
   const showMobileOnly = isPhone || isMobile;
+  const isReactSource = previewHtml?.includes('type="text/plain"') && previewHtml?.includes('react-source');
 
   async function callWithFailover(payload: any): Promise<{ kind: string; text?: string; provider?: string; dataUrl?: string }> {
     let lastErr: any;
@@ -211,7 +286,6 @@ function ProjectPage() {
         )
         .join("\n");
       const sysBase = mode === "Plan" ? PLAN_SYSTEM : isMobile ? SYSTEM_MOBILE_BASE : SYSTEM_WEBSITE_BASE;
-      const isReactSource = previewHtml?.includes('type="text/plain"') && previewHtml?.includes('react-source');
       const codeBlock = previewHtml ? `\n\nEXISTING CODE (modify this, do not rewrite):\n\`\`\`${isReactSource ? "tsx" : isMobile ? "tsx" : "html"}\n${previewHtml}\n\`\`\`` : "";
       const historyBlock = changeContext ? `\n\nRECENT CHANGES SUMMARY:\n${changeContext}` : "";
       const system = `${sysBase}${codeBlock}${historyBlock}\n\nMODE: ${mode.toUpperCase()}`;
@@ -240,6 +314,8 @@ function ProjectPage() {
           if (found) {
             html = found;
             summary = diffSummary(previewHtml || null, found);
+            // Clear WebContainer files when AI produces fresh HTML
+            setPreviewFiles(null);
           }
         }
         if (changesLine && summary) summary.changed.unshift(changesLine);
@@ -407,97 +483,47 @@ function ProjectPage() {
                 </div>
                 <div className="grid grid-cols-1 gap-2 w-full">
                   {suggestions.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => send(s)}
-                      className="text-left text-sm px-3 py-2 rounded-lg border border-border hover:bg-accent/10 transition-colors"
-                    >
-                      {s}
-                    </button>
+                    <button key={s} onClick={() => send(s)} className="text-left text-sm px-3 py-2 rounded-lg border border-border hover:bg-accent/10 transition-colors">{s}</button>
                   ))}
                 </div>
               </div>
             ) : (
               messages.map((m, i) => (
                 <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
-                  <div
-                    className={
-                      m.role === "user"
-                        ? "max-w-[85%] rounded-2xl rounded-br-sm bg-primary text-primary-foreground px-3 py-2 text-sm whitespace-pre-wrap"
-                        : "max-w-full text-sm text-foreground whitespace-pre-wrap"
-                    }
-                  >
+                  <div className={m.role === "user" ? "max-w-[85%] rounded-2xl rounded-br-sm bg-primary text-primary-foreground px-3 py-2 text-sm whitespace-pre-wrap" : "max-w-full text-sm text-foreground whitespace-pre-wrap"}>
                     {m.content || (m.role === "assistant" ? "Build updated." : "")}
                     {m.summary && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                                                {m.summary.added.map((t, j) => (
-                          <span key={`a${j}`} className="px-2 py-0.5 rounded-full text-[11px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">+ {t}</span>
-                        ))}
-                        {m.summary.changed.map((t, j) => (
-                          <span key={`c${j}`} className="px-2 py-0.5 rounded-full text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/30">~ {t}</span>
-                        ))}
-                        {m.summary.removed.map((t, j) => (
-                          <span key={`r${j}`} className="px-2 py-0.5 rounded-full text-[11px] bg-rose-500/15 text-rose-300 border border-rose-500/30">− {t}</span>
-                        ))}
+                        {m.summary.added.map((t, j) => (<span key={`a${j}`} className="px-2 py-0.5 rounded-full text-[11px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">+ {t}</span>))}
+                        {m.summary.changed.map((t, j) => (<span key={`c${j}`} className="px-2 py-0.5 rounded-full text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/30">~ {t}</span>))}
+                        {m.summary.removed.map((t, j) => (<span key={`r${j}`} className="px-2 py-0.5 rounded-full text-[11px] bg-rose-500/15 text-rose-300 border border-rose-500/30">− {t}</span>))}
                       </div>
                     )}
                   </div>
                 </div>
               ))
             )}
-            {busy && (
-              <div className="text-sm text-muted-foreground flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" /> Thinking…
-              </div>
-            )}
+            {busy && (<div className="text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Thinking…</div>)}
             {err && <div className="text-sm text-destructive">{err}</div>}
           </div>
 
           <div className="border-t border-border p-3 space-y-2 bg-background">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
-              }}
-              placeholder={isMobile ? "Describe what to change in your app…" : "Describe what to change on your site…"}
-              className="mb-input min-h-[68px] resize-none"
-            />
+            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }} placeholder={isMobile ? "Describe what to change in your app…" : "Describe what to change on your site…"} className="mb-input min-h-[68px] resize-none" />
             <div className="flex items-center gap-2">
               <input ref={fileRef} type="file" accept=".txt,.md,.json,.html,.csv,image/*" className="hidden" onChange={handleAttach} />
-              <button className="mb-btn-ghost h-9 w-9 p-0 justify-center" title="Attach" onClick={() => fileRef.current?.click()}>
-                <Paperclip className="h-4 w-4" />
-              </button>
+              <button className="mb-btn-ghost h-9 w-9 p-0 justify-center" title="Attach" onClick={() => fileRef.current?.click()}><Paperclip className="h-4 w-4" /></button>
               <MicButton onTranscript={(t) => setInput((p) => (p ? p + " " + t : t))} />
-              <button
-                className="mb-btn-ghost h-9 w-9 p-0 justify-center"
-                title="Add API key"
-                onClick={() => setKeyModal({ service: "", value: "" })}
-              >
-                <KeyRound className="h-4 w-4" />
-              </button>
+              <button className="mb-btn-ghost h-9 w-9 p-0 justify-center" title="Add API key" onClick={() => setKeyModal({ service: "", value: "" })}><KeyRound className="h-4 w-4" /></button>
               <div className="relative">
-                <button className="mb-btn-ghost h-9 px-2 text-xs" onClick={() => setModeOpen((v) => !v)}>
-                  {mode} <ChevronDown className="h-3 w-3" />
-                </button>
+                <button className="mb-btn-ghost h-9 px-2 text-xs" onClick={() => setModeOpen((v) => !v)}>{mode} <ChevronDown className="h-3 w-3" /></button>
                 {modeOpen && (
                   <div className="absolute bottom-full mb-1 left-0 bg-popover border border-border rounded-md shadow-lg z-10 min-w-[100px]">
-                    {(["Build", "Plan"] as const).map((m) => (
-                      <button
-                        key={m}
-                        onClick={() => { setMode(m); setModeOpen(false); }}
-                        className="block w-full text-left px-3 py-1.5 text-xs hover:bg-accent/20"
-                      >
-                        {m}
-                      </button>
-                    ))}
+                    {(["Build", "Plan"] as const).map((m) => (<button key={m} onClick={() => { setMode(m); setModeOpen(false); }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-accent/20">{m}</button>))}
                   </div>
                 )}
               </div>
               <div className="flex-1" />
-              <button className="mb-btn h-9 px-3 min-w-[44px]" onClick={() => send(input)} disabled={busy || !input.trim()}>
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              </button>
+              <button className="mb-btn h-9 px-3 min-w-[44px]" onClick={() => send(input)} disabled={busy || !input.trim()}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</button>
             </div>
           </div>
         </aside>
@@ -506,64 +532,35 @@ function ProjectPage() {
           <div className="border-b border-border px-2 py-2 flex items-center gap-2 bg-background/70 backdrop-blur overflow-x-auto">
             {!showMobileOnly && (
               <div className="flex rounded-md border border-border overflow-hidden shrink-0">
-                <button onClick={() => setDevice("desktop")} className={`px-3 h-11 text-xs flex items-center gap-1 min-w-[44px] ${device === "desktop" ? "bg-accent/30" : ""}`}>
-                  <Monitor className="h-4 w-4" /> Desktop
-                </button>
-                <button onClick={() => setDevice("mobile")} className={`px-3 h-11 text-xs flex items-center gap-1 min-w-[44px] ${device === "mobile" ? "bg-accent/30" : ""}`}>
-                  <Smartphone className="h-4 w-4" /> Mobile
-                </button>
+                <button onClick={() => setDevice("desktop")} className={`px-3 h-11 text-xs flex items-center gap-1 min-w-[44px] ${device === "desktop" ? "bg-accent/30" : ""}`}><Monitor className="h-4 w-4" /> Desktop</button>
+                <button onClick={() => setDevice("mobile")} className={`px-3 h-11 text-xs flex items-center gap-1 min-w-[44px] ${device === "mobile" ? "bg-accent/30" : ""}`}><Smartphone className="h-4 w-4" /> Mobile</button>
               </div>
             )}
-            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Refresh" onClick={() => setIframeKey((k) => k + 1)}>
-              <RefreshCw className="h-4 w-4" />
-            </button>
-            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Open in new tab" onClick={openInNewTab} disabled={!previewHtml}>
-              <ExternalLink className="h-4 w-4" />
-            </button>
+            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Refresh" onClick={() => setIframeKey((k) => k + 1)}><RefreshCw className="h-4 w-4" /></button>
+            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Open in new tab" onClick={openInNewTab} disabled={!previewHtml}><ExternalLink className="h-4 w-4" /></button>
             <div className="flex-1" />
             {isMobile ? (
               <>
-                <button className="mb-btn h-11 px-3 shrink-0" onClick={openSnack}>
-                  <Smartphone className="h-4 w-4" /> <span className="hidden sm:inline">Test on Phone</span>
-                </button>
-                <button className="mb-btn-ghost h-11 px-3 shrink-0" onClick={exportSiteAsApp} disabled={wrapBusy}>
-                  {wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                  <span className="hidden sm:inline">.zip</span>
-                </button>
+                <button className="mb-btn h-11 px-3 shrink-0" onClick={openSnack}><Smartphone className="h-4 w-4" /> <span className="hidden sm:inline">Test on Phone</span></button>
+                <button className="mb-btn-ghost h-11 px-3 shrink-0" onClick={exportSiteAsApp} disabled={wrapBusy}>{wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}<span className="hidden sm:inline">.zip</span></button>
               </>
             ) : (
-              <button className="mb-btn-ghost h-11 px-3 shrink-0" onClick={exportSiteAsApp} disabled={wrapBusy}>
-                {wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                <span className="hidden sm:inline">Download Android App</span>
-              </button>
+              <button className="mb-btn-ghost h-11 px-3 shrink-0" onClick={exportSiteAsApp} disabled={wrapBusy}>{wrapBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}<span className="hidden sm:inline">Download Android App</span></button>
             )}
           </div>
 
           <div className="flex-1 min-h-0 overflow-auto p-3 sm:p-4 flex items-start justify-center">
-            {showMobileOnly || device === "mobile" ? (
+            {previewFiles && isReactSource ? (
+              <WebContainerPreview files={previewFiles} iframeKey={iframeKey} />
+            ) : showMobileOnly || device === "mobile" ? (
               <div className="relative" style={{ width: 390, maxWidth: "100%" }}>
                 <div className="rounded-[2.2rem] border-[10px] border-foreground/80 bg-foreground/80 shadow-2xl overflow-hidden">
-                  <div className="h-5 bg-foreground/80 flex items-center justify-center">
-                    <div className="h-1.5 w-16 rounded-full bg-background/40" />
-                  </div>
-                  <iframe
-                    key={iframeKey}
-                    title="Preview"
-                    sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
-                    srcDoc={previewSrcDoc}
-                    className="w-full bg-white"
-                    style={{ height: 680 }}
-                  />
+                  <div className="h-5 bg-foreground/80 flex items-center justify-center"><div className="h-1.5 w-16 rounded-full bg-background/40" /></div>
+                  <iframe key={iframeKey} title="Preview" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals" srcDoc={previewSrcDoc} className="w-full bg-white" style={{ height: 680 }} />
                 </div>
               </div>
             ) : (
-              <iframe
-                key={iframeKey}
-                title="Preview"
-                sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
-                srcDoc={previewSrcDoc}
-                className="w-full h-full bg-white rounded-md border border-border min-h-[70vh]"
-              />
+              <iframe key={iframeKey} title="Preview" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals" srcDoc={previewSrcDoc} className="w-full h-full bg-white rounded-md border border-border min-h-[70vh]" />
             )}
           </div>
         </section>
@@ -576,32 +573,13 @@ function ProjectPage() {
             <h3 className="text-lg font-semibold flex items-center gap-2"><KeyRound className="h-5 w-5" /> Add API key</h3>
             <p className="text-sm text-muted-foreground">Stored securely in your project. The AI can wire it into your build automatically.</p>
             <label className="block text-xs text-muted-foreground">Service (e.g. flutterwave, paystack, stripe, mapbox)</label>
-            <input
-              className="mb-input"
-              value={keyModal.service}
-              onChange={(e) => setKeyModal({ ...keyModal, service: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "") })}
-              placeholder="flutterwave"
-              autoFocus={!keyModal.service}
-            />
+            <input className="mb-input" value={keyModal.service} onChange={(e) => setKeyModal({ ...keyModal, service: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "") })} placeholder="flutterwave" autoFocus={!keyModal.service} />
             <label className="block text-xs text-muted-foreground">Key</label>
-            <input
-              className="mb-input font-mono text-xs"
-              type="password"
-              value={keyModal.value}
-              onChange={(e) => setKeyModal({ ...keyModal, value: e.target.value })}
-              placeholder="sk_live_…"
-              autoFocus={!!keyModal.service}
-            />
-            {savedKeys.length > 0 && (
-              <div className="text-xs text-muted-foreground">
-                Saved: {savedKeys.map((k) => k.service).join(", ")}
-              </div>
-            )}
+            <input className="mb-input font-mono text-xs" type="password" value={keyModal.value} onChange={(e) => setKeyModal({ ...keyModal, value: e.target.value })} placeholder="sk_live_…" autoFocus={!!keyModal.service} />
+            {savedKeys.length > 0 && (<div className="text-xs text-muted-foreground">Saved: {savedKeys.map((k) => k.service).join(", ")}</div>)}
             <div className="flex justify-end gap-2 pt-2">
               <button className="mb-btn-ghost" onClick={() => setKeyModal(null)} disabled={keyBusy}>Cancel</button>
-              <button className="mb-btn" onClick={submitKey} disabled={keyBusy || !keyModal.service || !keyModal.value}>
-                {keyBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save key
-              </button>
+              <button className="mb-btn" onClick={submitKey} disabled={keyBusy || !keyModal.service || !keyModal.value}>{keyBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save key</button>
             </div>
           </div>
         </div>
@@ -611,4 +589,3 @@ function ProjectPage() {
 }
 
 const EMPTY_PREVIEW = `<!doctype html><html><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui;background:linear-gradient(135deg,#0b0f1a,#1a1033);color:#cbd5e1"><div style="text-align:center;padding:2rem"><div style="font-size:42px">✨</div><div style="margin-top:8px;font-size:14px;opacity:.7">Your preview will appear here</div></div></body></html>`;
-              
