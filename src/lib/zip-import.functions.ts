@@ -5,14 +5,11 @@ import { requireUser } from "@/integrations/mysupabase/middleware.server";
 
 /** Patterns that match third-party watermarks / branding badges. */
 const WATERMARK_PATTERNS: RegExp[] = [
-  // Inline badges
   /<a[^>]*(?:lovable|webflow\.com\/?\?utm|wix\.com|made-in-webflow|powered[- ]by|builtwith\.com|elementor\.com|squarespace|notion\.so\/?\?ref|carrd\.co|framer\.com\/?\?via)[^>]*>[\s\S]*?<\/a>/gi,
   /<div[^>]*(?:id|class)="[^"]*(?:badge|watermark|branding|made-with|lovable-badge|gpt-badge|powered-by)[^"]*"[^>]*>[\s\S]*?<\/div>/gi,
   /<script[^>]*(?:lovable\.dev|gpteng\.co|webflow\.com|wix\.com\/?_partials)[^>]*>[\s\S]*?<\/script>/gi,
   /<link[^>]+href="[^"]*(?:lovable\.dev|gpteng\.co)[^"]*"[^>]*\/?>/gi,
-  // Common attribution comments
   /<!--\s*(?:built|made|powered)\s+(?:with|by)[\s\S]{0,200}?-->/gi,
-  // data attributes that mark editor watermarks
   /\sdata-(?:lovable|gptengineer|webflow-badge|wix-badge|builder)="[^"]*"/gi,
 ];
 
@@ -30,7 +27,6 @@ function cleanText(input: string): { out: string; removed: number } {
 const Input = z.object({
   name: z.string().min(1).max(120),
   filename: z.string().max(255),
-  // base64 of the .zip
   zipBase64: z.string().min(1).max(40_000_000),
   upgrades: z.string().max(2000).optional(),
 });
@@ -41,7 +37,6 @@ export const importZipProject = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
 
-    // Decode + load zip safely
     const buf = Buffer.from(data.zipBase64, "base64");
     const zip = await JSZip.loadAsync(buf);
 
@@ -52,7 +47,6 @@ export const importZipProject = createServerFn({ method: "POST" })
 
     const files = Object.values(zip.files).filter((f) => !f.dir);
     for (const f of files) {
-      // Zip-slip / traversal guard
       if (f.name.includes("..") || f.name.startsWith("/")) continue;
       if (TEXT_EXT.test(f.name)) {
         const text = await f.async("string");
@@ -61,33 +55,59 @@ export const importZipProject = createServerFn({ method: "POST" })
         entries.push({ path: f.name, content: out, binary: false, removed });
         if (!primaryHtml && /index\.html?$/i.test(f.name)) primaryHtml = out;
       } else {
-        // Skip binary contents in preview but keep a manifest entry
         entries.push({ path: f.name, content: "", binary: true, removed: 0 });
       }
     }
+
+    // Try first HTML file if no index.html
     if (!primaryHtml) {
       const firstHtml = entries.find((e) => /\.html?$/i.test(e.path) && !e.binary);
       primaryHtml = firstHtml?.content ?? null;
     }
 
-    // If still no HTML found, build scaffold from React/TS source files
+    // No HTML found — build a rich scaffold from source files
+    // Store ALL source files so WebContainer and AI can read them properly
     if (!primaryHtml) {
       const srcFiles = entries
         .filter((e) => /\.(tsx|ts|jsx|js|css)$/i.test(e.path) && !e.binary && e.content.length > 0)
         .slice(0, 30)
-        .map((e) => `\n/* ===== FILE: ${e.path} ===== */\n${e.content.slice(0, 5000)}`)
-        .join("\n");
+        .map((e) => ({ path: e.path, content: e.content.slice(0, 5000) }));
+
+      // Build a structured file map that WebContainer can boot directly
+      const fileMap = srcFiles.map((f) => `/* ===== FILE: ${f.path} ===== */\n${f.content}`).join("\n\n");
+
+      // Build AI-readable summary of what the app does
+      const appSummary = srcFiles
+        .filter((f) => f.path.includes("route") || f.path.includes("page") || f.path.includes("component") || f.path.includes("App"))
+        .slice(0, 5)
+        .map((f) => `File: ${f.path}`)
+        .join(", ");
+
       primaryHtml = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${data.name}</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #fff; padding: 2rem; }
+  .info { background: #1a1a2e; border: 1px solid #16213e; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+  h1 { color: #4ade80; margin: 0 0 0.5rem; }
+  p { color: #94a3b8; margin: 0 0 1rem; }
+  .files { font-size: 12px; color: #64748b; }
+  .prompt { background: #065f46; border-radius: 8px; padding: 1rem; color: #d1fae5; font-weight: 500; }
+</style>
 </head>
 <body>
-<h1 style="font-family:sans-serif">${data.name}</h1>
-<p style="font-family:sans-serif">Type: <b>"Rebuild this as a complete working HTML website with all pages, features and styles."</b></p>
-<script type="text/plain" id="react-source">${srcFiles}</script>
+<div class="info">
+  <h1>📦 ${data.name}</h1>
+  <p>React/TypeScript source imported successfully. ${srcFiles.length} files loaded.</p>
+  <div class="files">Key files: ${appSummary || srcFiles.slice(0, 5).map(f => f.path).join(", ")}</div>
+</div>
+<div class="prompt">
+  💬 Tell the AI: <strong>"Read all the source code and rebuild this as a complete working HTML website preserving all pages, features, navigation and styling."</strong>
+</div>
+<script type="text/plain" id="react-source" data-files="${encodeURIComponent(JSON.stringify(srcFiles.map(f => f.path)))}">${fileMap}</script>
 </body>
 </html>`;
     }
@@ -120,7 +140,6 @@ export const importZipProject = createServerFn({ method: "POST" })
       .select("*").single();
     if (error) throw new Error(error.message);
 
-    // Store cleaned manifest in generations table as an audit trail
     await admin.from("generations").insert({
       user_id: user.id,
       project_id: project.id,
