@@ -10,7 +10,6 @@ function getDefaultSubdomain(project: { id: string; name: string }) {
     .replace(/-{2,}/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 30) || `site-${project.id.slice(0, 8)}`;
-
   return `${label}.mayobuild.app`;
 }
 
@@ -18,16 +17,14 @@ export const listProjects = createServerFn({ method: "GET" })
   .middleware([requireUser])
   .handler(async ({ context }) => {
     const { admin, user } = context;
-    // Owned
     const { data: owned } = await admin
       .from("projects")
-      .select("id,name,kind,description,created_at,updated_at")
+      .select("id,name,kind,description,created_at,updated_at,github_repo")
       .eq("owner_id", user.id)
       .order("updated_at", { ascending: false });
-    // Collaborated
     const { data: collab } = await admin
       .from("project_collaborators")
-      .select("project:projects(id,name,kind,description,created_at,updated_at)")
+      .select("project:projects(id,name,kind,description,created_at,updated_at,github_repo)")
       .eq("user_id", user.id)
       .not("accepted_at", "is", null);
     const collabProjects = (collab ?? [])
@@ -44,6 +41,7 @@ const CreateInput = z.object({
   name: z.string().min(1).max(120),
   kind: z.enum(["website", "mobile"]),
   description: z.string().max(2000).optional(),
+  github_repo: z.string().max(200).optional(),
 });
 
 export const createProject = createServerFn({ method: "POST" })
@@ -73,6 +71,7 @@ export const createProject = createServerFn({ method: "POST" })
         name: data.name,
         kind: data.kind,
         description: data.description ?? null,
+        github_repo: data.github_repo ?? null,
       })
       .select("*")
       .single();
@@ -91,7 +90,6 @@ export const getProject = createServerFn({ method: "POST" })
       .eq("id", data.id)
       .single();
     if (error) throw new Error(error.message);
-    // Access check
     const userId = context.user.id;
     if (project.owner_id !== userId) {
       const { data: collab } = await admin
@@ -138,7 +136,6 @@ export const inviteCollaborator = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => InviteInput.parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
-    // Verify ownership
     const { data: p } = await admin
       .from("projects")
       .select("id")
@@ -146,7 +143,6 @@ export const inviteCollaborator = createServerFn({ method: "POST" })
       .eq("owner_id", user.id)
       .maybeSingle();
     if (!p) throw new Error("Only the owner can invite");
-    // Look up if user exists
     const { data: profile } = await admin
       .from("profiles")
       .select("id")
@@ -169,11 +165,15 @@ export const inviteCollaborator = createServerFn({ method: "POST" })
 const PublishInput = z.object({
   projectId: z.string().uuid(),
   html: z.string().min(1).max(2_000_000),
+  files: z.record(z.string(), z.string()).optional(),
 });
 
 /**
- * Publish the project's current HTML to a public Supabase Storage bucket
- * ("sites") and return a permanent live URL. Independent of Lovable hosting.
+ * Publish the project.
+ * - If the project has a github_repo AND GITHUB_TOKEN env var is set,
+ *   AND the content is React source (not HTML), push each file to GitHub.
+ *   Vercel then auto-redeploys the real React app. No HTML conversion.
+ * - Otherwise fall back to uploading HTML to Supabase Storage (plain sites).
  */
 export const publishSite = createServerFn({ method: "POST" })
   .middleware([requireUser])
@@ -183,25 +183,75 @@ export const publishSite = createServerFn({ method: "POST" })
 
     const { data: project } = await admin
       .from("projects")
-      .select("id,owner_id")
+      .select("id,owner_id,github_repo,name")
       .eq("id", data.projectId)
       .maybeSingle();
     if (!project) throw new Error("Project not found");
     if (project.owner_id !== user.id) throw new Error("Only the owner can publish");
 
+    const githubToken = process.env.GITHUB_TOKEN;
+    const isReactSource = data.html.includes('id="react-source"') || (data.files && Object.keys(data.files).length > 0);
+
+    // --- REACT PATH: push to GitHub → Vercel auto-redeploys ---
+    if (githubToken && project.github_repo && isReactSource && data.files) {
+      const repo = project.github_repo;
+      const baseUrl = `https://api.github.com/repos/${repo}/contents`;
+      const headers = {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+      };
+
+      const results: { path: string; ok: boolean }[] = [];
+
+      for (const [filePath, content] of Object.entries(data.files)) {
+        try {
+          // Get current SHA so we can update existing files
+          const getRes = await fetch(`${baseUrl}/${filePath}`, { headers });
+          const current = getRes.ok ? await getRes.json() : null;
+
+          const pushRes = await fetch(`${baseUrl}/${filePath}`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({
+              message: `Updated ${filePath} via Mayobuild Studio`,
+              content: Buffer.from(content).toString("base64"),
+              sha: current?.sha ?? undefined,
+            }),
+          });
+          results.push({ path: filePath, ok: pushRes.ok });
+        } catch {
+          results.push({ path: filePath, ok: false });
+        }
+      }
+
+      // Save record in Supabase
+      await admin
+        .from("projects")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", data.projectId);
+
+      const liveUrl = `https://github.com/${repo}`;
+      return {
+        ok: true as const,
+        url: liveUrl,
+        path: repo,
+        method: "github",
+        pushed: results,
+      };
+    }
+
+    // --- HTML PATH: upload to Supabase Storage (plain HTML sites) ---
     try {
       await admin.storage.createBucket("sites", {
         public: true,
         fileSizeLimit: 5_000_000,
       });
     } catch {
-      // already exists — ignore
+      // already exists
     }
 
     const path = `${user.id}/${data.projectId}/index.html`;
-    if (data.html.includes('id="react-source"')) {
-  throw new Error("Please ask the AI to rebuild the website first before publishing.");
-    }
     const { error: upErr } = await admin.storage.from("sites").upload(path, data.html, {
       upsert: true,
       contentType: "text/html; charset=utf-8",
@@ -216,7 +266,7 @@ export const publishSite = createServerFn({ method: "POST" })
       .update({ preview_html: data.html, updated_at: new Date().toISOString() })
       .eq("id", data.projectId);
 
-    return { ok: true as const, url: pub.publicUrl, path };
+    return { ok: true as const, url: pub.publicUrl, path, method: "supabase" };
   });
 
 export const deleteProject = createServerFn({ method: "POST" })
@@ -231,7 +281,6 @@ export const deleteProject = createServerFn({ method: "POST" })
       .maybeSingle();
     if (!p) return { ok: true as const };
     if (p.owner_id !== user.id) throw new Error("Only the owner can delete");
-    // Best-effort storage cleanup
     try {
       const prefix = `${user.id}/${data.id}`;
       const { data: files } = await admin.storage.from("sites").list(prefix);
@@ -295,4 +344,23 @@ export const listApiKeys = createServerFn({ method: "POST" })
     return rows ?? [];
   });
 
-
+/**
+ * Link a GitHub repo to a project so publish pushes React files directly.
+ * Call this when user imports a ZIP and we detect it's a React project.
+ */
+export const linkGitHubRepo = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .inputValidator((d: unknown) => z.object({
+    projectId: z.string().uuid(),
+    github_repo: z.string().min(1).max(200),
+  }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { admin, user } = context;
+    const { error } = await admin
+      .from("projects")
+      .update({ github_repo: data.github_repo, updated_at: new Date().toISOString() })
+      .eq("id", data.projectId)
+      .eq("owner_id", user.id);
+    if (error) throw new Error(error.message);
+    return { ok: true as const };
+  });
