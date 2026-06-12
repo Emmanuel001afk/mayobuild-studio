@@ -68,9 +68,16 @@ export const importZipProject = createServerFn({ method: "POST" })
     // No HTML found — build a rich scaffold from source files
     // Store ALL source files so WebContainer and AI can read them properly
     if (!primaryHtml) {
-      const srcFiles = entries
-        .filter((e) => /\.(tsx|ts|jsx|js|css)$/i.test(e.path) && !e.binary && e.content.length > 0)
-        .slice(0, 30)
+      const srcFiles = [
+  // Routes first — most important
+  ...entries.filter((e) => e.path.includes("/routes/") && /\.(tsx|ts)$/i.test(e.path) && !e.binary && e.content.length > 0),
+  // Then lib files
+  ...entries.filter((e) => e.path.includes("/lib/") && /\.(tsx|ts)$/i.test(e.path) && !e.binary && e.content.length > 0),
+  // Then hooks
+  ...entries.filter((e) => e.path.includes("/hooks/") && /\.(tsx|ts)$/i.test(e.path) && !e.binary && e.content.length > 0),
+  // Then remaining components
+  ...entries.filter((e) => !e.path.includes("/routes/") && !e.path.includes("/lib/") && !e.path.includes("/hooks/") && /\.(tsx|ts)$/i.test(e.path) && !e.binary && e.content.length > 0),
+].slice(0, 30)
         .map((e) => ({ path: e.path, content: e.content.slice(0, 5000) }));
 
       // Build a structured file map that WebContainer can boot directly
