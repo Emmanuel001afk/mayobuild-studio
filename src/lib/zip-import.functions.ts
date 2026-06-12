@@ -77,8 +77,12 @@ export const importZipProject = createServerFn({ method: "POST" })
   ...entries.filter((e) => e.path.includes("/hooks/") && /\.(tsx|ts)$/i.test(e.path) && !e.binary && e.content.length > 0),
   // Then remaining components
   ...entries.filter((e) => !e.path.includes("/routes/") && !e.path.includes("/lib/") && !e.path.includes("/hooks/") && /\.(tsx|ts)$/i.test(e.path) && !e.binary && e.content.length > 0),
-].slice(0, 30)
-        .map((e) => ({ path: e.path, content: e.content.slice(0, 5000) }));
+].slice(0, 20)
+        .map((e) => ({
+          path: e.path,
+          // Give route files more space — they are most important for AI to read
+          content: e.path.includes("/routes/") ? e.content.slice(0, 8000) : e.content.slice(0, 4000)
+        }));
 
       // Build a structured file map that WebContainer can boot directly
       const fileMap = srcFiles.map((f) => `/* ===== FILE: ${f.path} ===== */\n${f.content}`).join("\n\n");
