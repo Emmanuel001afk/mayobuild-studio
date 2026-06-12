@@ -41,6 +41,7 @@ const SYSTEM_WEBSITE_BASE = [
   "If a feature needs an API key (Flutterwave, Paystack, Stripe, Mapbox etc), insert __API_KEY_<SERVICE>__ and say: 'I need your <SERVICE> API key — click the Add API key button.'",
   "AUTO-FIX: If you see an error message in the prompt, scan the code for the root cause and fix it automatically without being asked.",
   "VALIDATE: Before returning code, mentally check it compiles and the logic is correct.",
+  "SOURCE FILES: If you see /* ===== FILE: path ===== */ markers in the prompt, those ARE the source files. Read them all. Never say there are no source files if those markers exist.",
 ].join(" ");
 
 const SYSTEM_MOBILE_BASE = [
@@ -245,9 +246,24 @@ function ProjectPage() {
 
       const sysBase = mode === "Plan" ? PLAN_SYSTEM : isMobile ? SYSTEM_MOBILE_BASE : SYSTEM_WEBSITE_BASE;
 
-      // Pass ALL React files if available, otherwise pass HTML
+      // Pass React files if available — routes first, capped at 40000 chars to avoid AI truncation
       const fileContext = isReactSource && previewFiles
-        ? Object.entries(previewFiles).map(([path, content]) => `/* ===== FILE: ${path} ===== */\n${content}`).join("\n\n")
+        ? (() => {
+            const entries = Object.entries(previewFiles);
+            const routes = entries.filter(([p]) => p.includes("/routes/") || p.includes("route"));
+            const others = entries.filter(([p]) => !p.includes("/routes/") && !p.includes("route"));
+            const ordered = [...routes, ...others];
+            let total = 0;
+            const MAX = 40000;
+            const chosen: string[] = [];
+            for (const [path, content] of ordered) {
+              const block = `/* ===== FILE: ${path} ===== */\n${content}`;
+              if (total + block.length > MAX) break;
+              chosen.push(block);
+              total += block.length;
+            }
+            return chosen.join("\n\n");
+          })()
         : null;
 
       const codeBlock = fileContext
@@ -284,9 +300,10 @@ function ProjectPage() {
             html = previewHtml.replace(/<script type="text\/plain" id="react-source">[\s\S]*?<\/script>/, `<script type="text/plain" id="react-source">${fileMap}</script>`);
             summary = { added: fileMatches.map(m => m[1]), changed: [], removed: [] };
           } else {
-            // Fallback — AI returned HTML
+            // Fallback — AI returned HTML (only clear React files if AI explicitly gave us HTML back)
             const found = extractHtml(raw);
             if (found) { html = found; setPreviewFiles(null); summary = diffSummary(previewHtml || null, found); }
+            // If AI gave a text-only reply (question/answer with no code) — keep previewFiles intact
           }
         } else {
           const found = extractHtml(raw);
@@ -301,6 +318,9 @@ function ProjectPage() {
       if (html) {
         setPreviewHtml(html); setIframeKey((k) => k + 1);
         try { await save({ data: { id, preview_html: html } }); } catch {}
+      } else if (isReactSource && previewFiles && previewHtml) {
+        // AI gave a text-only reply (no code changes) — re-save scaffold so files survive page reload
+        try { await save({ data: { id, preview_html: previewHtml } }); } catch {}
       }
       const wantKey = detectKeyRequest(raw);
       if (wantKey && !savedKeys.find((k) => k.service === wantKey)) setKeyModal({ service: wantKey, value: "" });
