@@ -34,7 +34,7 @@ const SYSTEM_WEBSITE_BASE = [
   "When given plain HTML: improve and edit it, returning a complete updated HTML document.",
   "Never rewrite from scratch unless the user says 'start over completely'.",
   "Preserve ALL existing features, colors, layout, copy, and structure — only change what was asked.",
-  "For React projects: you MUST respond with ONLY the changed file(s). Each file MUST be in a fenced block formatted EXACTLY like this: ```tsx src/routes/bible.tsx followed by the complete file content then closing ```. Never return plain HTML for React projects. Never return div or HTML snippets.",
+  "For React projects: respond with ONLY the changed file(s) each in a ```tsx filepath.tsx ... ``` block. No HTML output.",
   "For HTML projects: respond with ONE ```html ... ``` block containing the complete updated single-file HTML.",
   "Use rich visuals: Unsplash images, CSS gradients, SVG icons, mobile-first responsive layout.",
   "Never apologize. Never say you are an AI. Never mention Lovable.",
@@ -274,7 +274,7 @@ function ProjectPage() {
         } else if (isReactSource) {
           // For React projects — extract updated files and merge into previewFiles
           const updatedFiles: Record<string, string> = { ...(previewFiles ?? {}) };
-          const fileMatches = [...raw.matchAll(/```(?:tsx|ts|jsx|js)\s+([\w./\-]+)\s*\n([\s\S]*?)```/g)];
+          const fileMatches = [...raw.matchAll(/```(?:tsx|ts|jsx|js|typescript)\s+([\w./\-\s]+?)\s*\n([\s\S]*?)```/g)];
           if (fileMatches.length > 0) {
             for (const m of fileMatches) updatedFiles[m[1].trim()] = m[2].trim();
             setPreviewFiles(updatedFiles);
