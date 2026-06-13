@@ -16,6 +16,9 @@ import {
 } from "lucide-react";
 
 export const Route = createFileRoute("/projects/$id")({
+  validateSearch: (s: Record<string, unknown>) => ({
+    firstPrompt: typeof s.firstPrompt === "string" ? s.firstPrompt : "",
+  }),
   head: () => ({ meta: [{ title: "Editor — Mayobuild Studio" }] }),
   component: ProjectPage,
 });
@@ -42,6 +45,9 @@ const SYSTEM_WEBSITE_BASE = [
   "AUTO-FIX: If you see an error message in the prompt, scan the code for the root cause and fix it automatically without being asked.",
   "VALIDATE: Before returning code, mentally check it compiles and the logic is correct.",
   "SOURCE FILES: If you see /* ===== FILE: path ===== */ markers in the prompt, those ARE the source files. Read them all. Never say there are no source files if those markers exist.",
+  "PROACTIVE: After completing any edit, always add a short note: (1) what you changed and why, (2) if you noticed any other issues or improvements nearby, mention them. Be a helpful partner, not just a code machine.",
+  "MEMORY: If past edits are shown in RECENT CHANGES, use them to understand the project history. Reference them when relevant.",
+  "BUILD FROM SCRATCH: If the user asks to build a new app or page from scratch with no source files provided, generate a complete working React/TypeScript component with full functionality, proper imports, and TailwindCSS styling.",
 ].join(" ");
 
 const SYSTEM_MOBILE_BASE = [
@@ -158,6 +164,7 @@ function ProjectPage() {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [previewHtml, setPreviewHtml] = useState<string>("");
   const [previewFiles, setPreviewFiles] = useState<Record<string, string> | null>(null);
+  const [changedFiles, setChangedFiles] = useState<Record<string, string>>({});
   const [iframeKey, setIframeKey] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [wrapBusy, setWrapBusy] = useState(false);
@@ -180,7 +187,7 @@ function ProjectPage() {
 
   useEffect(() => {
     if (!user) return;
-    get({ data: { id } }).then((d) => {
+    get({ data: { id } }).then(async (d) => {
       setData(d);
       if (d.project.preview_html) {
         const html = d.project.preview_html;
@@ -204,6 +211,33 @@ function ProjectPage() {
             }
           } catch {}
         }
+        // Load past conversation history from Supabase so AI remembers previous sessions
+        try {
+          const sbUrl = (import.meta as any).env?.VITE_SUPABASE_URL ?? "";
+          const sbKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ?? "";
+          if (sbUrl && sbKey) {
+            const { createClient } = await import("@supabase/supabase-js");
+            const sb = createClient(sbUrl, sbKey);
+            const { data: gens } = await sb
+              .from("generations")
+              .select("prompt,output,created_at")
+              .eq("project_id", id)
+              .eq("ok", true)
+              .neq("task", "zip_import")
+              .order("created_at", { ascending: true })
+              .limit(20);
+            if (gens && gens.length > 0) {
+              const hist: ChatMsg[] = [];
+              for (const g of gens) {
+                if (g.prompt) hist.push({ role: "user", content: g.prompt });
+                if (g.output) hist.push({ role: "assistant", content: g.output.slice(0, 1500), summary: { added: [], changed: ["previous edit"], removed: [] } });
+              }
+              hist.push({ role: "assistant", content: `Restored your last build. I remember ${gens.length} previous edit${gens.length === 1 ? "" : "s"}. Tell me what to change.` });
+              setMessages(hist);
+              return;
+            }
+          }
+        } catch {}
         setMessages([{ role: "assistant", content: "Restored your last build. Tell me what to change." }]);
       }
     }).catch((e) => setErr(e.message));
@@ -328,6 +362,7 @@ function ProjectPage() {
               }
             }
             setPreviewFiles(updatedFiles);
+            setChangedFiles(updatedFiles); // track only what AI changed
             setIframeKey((k) => k + 1);
             // Rebuild scaffold HTML with updated files
             const fileMap = Object.entries(updatedFiles).map(([p, c]) => `/* ===== FILE: ${p} ===== */\n${c}`).join("\n\n");
