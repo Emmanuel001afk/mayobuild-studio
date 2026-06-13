@@ -403,16 +403,21 @@ function ProjectPage() {
       // GitHub repo structure starts from "src/", not from the zip folder name
       let cleanFiles: Record<string, string> | undefined;
       if (previewFiles) {
+        // Only push files that the AI actually changed, not ALL files
+        // If AI changed specific files this session, push only those
+        // Otherwise push all (e.g. first push after import)
+        const filesToPush = Object.keys(changedFiles).length > 0 ? changedFiles : previewFiles;
         cleanFiles = {};
-        for (const [path, content] of Object.entries(previewFiles)) {
-          // Remove leading folder (e.g. "lite-read-main/" or "mayobuild-studio-main/")
+        for (const [path, fileContent] of Object.entries(filesToPush)) {
+          // Remove leading folder prefix (e.g. "lite-read-main/" -> "")
           const cleanPath = path.replace(/^[^/]+\//, "");
-          cleanFiles[cleanPath] = content;
+          cleanFiles[cleanPath] = fileContent;
         }
       }
       const res = await publish({ data: { projectId: id, html: previewHtml, files: cleanFiles } });
       setPublishedUrl(res.url);
       toast.success(res.method === "github" ? "Pushed to GitHub! Vercel is redeploying…" : "Live!", { description: res.url });
+      setChangedFiles({}); // reset after successful push
       if (res.method !== "github") window.open(res.url, "_blank", "noopener");
     } catch (e: any) { setErr(e.message); toast.error(e.message); }
     finally { setPublishBusy(false); }
