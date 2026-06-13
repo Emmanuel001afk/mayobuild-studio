@@ -194,7 +194,7 @@ function ProjectPage() {
         // Extract React source files for WebContainer
         if (html.includes('id="react-source"')) {
           try {
-            const match = html.match(/<script type="text\/plain" id="react-source">([\s\S]*?)<\/script>/);
+            const match = html.match(/<script type="text\/plain" id="react-source"[^>]*>([\s\S]*?)<\/script>/);
             if (match) {
               const rawFiles: Record<string, string> = {};
               const fileBlocks = match[1].matchAll(/\/\* ===== FILE: (.+?) ===== \*\/([\s\S]*?)(?=\/\* ===== FILE:|$)/g);
@@ -297,7 +297,7 @@ function ProjectPage() {
             setIframeKey((k) => k + 1);
             // Rebuild scaffold HTML with updated files
             const fileMap = Object.entries(updatedFiles).map(([p, c]) => `/* ===== FILE: ${p} ===== */\n${c}`).join("\n\n");
-            html = previewHtml.replace(/<script type="text\/plain" id="react-source">[\s\S]*?<\/script>/, `<script type="text/plain" id="react-source">${fileMap}</script>`);
+            html = previewHtml.replace(/<script type="text\/plain" id="react-source"[^>]*>[\s\S]*?<\/script>/, `<script type="text/plain" id="react-source">${fileMap}</script>`);
             summary = { added: fileMatches.map(m => m[1]), changed: [], removed: [] };
           } else {
             // Fallback — AI returned HTML (only clear React files if AI explicitly gave us HTML back)
