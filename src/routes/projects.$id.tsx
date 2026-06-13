@@ -67,8 +67,8 @@ const MOBILE_SUGGESTIONS = [
   "Grocery list with categories and check-off",
 ];
 
-const PROVIDER_ORDER_WEB = ["openrouter", "mistral", "huggingface", "cerebras"];
-const PROVIDER_ORDER_MOBILE = ["deepseek", "openai", "groq", "gemini"];
+const PROVIDER_ORDER_WEB = ["deepseek", "gemini", "groq", "openrouter", "mistral", "cerebras", "huggingface"];
+const PROVIDER_ORDER_MOBILE = ["gemini", "deepseek", "groq", "openrouter", "mistral", "cerebras", "huggingface"];
 
 function extractHtml(text: string): string | null {
   const m = text.match(/```(?:html)?\s*\n([\s\S]*?)```/i);
@@ -222,10 +222,7 @@ function ProjectPage() {
     for (let i = 0; i < chainOrder.length; i++) {
       const provider = chainOrder[i];
       try {
-        const res = await Promise.race([
-          route({ data: { ...payload, preferProvider: provider } }),
-          new Promise((_, rj) => setTimeout(() => rj(new Error("timeout 15s")), 15000)),
-        ]);
+        const res = await route({ data: { ...payload, preferProvider: provider } });
         if (i > 0) toast(`Switched to ${provider}`, { description: "Previous provider was slow or unavailable." });
         return res;
       } catch (e) { lastErr = e; }
@@ -290,9 +287,34 @@ function ProjectPage() {
         } else if (isReactSource) {
           // For React projects — extract updated files and merge into previewFiles
           const updatedFiles: Record<string, string> = { ...(previewFiles ?? {}) };
-          const fileMatches = [...raw.matchAll(/```(?:tsx|ts|jsx|js|typescript)\s+([\w./\-\s]+?)\s*\n([\s\S]*?)```/g)];
+          const fileMatches = [...raw.matchAll(/```(?:tsx|ts|jsx|js|typescript)(?:\s+([\w./\-\s]+?))?\s*\n([\s\S]*?)```/g)];
           if (fileMatches.length > 0) {
-            for (const m of fileMatches) updatedFiles[m[1].trim()] = m[2].trim();
+            // m[1] is the filepath (may be undefined if AI didn't include it)
+            // Try to match against known previewFiles paths, else use a generated name
+            for (const m of fileMatches) {
+              const rawPath = m[1]?.trim() ?? "";
+              const code = m[2].trim();
+              if (rawPath) {
+                updatedFiles[rawPath] = code;
+              } else {
+                // AI returned code without a filename — try to detect which file it is
+                // by matching the first export or route definition
+                const routeMatch = code.match(/createFileRoute\(["']([^"']+)["']\)/);
+                const exportMatch = code.match(/export (?:default )?(?:function|const) (\w+)/);
+                const knownPaths = Object.keys(previewFiles ?? {});
+                // Find the best matching existing file
+                let bestPath = knownPaths.find(p => {
+                  if (routeMatch) return p.includes(routeMatch[1].replace("/", "").replace("$", ""));
+                  if (exportMatch) return p.toLowerCase().includes(exportMatch[1].toLowerCase());
+                  return false;
+                });
+                if (!bestPath && knownPaths.length > 0) {
+                  // Fallback: update the first route file
+                  bestPath = knownPaths.find(p => p.includes("/routes/")) ?? knownPaths[0];
+                }
+                if (bestPath) updatedFiles[bestPath] = code;
+              }
+            }
             setPreviewFiles(updatedFiles);
             setIframeKey((k) => k + 1);
             // Rebuild scaffold HTML with updated files
