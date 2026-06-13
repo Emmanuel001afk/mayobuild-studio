@@ -5,7 +5,6 @@ import {
   Groq,
   HuggingFace,
   Mistral,
-  OpenAI,
   OpenRouter,
   huggingfaceImage,
 } from "./providers/all.server";
@@ -15,9 +14,12 @@ export type RouteTask = "complex_app" | "mobile_code" | "website" | "image";
 
 /** Routing rules per user spec. */
 const CHAIN: Record<RouteTask, Provider[]> = {
-  complex_app: [DeepSeek, OpenAI, Groq, Gemini],
-  mobile_code: [DeepSeek, OpenAI, Groq, Gemini],
-  website: [OpenRouter, Mistral, HuggingFace, Cerebras],
+  // Building from scratch: Gemini first (smartest, best reasoning for generating full apps)
+  complex_app: [Gemini, DeepSeek, Groq, OpenRouter, Mistral, Cerebras, HuggingFace],
+  // Mobile building: same as complex_app
+  mobile_code: [Gemini, DeepSeek, Groq, OpenRouter, Mistral, Cerebras, HuggingFace],
+  // Editing existing sites: DeepSeek first (best for understanding and editing code)
+  website: [DeepSeek, Gemini, Groq, OpenRouter, Mistral, Cerebras, HuggingFace],
   image: [], // handled separately
 };
 
@@ -49,8 +51,8 @@ export async function routeImage(prompt: string): Promise<string> {
 }
 
 export const PROVIDERS_META = {
-  complex_app: ["DeepSeek", "OpenAI", "Groq", "Gemini 2.5"],
-  mobile_code: ["DeepSeek", "OpenAI", "Groq", "Gemini 2.5"],
-  website: ["OpenRouter", "Mistral", "Hugging Face", "Cerebras"],
+  complex_app: ["Gemini 2.5", "DeepSeek", "Groq", "OpenRouter", "Mistral", "Cerebras", "HuggingFace"],
+  mobile_code: ["Gemini 2.5", "DeepSeek", "Groq", "OpenRouter", "Mistral", "Cerebras", "HuggingFace"],
+  website: ["DeepSeek", "Gemini 2.5", "Groq", "OpenRouter", "Mistral", "Cerebras", "HuggingFace"],
   image: ["Hugging Face (FLUX.1)"],
 };
