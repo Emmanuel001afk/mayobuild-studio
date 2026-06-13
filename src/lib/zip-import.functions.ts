@@ -85,10 +85,22 @@ export const importZipProject = createServerFn({ method: "POST" })
         }));
 
       // Build a structured file map that WebContainer can boot directly
-      const fileMap = srcFiles.map((f) => `/* ===== FILE: ${f.path} ===== */\n${f.content}`).join("\n\n");
+      // Strip the ZIP root folder prefix from all paths so they are clean
+      // "lite-read-main/src/routes/bible.tsx" -> "src/routes/bible.tsx"
+      // This works for any ZIP name - it just removes the first folder segment
+      function stripZipPrefix(p: string): string {
+        const parts = p.split("/");
+        if (parts.length > 1 && !p.startsWith("src/") && !p.startsWith("public/") && !p.startsWith(".")) {
+          return parts.slice(1).join("/");
+        }
+        return p;
+      }
+
+      const cleanedSrcFiles = srcFiles.map((f) => ({ ...f, path: stripZipPrefix(f.path) }));
+      const fileMap = cleanedSrcFiles.map((f) => `/* ===== FILE: ${f.path} ===== */\n${f.content}`).join("\n\n");
 
       // Build AI-readable summary of what the app does
-      const appSummary = srcFiles
+      const appSummary = cleanedSrcFiles
         .filter((f) => f.path.includes("route") || f.path.includes("page") || f.path.includes("component") || f.path.includes("App"))
         .slice(0, 5)
         .map((f) => `File: ${f.path}`)
@@ -112,13 +124,13 @@ export const importZipProject = createServerFn({ method: "POST" })
 <body>
 <div class="info">
   <h1>📦 ${data.name}</h1>
-  <p>React/TypeScript source imported successfully. ${srcFiles.length} files loaded.</p>
+  <p>React/TypeScript source imported successfully. ${cleanedSrcFiles.length} files loaded.</p>
   <div class="files">Key files: ${appSummary || srcFiles.slice(0, 5).map(f => f.path).join(", ")}</div>
 </div>
 <div class="prompt">
   💬 Tell the AI: <strong>"Read all the source code and rebuild this as a complete working HTML website preserving all pages, features, navigation and styling."</strong>
 </div>
-<script type="text/plain" id="react-source" data-files="${encodeURIComponent(JSON.stringify(srcFiles.map(f => f.path)))}">${fileMap}</script>
+<script type="text/plain" id="react-source" data-files="${encodeURIComponent(JSON.stringify(cleanedSrcFiles.map(f => f.path)))}">${fileMap}</script>
 </body>
 </html>`;
     }
