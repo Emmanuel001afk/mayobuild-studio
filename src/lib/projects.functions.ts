@@ -204,7 +204,17 @@ export const publishSite = createServerFn({ method: "POST" })
 
       const results: { path: string; ok: boolean }[] = [];
 
-      for (const [filePath, content] of Object.entries(data.files)) {
+      // Clean file paths: strip ZIP root folder prefix (e.g. "lite-read-main/src/..." -> "src/...")
+      // This ensures files land at the correct location in GitHub, not inside a subfolder
+      const cleanedFiles: Record<string, string> = {};
+      for (const [rawPath, fileContent] of Object.entries(data.files)) {
+        const cleanPath = (rawPath.includes("/") && !rawPath.startsWith("src/") && !rawPath.startsWith("public/") && !rawPath.startsWith("."))
+          ? rawPath.split("/").slice(1).join("/")
+          : rawPath;
+        cleanedFiles[cleanPath] = fileContent;
+      }
+
+      for (const [filePath, content] of Object.entries(cleanedFiles)) {
         try {
           // Get current SHA so we can update existing files
           const getRes = await fetch(`${baseUrl}/${filePath}`, { headers });
