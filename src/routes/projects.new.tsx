@@ -33,7 +33,14 @@ function NewProject() {
 
   // Auto-detect repo from ZIP filename
   function detectRepo(filename: string): string {
-    const base = filename.replace(/\.zip$/i, "").replace(/-main$/, "").replace(/_main$/, "");
+    // Strip all common GitHub ZIP suffixes: -main, _main, (6), __7_, spaces, etc.
+    const base = filename
+      .replace(/\.zip$/i, "")
+      .replace(/\s*\(\d+\)$/, "")    // remove " (6)" style suffixes
+      .replace(/__\d+_$/, "")           // remove "__7_" style suffixes
+      .replace(/-main$/i, "")
+      .replace(/_main$/i, "")
+      .trim();
     // Map known project names to repos
     const knownRepos: Record<string, string> = {
       "lite-read": "Emmanuel001afk/lite-read",
@@ -82,7 +89,12 @@ function NewProject() {
         setProgress(`Cleaned ${res.filesProcessed} files, removed ${res.watermarksRemoved} watermark elements.`);
       }
 
-      navigate({ to: "/projects/$id", params: { id: res.projectId } });
+      // Navigate to project — pass upgrades as search param so AI sends it automatically
+      navigate({
+        to: "/projects/$id",
+        params: { id: res.projectId },
+        search: upgrades ? { firstPrompt: upgrades } : {},
+      });
     } catch (e: any) { setErr(e.message); }
     finally { setBusy(false); }
   }
