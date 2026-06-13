@@ -104,41 +104,35 @@ function detectKeyRequest(text: string): string | null {
   return null;
 }
 
-// ── WebContainer Preview ──────────────────────────────────────────────────────
-function WebContainerPreview({ files, iframeKey }: { files: Record<string, string>; iframeKey: number }) {
-  const [wcUrl, setWcUrl] = useState<string | null>(null);
-  const [wcLoading, setWcLoading] = useState(false);
-  const [wcErr, setWcErr] = useState<string | null>(null);
-  const wcRef = useRef<any>(null);
+// ── Live Site Preview ─────────────────────────────────────────────────────────
+// Shows the actual deployed Vercel site in an iframe.
+// After pushing to GitHub, Vercel redeploys in ~60s and the iframe refreshes.
+function WebContainerPreview({ files, iframeKey, liveUrl }: { files: Record<string, string>; iframeKey: number; liveUrl?: string }) {
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    if (!files || Object.keys(files).length === 0) return;
-    let cancelled = false;
-    async function boot() {
-      setWcLoading(true); setWcErr(null);
-      try {
-        const { WebContainer } = await import("@webcontainer/api");
-        if (wcRef.current) { try { await wcRef.current.teardown(); } catch {} }
-        const wc = await WebContainer.boot();
-        wcRef.current = wc;
-        await wc.mount(Object.fromEntries(Object.entries(files).map(([p, c]) => [p, { file: { contents: c } }])));
-        await wc.spawn("npm", ["install"]);
-        await wc.spawn("npm", ["run", "dev"]);
-        wc.on("server-ready", (_port: number, url: string) => { if (!cancelled) setWcUrl(url); });
-      } catch (e: any) {
-        if (!cancelled) setWcErr(`Preview error: ${e.message}. Try refreshing.`);
-      } finally {
-        if (!cancelled) setWcLoading(false);
-      }
+    // When iframeKey changes (after a push), wait 5s then refresh the iframe
+    if (iframeKey > 0) {
+      const t = setTimeout(() => setRefreshKey(k => k + 1), 5000);
+      return () => clearTimeout(t);
     }
-    boot();
-    return () => { cancelled = true; };
   }, [iframeKey]);
 
-  if (wcLoading) return <div className="w-full h-full flex items-center justify-center text-muted-foreground gap-2"><Loader2 className="h-5 w-5 animate-spin" /> Booting live preview…</div>;
-  if (wcErr) return <div className="w-full h-full flex items-center justify-center text-destructive text-sm p-4 text-center">{wcErr}</div>;
-  if (wcUrl) return <iframe src={wcUrl} className="w-full h-full bg-white rounded-md border border-border min-h-[70vh]" allow="cross-origin-isolated" />;
-  return null;
+  if (!liveUrl) return (
+    <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-muted-foreground p-6 text-center">
+      <p className="text-sm">No live URL configured for this project.</p>
+      <p className="text-xs">Push to GitHub first — Vercel will deploy your site automatically.</p>
+    </div>
+  );
+
+  return (
+    <iframe
+      key={refreshKey}
+      src={liveUrl}
+      className="w-full h-full bg-white rounded-md border border-border min-h-[70vh]"
+      title="Live site preview"
+    />
+  );
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -198,7 +192,14 @@ function ProjectPage() {
             if (match) {
               const rawFiles: Record<string, string> = {};
               const fileBlocks = match[1].matchAll(/\/\* ===== FILE: (.+?) ===== \*\/([\s\S]*?)(?=\/\* ===== FILE:|$)/g);
-              for (const block of fileBlocks) rawFiles[block[1].trim()] = block[2].trim();
+              for (const block of fileBlocks) {
+                // Strip the ZIP root folder prefix (e.g. "lite-read-main/src/..." -> "src/...")
+                const rawPath = block[1].trim();
+                const cleanPath = rawPath.includes("/") && !rawPath.startsWith("src/") && !rawPath.startsWith("public/")
+                  ? rawPath.split("/").slice(1).join("/")
+                  : rawPath;
+                rawFiles[cleanPath] = block[2].trim();
+              }
               if (Object.keys(rawFiles).length > 0) setPreviewFiles(rawFiles);
             }
           } catch {}
@@ -213,6 +214,13 @@ function ProjectPage() {
 
   const isMobile = data?.project?.kind === "mobile";
   const suggestions = isMobile ? MOBILE_SUGGESTIONS : WEBSITE_SUGGESTIONS;
+  // Derive live Vercel URL from github_repo: "Emmanuel001afk/lite-read" -> "https://lite-read.vercel.app"
+  const liveUrl = data?.project?.github_repo
+    ? (() => {
+        const repoName = data.project.github_repo.split("/")[1] ?? "";
+        return `https://${repoName}.vercel.app`;
+      })()
+    : undefined;
   const chainOrder = isMobile ? PROVIDER_ORDER_MOBILE : PROVIDER_ORDER_WEB;
   const showMobileOnly = isPhone || isMobile;
   const isReactSource = !!(previewFiles && Object.keys(previewFiles).length > 0);
@@ -295,7 +303,11 @@ function ProjectPage() {
               const rawPath = m[1]?.trim() ?? "";
               const code = m[2].trim();
               if (rawPath) {
-                updatedFiles[rawPath] = code;
+                // Strip ZIP root folder prefix if present
+                const cleanedPath = rawPath.includes("/") && !rawPath.startsWith("src/") && !rawPath.startsWith("public/")
+                  ? rawPath.split("/").slice(1).join("/")
+                  : rawPath;
+                updatedFiles[cleanedPath] = code;
               } else {
                 // AI returned code without a filename — try to detect which file it is
                 // by matching the first export or route definition
@@ -334,7 +346,18 @@ function ProjectPage() {
         if (changesLine && summary) summary.changed.unshift(changesLine);
       }
 
-      const plain = raw.replace(/```[\s\S]*?```/g, "").replace(/CHANGES:[^\n]*/i, "").trim() || (html ? "Updated." : "");
+      // Extract readable summary - if AI only returned code, show which files changed
+      let plain = raw.replace(/```[\s\S]*?```/g, "").replace(/CHANGES:[^\n]*/i, "").trim();
+      if (!plain && html && isReactSource) {
+        const changedFiles = [...raw.matchAll(/```(?:tsx|ts|jsx|js|typescript)(?:\s+([\w./\-\s]+?))?\s*\n/g)]
+          .map(m => m[1]?.trim().split("/").pop() ?? "file")
+          .filter(Boolean);
+        plain = changedFiles.length > 0
+          ? `Updated: ${changedFiles.join(", ")}`
+          : "Files updated.";
+      } else if (!plain) {
+        plain = html ? "Updated." : "";
+      }
       const reply: ChatMsg = { role: "assistant", content: plain, html: html ?? undefined, summary };
       setMessages([...next, reply]);
       if (html) {
@@ -376,7 +399,18 @@ function ProjectPage() {
     if (!previewHtml) { toast.error("Generate something first, then publish."); return; }
     setPublishBusy(true); setErr(null);
     try {
-      const res = await publish({ data: { projectId: id, html: previewHtml, files: previewFiles ?? undefined } });
+      // Strip zip folder prefix from file paths (e.g. "lite-read-main/src/..." → "src/...")
+      // GitHub repo structure starts from "src/", not from the zip folder name
+      let cleanFiles: Record<string, string> | undefined;
+      if (previewFiles) {
+        cleanFiles = {};
+        for (const [path, content] of Object.entries(previewFiles)) {
+          // Remove leading folder (e.g. "lite-read-main/" or "mayobuild-studio-main/")
+          const cleanPath = path.replace(/^[^/]+\//, "");
+          cleanFiles[cleanPath] = content;
+        }
+      }
+      const res = await publish({ data: { projectId: id, html: previewHtml, files: cleanFiles } });
       setPublishedUrl(res.url);
       toast.success(res.method === "github" ? "Pushed to GitHub! Vercel is redeploying…" : "Live!", { description: res.url });
       if (res.method !== "github") window.open(res.url, "_blank", "noopener");
@@ -537,7 +571,11 @@ function ProjectPage() {
 
           <div className="flex-1 min-h-0 overflow-auto p-3 sm:p-4 flex items-start justify-center">
             {isReactSource && previewFiles ? (
-              <WebContainerPreview files={previewFiles} iframeKey={iframeKey} />
+              <WebContainerPreview files={
+                Object.fromEntries(
+                  Object.entries(previewFiles).map(([p, c]) => [p.replace(/^[^/]+\//, ""), c])
+                )
+              } iframeKey={iframeKey} liveUrl={liveUrl} />
             ) : showMobileOnly || device === "mobile" ? (
               <div className="relative" style={{ width: 390, maxWidth: "100%" }}>
                 <div className="rounded-[2.2rem] border-[10px] border-foreground/80 bg-foreground/80 shadow-2xl overflow-hidden">
