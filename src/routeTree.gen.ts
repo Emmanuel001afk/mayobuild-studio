@@ -14,6 +14,7 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
+import { Route as ProjectsBuildRouteImport } from './routes/projects.build'
 import { Route as ProjectsIdRouteImport } from './routes/projects.$id'
 import { Route as ApiTranscribeRouteImport } from './routes/api/transcribe'
 import { Route as ApiPublicSupabaseConfigRouteImport } from './routes/api/public/supabase-config'
@@ -42,6 +43,12 @@ const ProjectsNewRoute = ProjectsNewRouteImport.update({
   id: '/projects/new',
   path: '/projects/new',
   getParentRoute: () => rootRouteImport,
+} as any)
+
+const ProjectsBuildRoute = ProjectsBuildRouteImport.update({
+  id: '/projects/build',
+  path: '/projects/build',
+  getParentRoute: () => rootRoute,
 } as any)
 const ProjectsIdRoute = ProjectsIdRouteImport.update({
   id: '/projects/$id',
@@ -203,6 +210,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiTranscribeRoute: ApiTranscribeRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ProjectsNewRoute: ProjectsNewRoute,
+    ProjectsBuildRoute,
   ApiPublicSupabaseConfigRoute: ApiPublicSupabaseConfigRoute,
 }
 export const routeTree = rootRouteImport
