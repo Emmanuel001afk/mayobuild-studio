@@ -89,7 +89,7 @@ export const OpenRouter: Provider = {
     openaiChat({
       url: "https://openrouter.ai/api/v1/chat/completions",
       apiKey: need("OPENROUTER_API_KEY"),
-      model: o?.model ?? "meta-llama/llama-3.3-70b-instruct",
+      model: o?.model ?? "deepseek/deepseek-chat-v3-0324:free",
       messages,
       provider: "openrouter",
       extraHeaders: { "HTTP-Referer": "https://mayobuild.studio", "X-Title": "Mayobuild Studio" },
