@@ -1,0 +1,737 @@
+/**
+ * ╔══════════════════════════════════════════════════════════════════════════╗
+ * ║                     MAYOBUILD STUDIO — CENTRAL CONFIG                  ║
+ * ║                          src/mayobuild.config.ts                       ║
+ * ╠══════════════════════════════════════════════════════════════════════════╣
+ * ║  This file is the BRAIN and GUARDIAN of Mayobuild Studio.              ║
+ * ║  It enforces correct behaviour at every step:                          ║
+ * ║    import → read → edit → compare → validate → push → deploy           ║
+ * ║                                                                        ║
+ * ║  Drop this file at src/mayobuild.config.ts and import from anywhere.   ║
+ * ║  No other setup needed. It works standalone.                           ║
+ * ╚══════════════════════════════════════════════════════════════════════════╝
+ *
+ * SECTIONS:
+ *  1. PATH GUARDIAN         — strips ZIP prefix from all file paths
+ *  2. CHANGE DETECTOR       — ensures AI actually changed something
+ *  3. FILE MATCHER          — finds the right file when AI doesn't say which
+ *  4. PUSH VALIDATOR        — blocks bad pushes to GitHub
+ *  5. URL DERIVER           — gets Vercel live URL from GitHub repo
+ *  6. SCAFFOLD READER       — reads React files from HTML scaffold storage
+ *  7. SCAFFOLD REBUILDER    — updates scaffold after AI edits
+ *  8. ZIP CREATOR           — packages project as downloadable ZIP (like Lovable)
+ *  9. AI PROMPTS            — TypeScript 6.0, React 19, Lovable-compatible prompts
+ * 10. WEB TO APP            — converts website to React Native / Expo
+ * 11. AUTO-BUILD FEATURES   — what AI builds automatically without being asked
+ * 12. STACK REFERENCE       — complete tech stack and folder structure
+ */
+
+// ─── 1. PATH GUARDIAN ────────────────────────────────────────────────────────
+// PROBLEM: GitHub ZIPs wrap everything in a folder like "lite-read-main/".
+// This means files land at "lite-read-main/src/routes/bible.tsx" on GitHub
+// instead of "src/routes/bible.tsx". Vercel cannot find them. Nothing deploys.
+//
+// FIX: Strip that first folder automatically. Works for any ZIP name.
+// "lite-read-main/src/routes/bible.tsx"     → "src/routes/bible.tsx"
+// "halwayin-connect-main/src/lib/api.ts"    → "src/lib/api.ts"
+// "my-app__5_/src/components/Header.tsx"    → "src/components/Header.tsx"
+// "src/routes/index.tsx"                     → "src/routes/index.tsx" (untouched)
+
+export function cleanFilePath(rawPath: string): string {
+  const p = rawPath.trim();
+  // Already clean — starts with a known source folder
+  if (
+    p.startsWith("src/") ||
+    p.startsWith("public/") ||
+    p.startsWith("components/") ||
+    p.startsWith("lib/") ||
+    p.startsWith("hooks/") ||
+    p.startsWith(".") ||
+    !p.includes("/")
+  ) return p;
+  // Strip everything before and including the first "/"
+  return p.split("/").slice(1).join("/");
+}
+
+// Clean a whole collection of files at once
+export function cleanFilePaths(
+  files: Record<string, string>
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [path, content] of Object.entries(files)) {
+    result[cleanFilePath(path)] = content;
+  }
+  return result;
+}
+
+// ─── 2. CHANGE DETECTOR ──────────────────────────────────────────────────────
+// PROBLEM: AI sometimes returns the EXACT same code it received.
+// GitHub sees no difference → commit shows "0 files changed".
+// Nothing updates on the live site. User thinks the edit failed.
+//
+// FIX: Compare every file character by character before pushing.
+// Only keep files that actually changed. If nothing changed, block the push.
+
+export function getActuallyChangedFiles(
+  oldFiles: Record<string, string>,
+  newFiles: Record<string, string>
+): Record<string, string> {
+  const changed: Record<string, string> = {};
+  // Normalize whitespace so minor formatting doesn't count as a change
+  const normalize = (s: string) =>
+    s.replace(/\r\n/g, "\n").replace(/\s+$/gm, "").trim();
+
+  for (const [path, newContent] of Object.entries(newFiles)) {
+    const oldContent = oldFiles[path] ?? "";
+    if (normalize(newContent) !== normalize(oldContent)) {
+      changed[path] = newContent;
+    }
+  }
+  return changed;
+}
+
+// ─── 3. FILE MATCHER ─────────────────────────────────────────────────────────
+// PROBLEM: When AI edits a file, it sometimes doesn't say which file it changed.
+// The code picks the wrong file — e.g. scan.tsx gets updated instead of bible.tsx.
+//
+// FIX: Read clues inside the AI's own code to figure out which file it edited.
+// Uses 4 detection methods in order of reliability.
+
+export function matchFileFromCode(
+  code: string,
+  knownPaths: string[],
+  userPrompt: string = ""
+): string | null {
+  // Method 1 (most reliable): createFileRoute("/bible") in code → bible.tsx
+  const routeMatch = code.match(/createFileRoute\(["']([^"']+)["']\)/);
+  if (routeMatch) {
+    const routeName = routeMatch[1]
+      .replace(/^\//, "")
+      .replace(/\//g, "")
+      .replace(/\$/g, "")
+      .toLowerCase();
+    const found = knownPaths.find(p => {
+      const fname = p.split("/").pop()?.replace(/\.tsx?$/, "").toLowerCase() ?? "";
+      return fname === routeName || fname.includes(routeName) || routeName.includes(fname);
+    });
+    if (found) return found;
+  }
+
+  // Method 2: exported component name → "function BiblePage" → bible.tsx
+  const compMatch = code.match(
+    /export\s+(?:default\s+)?(?:function|const)\s+(\w+)/
+  );
+  if (compMatch) {
+    const name = compMatch[1]
+      .replace(/Page|Component|Route|Screen|View|Section/i, "")
+      .toLowerCase();
+    if (name.length > 2) {
+      const found = knownPaths.find(p =>
+        p.split("/").pop()?.replace(/\.tsx?$/, "").toLowerCase().includes(name)
+      );
+      if (found) return found;
+    }
+  }
+
+  // Method 3: User's prompt mentions a filename
+  if (userPrompt) {
+    const prompt = userPrompt.toLowerCase();
+    const byPrompt = knownPaths.find(p => {
+      const fname = p.split("/").pop()?.replace(/\.tsx?$/, "").toLowerCase() ?? "";
+      return fname.length > 2 && prompt.includes(fname);
+    });
+    if (byPrompt) return byPrompt;
+  }
+
+  // Method 4: imports in the code match a known file path
+  const importMatches = [...code.matchAll(/from\s+["']([^"']+)["']/g)];
+  for (const imp of importMatches) {
+    const importPath = imp[1].replace("@/", "").replace(/\.\./g, "");
+    const found = knownPaths.find(p => p.includes(importPath));
+    if (found) return found;
+  }
+
+  return null;
+}
+
+// ─── 4. PUSH VALIDATOR ───────────────────────────────────────────────────────
+// PROBLEM: Bad files sometimes get pushed to GitHub:
+// - Files with ZIP prefixes still in the path → land in wrong folder
+// - Empty files → break the build
+// - AI placeholders → "<!-- remains same as original -->"
+//
+// FIX: Check every file before pushing. Block anything suspicious.
+// Show a clear error message so the user knows exactly what went wrong.
+
+export interface PushValidation {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export function validateFilesForPush(
+  files: Record<string, string>
+): PushValidation {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!files || Object.keys(files).length === 0) {
+    errors.push(
+      "Nothing to push — AI made no code changes. Ask it to make a specific edit first."
+    );
+    return { valid: false, errors, warnings };
+  }
+
+  for (const [path, content] of Object.entries(files)) {
+    // ZIP prefix still present?
+    if (path.match(/^[^/]+-main\//) || path.match(/^[^/]+__\d+_\//) || path.match(/^[^/]+\s*\(\d+\)\//)) {
+      errors.push(`"${path}" still has ZIP folder prefix — path cleaning failed.`);
+    }
+    // Empty file?
+    if (!content || content.trim().length < 10) {
+      warnings.push(`"${path}" is nearly empty. Check if AI generated real code.`);
+    }
+    // AI placeholder?
+    if (
+      content.includes("remains the same as the original") ||
+      content.includes("same as original code") ||
+      content.includes("<!-- The complete HTML") ||
+      content.trim() === "// No changes needed" ||
+      content.includes("// TODO: implement")
+    ) {
+      errors.push(`"${path}": AI returned a placeholder, not real code. Ask it to try again.`);
+    }
+    // Spaces or brackets in path?
+    if (path.includes(" ") || path.includes("(")) {
+      warnings.push(`"${path}" has spaces/brackets — rename to avoid issues.`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors, warnings };
+}
+
+// ─── 5. URL DERIVER ──────────────────────────────────────────────────────────
+// Gets your live Vercel URL from a GitHub repo string.
+// "Emmanuel001afk/lite-read" → "https://lite-read.vercel.app"
+// No manual setup needed — fully automatic.
+
+export function deriveVercelUrl(githubRepo: string): string {
+  if (!githubRepo) return "";
+  const repoName = githubRepo.split("/")[1] ?? "";
+  return `https://${repoName}.vercel.app`;
+}
+
+// ─── 6. SCAFFOLD READER ──────────────────────────────────────────────────────
+// Reads React source files stored inside the HTML scaffold.
+// Handles any attributes on the script tag (e.g. data-files="...").
+// Strips ZIP prefix from all paths automatically.
+
+export function extractFilesFromScaffold(
+  html: string
+): Record<string, string> | null {
+  if (!html?.includes('id="react-source"')) return null;
+  try {
+    const match = html.match(
+      /<script[^>]*id="react-source"[^>]*>([\s\S]*?)<\/script>/
+    );
+    if (!match) return null;
+    const rawFiles: Record<string, string> = {};
+    const fileBlocks = match[1].matchAll(
+      /\/\* ===== FILE: (.+?) ===== \*\/([\s\S]*?)(?=\/\* ===== FILE:|$)/g
+    );
+    for (const block of fileBlocks) {
+      const cleanPath = cleanFilePath(block[1].trim());
+      const content = block[2].trim();
+      if (cleanPath && content) rawFiles[cleanPath] = content;
+    }
+    return Object.keys(rawFiles).length > 0 ? rawFiles : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── 7. SCAFFOLD REBUILDER ───────────────────────────────────────────────────
+// After AI edits files, this merges the changes back into the scaffold HTML
+// so they are saved to Supabase and survive page reloads.
+
+export function rebuildScaffold(
+  existingHtml: string,
+  updatedFiles: Record<string, string>
+): string {
+  const allFiles = extractFilesFromScaffold(existingHtml) ?? {};
+  const merged = { ...allFiles, ...updatedFiles };
+  const fileMap = Object.entries(merged)
+    .map(([path, content]) => `/* ===== FILE: ${path} ===== */\n${content}`)
+    .join("\n\n");
+  return existingHtml.replace(
+    /<script[^>]*id="react-source"[^>]*>[\s\S]*?<\/script>/,
+    `<script type="text/plain" id="react-source">${fileMap}</script>`
+  );
+}
+
+// ─── 8. ZIP CREATOR ──────────────────────────────────────────────────────────
+// Creates a downloadable ZIP of the full project — exactly like Lovable does.
+// The ZIP can be connected to GitHub and deployed on Vercel.
+// Includes all boilerplate: package.json, vite.config.ts, tsconfig.json, etc.
+//
+// Usage:
+//   const zip = await createProjectZip("my-app", previewFiles);
+//   const url = URL.createObjectURL(zip);
+//   const a = document.createElement("a");
+//   a.href = url; a.download = "my-app.zip"; a.click();
+
+export async function createProjectZip(
+  projectName: string,
+  files: Record<string, string>,
+  options: { includeBoilerplate?: boolean; theme?: string } = {}
+): Promise<Blob> {
+  const { includeBoilerplate = true } = options;
+  // Note: jszip must be in package.json dependencies
+  // Run: npm install jszip --save
+  const JSZip = (await import("jszip")).default;
+  const zip = new JSZip();
+  const safeName = projectName.replace(/[^a-z0-9-_]/gi, "-").toLowerCase();
+  const root = zip.folder(safeName)!;
+
+  // Add all AI-generated source files
+  const cleanFiles = cleanFilePaths(files);
+  for (const [path, content] of Object.entries(cleanFiles)) {
+    if (content.trim()) root.file(path, content);
+  }
+
+  if (includeBoilerplate) {
+    // package.json — latest versions, matches Lovable stack
+    root.file("package.json", JSON.stringify({
+      name: safeName,
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      scripts: {
+        dev: "vite",
+        build: "tsc && vite build",
+        preview: "vite preview",
+        lint: "eslint src --ext ts,tsx",
+        "type-check": "tsc --noEmit",
+      },
+      dependencies: {
+        react: "^19.0.0",
+        "react-dom": "^19.0.0",
+        "@tanstack/react-router": "^1.56.0",
+        "@tanstack/react-query": "^5.56.2",
+        "@supabase/supabase-js": "^2.49.4",
+        "lucide-react": "^0.462.0",
+        // shadcn/ui dependencies (same as Lovable)
+        "@radix-ui/react-dialog": "^1.1.0",
+        "@radix-ui/react-dropdown-menu": "^2.1.0",
+        "@radix-ui/react-toast": "^1.2.0",
+        "@radix-ui/react-select": "^2.1.0",
+        "@radix-ui/react-tabs": "^1.1.0",
+        "@radix-ui/react-avatar": "^1.1.0",
+        "@radix-ui/react-badge": "^1.0.0",
+        "class-variance-authority": "^0.7.0",
+        clsx: "^2.1.0",
+        "tailwind-merge": "^2.3.0",
+        sonner: "^1.5.0",
+      },
+      devDependencies: {
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "@vitejs/plugin-react-swc": "^3.7.0",
+        typescript: "^6.0.0",
+        vite: "^5.4.1",
+        tailwindcss: "^4.0.0",
+        "@tailwindcss/vite": "^4.0.0",
+        "@typescript-eslint/eslint-plugin": "^7.0.0",
+        "@typescript-eslint/parser": "^7.0.0",
+        eslint: "^8.57.0",
+        "eslint-plugin-react-hooks": "^4.6.0",
+      },
+    }, null, 2));
+
+    // vite.config.ts
+    root.file("vite.config.ts", `import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react-swc";
+import tailwindcss from "@tailwindcss/vite";
+import path from "path";
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: { "@": path.resolve(__dirname, "./src") },
+  },
+  build: {
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: { vendor: ["react", "react-dom"] },
+      },
+    },
+  },
+});`);
+
+    // TypeScript 6.0 config
+    root.file("tsconfig.json", JSON.stringify({
+      compilerOptions: {
+        target: "ES2022",
+        lib: ["ES2023", "DOM", "DOM.Iterable"],
+        module: "ESNext",
+        moduleResolution: "bundler",
+        jsx: "react-jsx",
+        strict: true,
+        exactOptionalPropertyTypes: true,
+        noUncheckedIndexedAccess: true,
+        noUnusedLocals: true,
+        noUnusedParameters: true,
+        noFallthroughCasesInSwitch: true,
+        skipLibCheck: true,
+        paths: { "@/*": ["./src/*"] },
+      },
+      include: ["src"],
+      exclude: ["node_modules"],
+    }, null, 2));
+
+    // Tailwind v4 config
+    root.file("tailwind.config.ts", `import type { Config } from "tailwindcss";
+export default {
+  darkMode: ["class"],
+  content: [
+    "./index.html",
+    "./src/**/*.{ts,tsx,js,jsx}",
+  ],
+  theme: {
+    extend: {
+      colors: {
+        border: "hsl(var(--border))",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        primary: {
+          DEFAULT: "hsl(var(--primary))",
+          foreground: "hsl(var(--primary-foreground))",
+        },
+        muted: {
+          DEFAULT: "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))",
+        },
+        accent: {
+          DEFAULT: "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))",
+        },
+      },
+      borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
+      },
+    },
+  },
+  plugins: [],
+} satisfies Config;`);
+
+    // index.html
+    root.file("index.html", `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f0f0f" />
+    <title>${projectName}</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>`);
+
+    // src/main.tsx
+    root.file("src/main.tsx", `import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import "./styles.css";
+import App from "./App";
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>
+);`);
+
+    // src/styles.css — Tailwind v4 + CSS variables
+    root.file("src/styles.css", `@import "tailwindcss";
+
+:root {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --primary: 142.1 76.2% 36.3%;
+  --primary-foreground: 355.7 100% 97.3%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+  --border: 217.2 32.6% 17.5%;
+  --radius: 0.5rem;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: hsl(var(--background)); color: hsl(var(--foreground)); }
+`);
+
+    // Vercel config
+    root.file("vercel.json", JSON.stringify({
+      buildCommand: "npm run build",
+      outputDirectory: "dist",
+      framework: "vite",
+      rewrites: [{ source: "/(.*)", destination: "/index.html" }],
+    }, null, 2));
+
+    // .gitignore
+    root.file(".gitignore", [
+      "node_modules", "dist", ".env", ".env.local",
+      "*.log", ".DS_Store", ".vite", "coverage",
+    ].join("\n"));
+
+    // README
+    root.file("README.md", `# ${projectName}
+
+Built with [Mayobuild Studio](https://mayobuild-studio.vercel.app).
+
+## Stack
+- React 19 + TypeScript 6.0
+- Vite 5 + Tailwind CSS v4
+- shadcn/ui components
+- Supabase (auth + database)
+
+## Setup
+\`\`\`bash
+npm install
+npm run dev
+\`\`\`
+
+## Deploy
+Push to GitHub. Connect to [Vercel](https://vercel.com). Auto-deploys on every commit.
+`);
+  }
+
+  return zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+}
+
+// ─── 9. AI PROMPTS ───────────────────────────────────────────────────────────
+// These are the instructions given to the AI when building or editing.
+// They enforce: TypeScript 6.0, React 19, Tailwind v4, shadcn/ui, Lovable compatibility.
+
+// BUILDING FROM SCRATCH — what Mayobuild tells the AI when creating a new app
+export const BUILD_SYSTEM_PROMPT = [
+  "You are Mayobuild AI — a senior full-stack engineer. Build complete, production-ready apps like Lovable AI does.",
+  "STACK (mandatory): React 19, TypeScript 6.0 strict mode, Tailwind CSS v4, TanStack Router v1, Vite 5, shadcn/ui, Supabase.",
+  "TYPESCRIPT 6.0: Always use strict mode. Use satisfies operator, const type parameters, using declarations, template literal types.",
+  "REACT 19: Functional components only. Use use(), useActionState(), useOptimistic() where appropriate. No class components.",
+  "SHADCN/UI: Use shadcn Button, Card, Input, Textarea, Dialog, Select, Badge, Tabs, Avatar, Toast for all UI elements. Import from @/components/ui/.",
+  "TAILWIND v4: Use utility classes for all styling. Mobile-first responsive. No inline styles.",
+  // AUTO-BUILD: what gets generated without being asked
+  "AUTO-INCLUDE without being asked:",
+  "  - Navigation bar with logo, menu links, mobile hamburger menu",
+  "  - Sign up / Sign in pages with email+password and Google OAuth button",
+  "  - User profile page with edit name, change password, upload avatar",
+  "  - 404 Not Found page with home button",
+  "  - Loading states on every async action",
+  "  - Error boundaries and error messages",
+  "  - Dark mode support using Tailwind dark: classes",
+  "  - Responsive layout that works on phone, tablet, desktop",
+  "  - Footer with basic links",
+  "  - Toast notifications for success/error feedback",
+  "FILE STRUCTURE: src/routes/ for pages, src/components/ for UI, src/components/ui/ for shadcn, src/lib/ for utils, src/hooks/ for custom hooks.",
+  "SUPABASE: Auth with supabase.auth, database with supabase.from(), RLS must be noted.",
+  "RETURN FORMAT: Each file wrapped in ```tsx path/to/file.tsx with the exact path.",
+  "COMPLETENESS: Generate ALL files needed. No placeholders. No 'add implementation here'. Write everything.",
+  "QUALITY: This must look and work like a real, professional, launched product.",
+].join(" ");
+
+// EDITING EXISTING CODE — what Mayobuild tells the AI when editing Lovable-created sites
+export const EDIT_SYSTEM_PROMPT = [
+  "You are Mayobuild AI — editing Lovable-generated React/TypeScript code. Be precise and complete.",
+  "STACK: React 19, TypeScript 6.0 strict, Tailwind CSS v4, TanStack Router v1, shadcn/ui, Supabase.",
+  "SHADCN/UI: This codebase uses shadcn/ui. For any new UI elements use shadcn Button, Card, Input, Dialog, Select, Badge, Tabs. Import from @/components/ui/.",
+  "SOURCE FILES: The /* ===== FILE: path ===== */ markers ARE the source files. Read every single one before you touch anything.",
+  "EDITING RULES:",
+  "  1. Make ONLY the specific change requested. Do not rewrite unrelated code.",
+  "  2. Return ONLY the files you changed, with their COMPLETE content — not a diff.",
+  "  3. Each changed file wrapped in: ```tsx src/routes/exact-filename.tsx",
+  "  4. NEVER say 'I need more files'. If something is missing, implement it yourself.",
+  "  5. NEVER return the same file unchanged. If you return a file, it must be different.",
+  "  6. After editing, add one paragraph: what changed and anything else you noticed nearby.",
+  "SELF-CHECK: Before returning, verify your output differs from input. Same output = you failed. Rewrite it.",
+  "NEVER: Never write placeholder comments. Never ask for more info. Never return HTML instead of TSX.",
+  "FILE PATH: Always include the exact file path in the code block header. This is mandatory.",
+].join(" ");
+
+// ─── 10. WEB TO APP ──────────────────────────────────────────────────────────
+// Instructions for converting a web project to React Native / Expo.
+// What changes in conversion:
+//   div/section → View
+//   p/span/h1-h6 → Text
+//   img → Image
+//   button/a → TouchableOpacity
+//   input → TextInput
+//   TailwindCSS → StyleSheet
+//   React Router → React Navigation
+//   window/document → React Native APIs
+
+export const WEB_TO_APP_PROMPT = [
+  "Convert this React web app to a complete React Native Expo SDK 52 mobile app.",
+  "ELEMENT CONVERSION: div/section/article → View | p/span/h1-h6 → Text | img → Image | button/a → TouchableOpacity + Text | input → TextInput | select → Picker.",
+  "STYLING: Remove all Tailwind classes. Convert every style to StyleSheet.create() objects.",
+  "NAVIGATION: Replace TanStack/React Router with @react-navigation/native stack navigator.",
+  "REMOVE: All browser APIs (window, document, location, localStorage). Replace with React Native AsyncStorage, Linking, etc.",
+  "ADD: SafeAreaView wrapping all screens. expo-status-bar. Permission requests for notifications.",
+  "KEEP: All business logic, data fetching, Supabase calls, state management — unchanged.",
+  "OUTPUT: Complete Expo project. App.tsx, app.json, package.json, tsconfig.json, navigation structure.",
+  "TYPESCRIPT 6.0 strict mode. React 19. Expo SDK 52.",
+].join(" ");
+
+// ─── 11. AUTO-BUILD FEATURES ─────────────────────────────────────────────────
+// Features that Mayobuild builds AUTOMATICALLY when creating a new app,
+// without the user needing to ask. This is what makes it better than Lovable.
+// Lovable only builds what you ask for. Mayobuild builds the full foundation.
+
+export const AUTO_BUILD_FEATURES = {
+  auth: [
+    "Sign up page (email + password)",
+    "Sign in page with 'Forgot password' link",
+    "Google OAuth sign in button",
+    "Password reset flow (email → reset link → new password)",
+    "Protected routes (redirect to login if not signed in)",
+    "User session persistence",
+  ],
+  navigation: [
+    "Top navigation bar with logo and menu",
+    "Mobile hamburger menu",
+    "Active link highlighting",
+    "Breadcrumb navigation for nested pages",
+  ],
+  profile: [
+    "User profile page",
+    "Edit display name",
+    "Change password",
+    "Upload profile photo",
+    "Delete account option",
+  ],
+  ux: [
+    "Loading spinner on every async operation",
+    "Toast notifications for success and errors",
+    "Empty states with helpful messages",
+    "Error boundaries so crashes show friendly messages",
+    "404 Not Found page",
+    "Responsive layout for phone, tablet, desktop",
+    "Dark mode support",
+  ],
+  seo: [
+    "Meta title and description on every page",
+    "Open Graph tags for social sharing",
+    "Canonical URLs",
+    "sitemap.xml structure",
+  ],
+  performance: [
+    "Code splitting per route",
+    "Image lazy loading",
+    "Memoisation of expensive components",
+  ],
+};
+
+// ─── 12. STACK REFERENCE ─────────────────────────────────────────────────────
+// The exact stack Mayobuild Studio uses — matches Lovable AI output.
+// Any Lovable-generated ZIP will work with this stack.
+
+export const STACK = {
+  language: "TypeScript 6.0 (strict mode)",
+  framework: "React 19",
+  routing: "TanStack Router v1",
+  dataFetching: "TanStack Query v5",
+  styling: "Tailwind CSS v4",
+  uiComponents: "shadcn/ui (Radix UI primitives)",
+  icons: "Lucide React",
+  backend: "Supabase (auth, database, storage, realtime)",
+  build: "Vite 5",
+  deploy: "Vercel (auto-deploy from GitHub)",
+  notifications: "Sonner",
+  mobile: "React Native + Expo SDK 52",
+} as const;
+
+// Folder structure — matches Lovable ZIP output exactly
+export const FOLDER_STRUCTURE = {
+  "src/routes/": "Pages (one file per route)",
+  "src/routes/__root.tsx": "Root layout with nav, providers",
+  "src/routes/index.tsx": "Home page",
+  "src/components/": "Reusable UI components",
+  "src/components/ui/": "shadcn/ui primitives",
+  "src/lib/": "Utilities, API calls, helpers",
+  "src/lib/*.functions.ts": "Server functions (TanStack Start)",
+  "src/hooks/": "Custom React hooks",
+  "src/integrations/supabase/": "Supabase client + types",
+  "src/styles.css": "Global styles + Tailwind imports",
+  "public/": "Static assets",
+} as const;
+
+// ─── EXPORT SUMMARY ──────────────────────────────────────────────────────────
+// Everything this file exports, for easy reference:
+//
+// FUNCTIONS:
+//   cleanFilePath(path)                          — strip ZIP prefix from one path
+//   cleanFilePaths(files)                        — strip prefix from all files
+//   getActuallyChangedFiles(old, new)            — diff old vs new
+//   matchFileFromCode(code, paths, prompt)       — find which file AI edited
+//   validateFilesForPush(files)                  — check before GitHub push
+//   deriveVercelUrl(githubRepo)                  — get live URL
+//   extractFilesFromScaffold(html)               — read files from scaffold
+//   rebuildScaffold(html, updatedFiles)          — update scaffold
+//   createProjectZip(name, files, options)       — create downloadable ZIP
+//
+// STRINGS (AI prompts):
+//   BUILD_SYSTEM_PROMPT                          — for building from scratch
+//   EDIT_SYSTEM_PROMPT                           — for editing existing code
+//   WEB_TO_APP_PROMPT                            — for web → mobile conversion
+//
+// OBJECTS:
+//   AUTO_BUILD_FEATURES                          — what gets built automatically
+//   STACK                                        — full tech stack reference
+//   FOLDER_STRUCTURE                             — folder layout reference
+
+// ─── SUGGESTIONS & IMPROVEMENTS APPLIED ─────────────────────────────────────
+// The following improvements were researched and applied to Mayobuild Studio:
+//
+// DONE ✅:
+//   - TypeScript 6.0 strict mode (latest stable, Jun 2026)
+//   - React 19 with use(), useActionState(), useOptimistic()
+//   - Tailwind CSS v4 with @tailwindcss/vite plugin
+//   - shadcn/ui components — matches Lovable AI output exactly
+//   - Supabase auth, database, storage, realtime
+//   - AI memory — loads last 20 edits from Supabase on page load
+//   - Smart file matching — finds correct file by reading code content
+//   - Change detection — blocks empty GitHub commits
+//   - Push validation — catches bad paths and placeholders before push
+//   - ZIP export — creates downloadable project like Lovable
+//   - Auto-build features — nav, auth, profile, 404, dark mode, responsive
+//   - Web to App conversion — React Native / Expo SDK 52
+//   - Free AI chain — DeepSeek, Gemini, Groq, Mistral, OpenRouter:free
+//   - Claude removed from chain (requires payment — no free tier)
+//   - OpenRouter uses deepseek-chat-v3-0324:free (genuinely free)
+//   - No timeout on AI calls — provider waits as long as needed
+//   - ZIP path stripping — removes "lite-read-main/" prefix automatically
+//   - Proactive AI — explains changes, notices nearby issues
+//   - Build from scratch page — 3-step wizard with templates
+//
+// COMPLAINTS FIXED ✅:
+//   - "0 files changed" on GitHub — fixed by change detector
+//   - Wrong file pushed (scan.tsx instead of bible.tsx) — fixed by file matcher
+//   - AI says "I need more files" — fixed by system prompt instruction
+//   - Files land in wrong GitHub folder — fixed by path guardian
+//   - Preview shows error — replaced WebContainer with live Vercel iframe
+//   - Messages lost on page reload — fixed by loading from Supabase generations
+//   - AI switches provider constantly — fixed by removing 15s timeout
+//
+// FUTURE IMPROVEMENTS (not yet built):
+//   - Real-time collaborative editing (multiple users editing same project)
+//   - AI-generated unit tests for every component
+//   - One-click custom domain setup via Vercel API
+//   - AI code review before push — "are you sure? this might break X"
+//   - Git branch management — create feature branches from UI
+//   - Visual diff viewer — show exactly what changed before pushing
+//   - Project analytics — page views, errors, performance from Vercel API
