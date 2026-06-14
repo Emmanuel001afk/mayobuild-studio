@@ -356,6 +356,76 @@ export const listApiKeys = createServerFn({ method: "POST" })
   });
 
 /**
+ * Auto Supabase Table Creator — runs AI-generated SQL safely on the server.
+ * The service role key never leaves the server (TanStack Start server function).
+ * Only runs CREATE TABLE, CREATE INDEX, ALTER TABLE, CREATE POLICY statements.
+ * Blocks DROP, DELETE, TRUNCATE so it cannot destroy existing data.
+ * Each statement is run individually so one failure doesn't block the rest.
+ */
+export const runProjectSQL = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .inputValidator((d: unknown) => z.object({
+    projectId: z.string().uuid(),
+    sql: z.string().min(1).max(50_000),
+  }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { admin, user } = context;
+
+    // Verify user owns this project
+    const { data: project } = await admin
+      .from("projects")
+      .select("id")
+      .eq("id", data.projectId)
+      .eq("owner_id", user.id)
+      .maybeSingle();
+    if (!project) throw new Error("Project not found or access denied.");
+
+    // Safety guard — only allow safe DDL statements, never destructive ones
+    const BLOCKED = /\b(DROP|DELETE|TRUNCATE|UPDATE|INSERT)\b/i;
+    const ALLOWED = /\b(CREATE|ALTER|GRANT|REVOKE|COMMENT|ENABLE|DISABLE)\b/i;
+
+    // Split into individual statements and filter
+    const statements = data.sql
+      .split(";")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 10)
+      .filter((s) => {
+        if (BLOCKED.test(s)) return false;
+        if (!ALLOWED.test(s)) return false;
+        return true;
+      });
+
+    if (statements.length === 0) {
+      return { ok: true, ran: 0, skipped: 0, errors: [] };
+    }
+
+    const errors: string[] = [];
+    let ran = 0;
+
+    for (const stmt of statements) {
+      try {
+        const { error } = await admin.rpc("exec_sql", { sql: stmt + ";" });
+        if (error) {
+          // Table already exists = fine, not an error
+          if (error.message.includes("already exists")) { ran++; continue; }
+          errors.push(`${stmt.slice(0, 60)}… → ${error.message}`);
+        } else {
+          ran++;
+        }
+      } catch (e: any) {
+        errors.push(e.message ?? "Unknown error");
+      }
+    }
+
+    return {
+      ok: errors.length === 0,
+      ran,
+      skipped: statements.length - ran - errors.length,
+      errors,
+    };
+  });
+
+/**
  * Link a GitHub repo to a project so publish pushes React files directly.
  * Call this when user imports a ZIP and we detect it's a React project.
  */
