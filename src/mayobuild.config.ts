@@ -541,6 +541,8 @@ export const BUILD_SYSTEM_PROMPT = [
   "FILE STRUCTURE: src/routes/ for pages, src/components/ for UI, src/components/ui/ for shadcn, src/lib/ for utils, src/hooks/ for custom hooks.",
   "SUPABASE: Auth with supabase.auth, database with supabase.from(), RLS must be noted.",
   "SUPABASE TABLES: At the END of your response, after all code files, output a fenced ```sql block containing the complete CREATE TABLE statements and RLS policies needed for this app. Label it clearly: '-- PASTE THIS INTO YOUR SUPABASE SQL EDITOR'. This is mandatory so the user knows exactly what to create.",
+  "SECURITY (mandatory — every project must have these): Sanitize all user inputs before display. Never expose API keys in client code — use environment variables only. Add RLS to every Supabase table. Validate all form inputs with Zod or similar. Never use dangerouslySetInnerHTML unless sanitized. Add CSRF protection on all mutation endpoints.",
+  "SEO (mandatory — every project must include): Add a <Head> component to every route with title, meta description, og:title, og:description, og:image. Make the title and description relevant to what the app does.",
   "RETURN FORMAT: Each file wrapped in ```tsx path/to/file.tsx with the exact path.",
   "COMPLETENESS: Generate ALL files needed. No placeholders. No 'add implementation here'. Write everything.",
   "QUALITY: This must look and work like a real, professional, launched product.",
@@ -552,16 +554,23 @@ export const EDIT_SYSTEM_PROMPT = [
   "STACK: React 19, TypeScript 6.0 strict, Tailwind CSS v4, TanStack Router v1, shadcn/ui, Supabase.",
   "SHADCN/UI: This codebase uses shadcn/ui. For any new UI elements use shadcn Button, Card, Input, Dialog, Select, Badge, Tabs. Import from @/components/ui/.",
   "SOURCE FILES: The /* ===== FILE: path ===== */ markers ARE the source files. Read every single one before you touch anything.",
+  "FILE IDENTIFICATION — THIS IS THE MOST IMPORTANT RULE:",
+  "  STEP 1: Read the user's request carefully. Identify what feature or section they mention (e.g. 'bible section', 'search bar on reader page', 'home page header').",
+  "  STEP 2: Look at EVERY file path listed in the FILE markers. Find the file whose path or content matches what the user mentioned.",
+  "  STEP 3: The file path you use in your code block header MUST be copied EXACTLY from the FILE markers. Letter for letter. Do not invent paths.",
+  "  STEP 4: If the user says 'bible section' and you see 'src/routes/bible.tsx' in the file list — that is the file. Use 'src/routes/bible.tsx' exactly.",
+  "  STEP 5: NEVER use a utility file like lookup.ts, utils.ts, lib.ts, index.ts, scan.ts unless the user specifically asked to edit that file.",
+  "  STEP 6: If you cannot find a matching file, CREATE a new one at the correct path (e.g. src/routes/bible.tsx) rather than editing the wrong file.",
   "EDITING RULES:",
   "  1. Make ONLY the specific change requested. Do not rewrite unrelated code.",
   "  2. Return ONLY the files you changed, with their COMPLETE content — not a diff.",
-  "  3. Each changed file wrapped in: ```tsx src/routes/exact-filename.tsx",
+  "  3. Each changed file wrapped in: ```tsx src/routes/exact-filename.tsx (path copied from FILE markers).",
   "  4. NEVER say 'I need more files'. If something is missing, implement it yourself.",
   "  5. NEVER return the same file unchanged. If you return a file, it must be different.",
-  "  6. After editing, add one paragraph: what changed and anything else you noticed nearby.",
-  "SELF-CHECK: Before returning, verify your output differs from input. Same output = you failed. Rewrite it.",
-  "NEVER: Never write placeholder comments. Never ask for more info. Never return HTML instead of TSX.",
-  "FILE PATH: Always include the exact file path in the code block header. This is mandatory.",
+  "  6. After editing, add one paragraph: what file you edited, why you chose that file, what changed.",
+  "SELF-CHECK before responding: Did I copy the file path from the FILE markers? Is this the correct file for what the user asked? If not — stop and find the right file.",
+  "NEVER: Never write placeholder comments. Never ask for more info. Never return HTML instead of TSX. Never use lookup.ts or scan.ts unless specifically asked.",
+  "FILE PATH: The code block header path must match a path that exists in the FILE markers. No exceptions.",
 ].join(" ");
 
 // ─── 10. WEB TO APP ──────────────────────────────────────────────────────────
@@ -671,27 +680,93 @@ export const FOLDER_STRUCTURE = {
   "public/": "Static assets",
 } as const;
 
-// ─── 13. STARTER TEMPLATES ───────────────────────────────────────────────────
-// Ready-made prompts users can click to start building immediately.
-// Each has a category, display name, and the full prompt sent to BUILD_SYSTEM_PROMPT.
 
+// ─── SELF-REPAIR PROMPT ──────────────────────────────────────────────────────
+export const SELF_REPAIR_PROMPT = [
+  "You are Mayobuild AI in SELF-REPAIR mode. You have full read/write access to this project GitHub repository.",
+  "DIAGNOSIS: 1. Read file tree. 2. Read relevant files. 3. Find root cause. 4. Write corrected file. 5. Commit fix.",
+  "INTELLIGENCE: Read ANY file for context. Fix all files affected by one issue. Check imports after fixing.",
+  "SAFETY: Never delete files. Never DROP tables. Never remove auth guards. Only CREATE or UPDATE. Log every change.",
+  "If unsure, make the most conservative fix possible. If cannot fix safely, report and stop.",
+  "OUTPUT: JSON only. { diagnosis: string, filesFixed: string[], commitMessage: string, confident: boolean }",
+].join(" ");
+
+// ─── AUTONOMOUS THINKING PROMPT ──────────────────────────────────────────────
+// This is what separates Mayobuild from platforms that only follow scripts.
+// The AI uses this when it encounters an unknown problem — it THINKS, searches,
+// and reasons its way to a solution rather than failing or asking the user.
+export const AUTONOMOUS_THINKING_PROMPT = [
+  "You are Mayobuild AI operating in AUTONOMOUS mode. You have full intelligence — do not wait for instructions.",
+  "THINKING PROCESS — follow this every time:",
+  "  1. UNDERSTAND: What is the actual problem? Read every relevant file. Do not assume.",
+  "  2. HYPOTHESIZE: What are the 2-3 most likely causes? Rank them by probability.",
+  "  3. INVESTIGATE: Check your hypothesis against the actual code. Read more files if needed.",
+  "  4. SEARCH: If you do not know the solution, use web_search to find it. Search for the exact error message.",
+  "  5. FIX: Write the minimal fix that solves the root cause. Do not rewrite working code.",
+  "  6. VERIFY: Re-read your fix. Does it actually solve the problem? Does it break anything else?",
+  "  7. COMMIT: Write a clear commit message explaining what was wrong and what you changed.",
+  "BROAD KNOWLEDGE RULES:",
+  "  - You know React, TypeScript, TanStack, Supabase, Vercel, Cloudflare, GitHub API, Nigerian payments.",
+  "  - If you encounter something outside your knowledge, SEARCH for it. Do not guess.",
+  "  - Think like a senior engineer who has seen this problem before. Most bugs are simple.",
+  "  - If the error mentions a specific package, file, or line number — go directly to that location first.",
+  "  - You are allowed to fix things the user did not ask about if you notice they are broken.",
+  "SAFETY: Never delete. Never break auth. Never drop tables. If unsure, fix conservatively.",
+].join(" ");
+
+// ─── PROJECT KNOWLEDGE BASE TEMPLATE ─────────────────────────────────────────
+// Injected into every AI call so the AI always knows what each project is about.
+// Admin fills this in once per project. The AI reads it before every edit.
+export function buildKnowledgeBlock(knowledge: {
+  projectName: string;
+  description: string;
+  techStack?: string;
+  importantFiles?: string[];
+  doNotTouch?: string[];
+  customInstructions?: string;
+}): string {
+  return [
+    `PROJECT KNOWLEDGE BASE:`,
+    `  Name: ${knowledge.projectName}`,
+    `  Description: ${knowledge.description}`,
+    knowledge.techStack ? `  Stack: ${knowledge.techStack}` : "",
+    knowledge.importantFiles?.length ? `  Key files: ${knowledge.importantFiles.join(", ")}` : "",
+    knowledge.doNotTouch?.length ? `  DO NOT TOUCH these files: ${knowledge.doNotTouch.join(", ")}` : "",
+    knowledge.customInstructions ? `  Custom rules: ${knowledge.customInstructions}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+// ─── PUSH DESTINATIONS ───────────────────────────────────────────────────────
+// All places Mayobuild can push code to.
+// GitHub is always primary. Cloudflare Pages is secondary (free tier).
+export const PUSH_DESTINATIONS = {
+  github: {
+    name: "GitHub",
+    description: "Primary — Vercel auto-deploys from here",
+    free: true,
+  },
+  cloudflare: {
+    name: "Cloudflare Pages",
+    description: "Secondary — instant global CDN, 500 builds/month free",
+    free: true,
+    apiBase: "https://api.cloudflare.com/client/v4",
+  },
+} as const;
+
+// ─── STARTER TEMPLATES ───────────────────────────────────────────────────────
 export const STARTER_TEMPLATES = [
-  // Websites
   { category: "Website", name: "Landing Page", icon: "🚀", prompt: "Build a modern SaaS landing page with hero section, features grid, pricing table with 3 tiers, testimonials carousel, FAQ accordion, and email signup footer. Dark theme, green accent color." },
   { category: "Website", name: "Portfolio", icon: "🎨", prompt: "Build a personal portfolio website with animated hero, about section, projects grid with filter by category, skills progress bars, contact form with validation, and smooth scroll navigation." },
   { category: "Website", name: "Blog", icon: "📝", prompt: "Build a blog platform with home page showing latest posts, individual post pages with markdown support, categories and tags, search, author profile, and newsletter signup." },
   { category: "Website", name: "Restaurant", icon: "🍽️", prompt: "Build a restaurant website with hero image, menu page organized by category, online table reservation form, gallery, location map embed, opening hours, and contact page." },
-  // Apps
   { category: "App", name: "SaaS Dashboard", icon: "📊", prompt: "Build a SaaS admin dashboard with sidebar navigation, analytics overview with charts, user management table with search and filters, settings page, and dark/light mode toggle. Use Supabase for auth and data." },
   { category: "App", name: "E-Commerce Store", icon: "🛍️", prompt: "Build an e-commerce store with product listing grid, product detail page, shopping cart with quantity controls, checkout form, order history page, and admin product management. Use Supabase." },
   { category: "App", name: "Task Manager", icon: "✅", prompt: "Build a task management app like Trello with drag-and-drop kanban board, task creation modal, due dates, priority labels, project folders, and team member assignment. Use Supabase." },
   { category: "App", name: "Social Platform", icon: "💬", prompt: "Build a social platform with user profiles, post feed with likes and comments, follow/unfollow system, notifications page, direct messaging, and image upload support. Use Supabase auth and storage." },
   { category: "App", name: "Event Booking", icon: "🎟️", prompt: "Build an event booking platform with event listings, event detail page, seat/ticket selection, booking confirmation, user booking history, and organizer dashboard. Use Supabase." },
   { category: "App", name: "Finance Tracker", icon: "💰", prompt: "Build a personal finance tracker with income/expense logging, category breakdown charts, monthly budget goals, transaction history with filters, CSV export, and summary dashboard. Use Supabase." },
-  // Mobile
   { category: "Mobile", name: "Meditation App", icon: "🧘", prompt: "Build a meditation mobile app with daily session timer, breathing exercise guide, streak tracker, calming background sounds selector, progress calendar, and mood log." },
   { category: "Mobile", name: "Habit Tracker", icon: "📅", prompt: "Build a habit tracker mobile app with daily habit checklist, streak counter, weekly progress charts, reminder notifications, habit categories, and achievement badges." },
-  // Nigerian
   { category: "Nigerian", name: "Marketplace", icon: "🛒", prompt: "Build a Nigerian online marketplace with product listings in Naira, seller profiles, buyer-seller chat, Flutterwave payment integration, Lagos/Abuja delivery zones, and order tracking." },
   { category: "Nigerian", name: "Fintech App", icon: "🏦", prompt: "Build a Nigerian fintech dashboard with wallet balance in Naira, send/receive money flow, transaction history, bank account linking, airtime purchase, and Paystack payment integration." },
 ] as const;
