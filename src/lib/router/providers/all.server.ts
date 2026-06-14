@@ -116,7 +116,7 @@ export const Cerebras: Provider = {
     openaiChat({
       url: "https://api.cerebras.ai/v1/chat/completions",
       apiKey: need("CEREBRAS_API_KEY"),
-      model: o?.model ?? "llama3.1-8b",
+      model: o?.model ?? "llama3.1-70b",
       messages,
       provider: "cerebras",
     }),
