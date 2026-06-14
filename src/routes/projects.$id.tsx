@@ -32,7 +32,7 @@ type ChatMsg = {
 };
 
 // ── AI System Prompts ─────────────────────────────────────────────────────────
-const const SYSTEM_WEBSITE = EDIT_SYSTEM_PROMPT;
+const SYSTEM_WEBSITE = EDIT_SYSTEM_PROMPT;
 
 const SYSTEM_MOBILE_BASE = [
   "You are Mayobuild AI. You improve an existing Expo React Native App.tsx (TypeScript) only.",
