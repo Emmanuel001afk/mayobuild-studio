@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireUser } from "@/integrations/mysupabase/middleware.server";
 
-const ADMIN_EMAIL = "akintundeemmanuel14@gmail.com";
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "akintundeemmanuel14@gmail.com"; // Set ADMIN_EMAIL in Vercel env vars to change
 
 function assertAdmin(email: string | undefined | null) {
   if (!email || email.toLowerCase() !== ADMIN_EMAIL) {
