@@ -1,10 +1,13 @@
-import { cleanFilePaths, getActuallyChangedFiles, matchFileFromCode, validateFilesForPush, deriveVercelUrl, extractFilesFromScaffold, rebuildScaffold, EDIT_SYSTEM_PROMPT, BUILD_SYSTEM_PROMPT, STARTER_TEMPLATES } from "@/mayobuild.config";
+import { cleanFilePaths, getActuallyChangedFiles, matchFileFromCode, validateFilesForPush, deriveVercelUrl, extractFilesFromScaffold, rebuildScaffold, EDIT_SYSTEM_PROMPT, BUILD_SYSTEM_PROMPT, AUTONOMOUS_THINKING_PROMPT, buildKnowledgeBlock, STARTER_TEMPLATES } from "@/mayobuild.config";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/hooks/use-auth";
 import {
   getProject, savePreview, publishSite, saveApiKey, listApiKeys, runProjectSQL,
+  checkVercelDeployment, autoFixFromVercelError, runScheduledHealthCheck,
+  runFullVerificationLoop, pullFromGitHub, pushToCloudflare,
+  saveProjectKnowledge, generateDiffPreview, remixProject,
 } from "@/lib/projects.functions";
 import { callRouter } from "@/lib/router.functions";
 import { wrapWebsiteAsApp } from "@/lib/mobile-gen.functions";
@@ -13,7 +16,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft, Loader2, Send, Globe, Smartphone, Monitor, RefreshCw,
   ExternalLink, Rocket, Paperclip, ChevronDown, Download, Sparkles,
-  KeyRound, X, Wrench, Undo2, History,
+  KeyRound, X, Wrench, Undo2, History, GitPullRequest, CloudUpload, BookOpen,
 } from "lucide-react";
 
 export const Route = createFileRoute("/projects/$id")({
@@ -145,6 +148,15 @@ function ProjectPage() {
   const saveKey = useServerFn(saveApiKey);
   const listKeys = useServerFn(listApiKeys);
   const runSQL = useServerFn(runProjectSQL);
+  const checkDeploy = useServerFn(checkVercelDeployment);
+  const autoFix = useServerFn(autoFixFromVercelError);
+  const healthCheck = useServerFn(runScheduledHealthCheck);
+  const pullGitHub = useServerFn(pullFromGitHub);
+  const pushCloudflare = useServerFn(pushToCloudflare);
+  const saveKnowledge = useServerFn(saveProjectKnowledge);
+  const getDiff = useServerFn(generateDiffPreview);
+  const remix = useServerFn(remixProject);
+  const runLoop = useServerFn(runFullVerificationLoop);
 
   const [data, setData] = useState<any>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -169,6 +181,7 @@ function ProjectPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [autoRetrying, setAutoRetrying] = useState(false);
+  const [deployStatus, setDeployStatus] = useState<"idle"|"checking"|"success"|"error"|"fixing"|"fixed">("idle");
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -263,7 +276,21 @@ function ProjectPage() {
       const changeContext = messages.filter((m) => m.role === "assistant" && m.summary).slice(-10)
         .map((m, i) => `Turn ${i + 1}: +${m.summary!.added.join(",")} ~${m.summary!.changed.join(",")} -${m.summary!.removed.join(",")}`).join("\n");
 
+      // Build knowledge block from project settings (if set)
+      const knowledgeBlock = project?.knowledge_description ? "\n\n" + buildKnowledgeBlock({
+        projectName: project.name ?? "",
+        description: project.knowledge_description ?? "",
+        importantFiles: project.knowledge_important_files ?? [],
+        doNotTouch: project.knowledge_do_not_touch ?? [],
+        customInstructions: project.knowledge_custom_instructions ?? "",
+      }) : "";
+
       const sysBase = mode === "Plan" ? PLAN_SYSTEM : isMobile ? SYSTEM_MOBILE_BASE : (!previewHtml && !isReactSource) ? BUILD_SYSTEM_PROMPT : SYSTEM_WEBSITE;
+
+      // Build explicit file tree so AI knows EXACTLY what files exist before choosing which one to edit
+      const fileTree = isReactSource && previewFiles
+        ? `\n\nPROJECT FILE TREE (these are the ONLY valid file paths — copy paths exactly from this list):\n${Object.keys(previewFiles).map((p) => `  - ${p}`).join("\n")}\n`
+        : "";
 
       // Pass React files if available — routes first, capped at 40000 chars to avoid AI truncation
       const fileContext = isReactSource && previewFiles
@@ -292,7 +319,9 @@ function ProjectPage() {
         : "";
 
       const historyBlock = changeContext ? `\n\nRECENT CHANGES:\n${changeContext}` : "";
-      const system = `${sysBase}${codeBlock}${historyBlock}\n\nMODE: ${mode.toUpperCase()}`;
+      // AUTONOMOUS THINKING — AI reasons through problems rather than pattern-matching
+      const autonomousBlock = `\n\n${AUTONOMOUS_THINKING_PROMPT}`;
+      const system = `${sysBase}${knowledgeBlock}${fileTree}${codeBlock}${historyBlock}${autonomousBlock}\n\nMODE: ${mode.toUpperCase()}`;
 
       const res = await callWithFailover({ task: isMobile ? "mobile_code" : "website", prompt: trimmed, system, projectId: id, history });
       if (res.kind !== "text") return;
@@ -395,6 +424,23 @@ function ProjectPage() {
           toast("Supabase tables could not be auto-created. Copy the SQL from the AI message and paste it into your Supabase SQL editor.");
         }
       }
+
+      // Auto-retry if AI picked wrong file (returned code but nothing matched known files = 0 files changed)
+      if (isReactSource && previewFiles && Object.keys(updatedFiles).length === 0 && raw.length > 100) {
+        setAutoRetrying(true);
+        toast("AI picked the wrong file — auto-retrying with file guidance...");
+        const fileList = Object.keys(previewFiles).map((p) => `  - ${p}`).join("\n");
+        const retryPrompt = `Your previous response did not match any file in this project.\nUser asked: "${trimmed}"\nYou MUST use a path from this exact list:\n${fileList}\nApply the change now using the correct path.`;
+        const retryRes = await callWithFailover({ task: isMobile ? "mobile_code" : "website", prompt: retryPrompt, system, projectId: id, history });
+        setAutoRetrying(false);
+        if (retryRes.kind === "text" && retryRes.text) {
+          for (const block of retryRes.text.matchAll(/```(?:tsx?|jsx?|css|json)\s+([^\s`]+)\s*\n([\s\S]*?)```/g)) {
+            const fpath = block[1].trim();
+            const code = block[2].trim();
+            if (fpath && code && previewFiles[fpath] !== undefined) updatedFiles[fpath] = code;
+          }
+        }
+      }
     } catch (e: any) {
       setErr(e.message);
       setMessages([...next, { role: "assistant", content: `Error: ${e.message}` }]);
@@ -420,6 +466,30 @@ function ProjectPage() {
     setIframeKey((k) => k + 1);
     setShowHistory(false);
     toast("Restored version from history.");
+  }
+
+  async function handlePullFromGitHub() {
+    if (!project?.github_repo) { toast.error("No GitHub repo linked to this project."); return; }
+    toast("Pulling latest code from GitHub...");
+    try {
+      const result = await pullGitHub({ data: { projectId: id } });
+      if (result.ok && Object.keys(result.files).length > 0) {
+        setPreviewFiles(result.files);
+        setIframeKey((k) => k + 1);
+        toast.success(`Pulled ${result.pulledFiles} files from GitHub. Editor updated.`);
+      }
+    } catch (e: any) { toast.error(e.message); }
+  }
+
+  async function handlePushToCloudflare() {
+    if (!previewFiles && !previewHtml) { toast.error("Nothing to push."); return; }
+    toast("Pushing to Cloudflare Pages...");
+    try {
+      const filesToPush = previewFiles ?? { "index.html": previewHtml ?? "" };
+      const result = await pushCloudflare({ data: { projectId: id, files: filesToPush, projectName: project?.name ?? "mayobuild-site" } });
+      if (result.ok) toast.success(`Deployed to Cloudflare Pages!`, { description: result.url });
+      else toast.error(result.reason ?? "Cloudflare push failed.");
+    } catch (e: any) { toast.error(e.message); }
   }
 
   async function exportSiteAsApp() {
@@ -473,6 +543,36 @@ function ProjectPage() {
       setPublishedUrl(res.url);
       toast.success(res.method === "github" ? "Pushed to GitHub! Vercel is redeploying…" : "Live!", { description: res.url });
       setChangedFiles({}); // reset after successful push
+
+      // After GitHub push — run the FULL AUTONOMOUS VERIFICATION LOOP
+      // AI checks GitHub → Vercel → Live site → auto-fixes if anything wrong
+      if (res.method === "github" && project?.github_repo) {
+        const repo = project.github_repo;
+        setDeployStatus("checking");
+        // Start loop after 75 seconds (enough time for Vercel to begin)
+        setTimeout(async () => {
+          try {
+            const loopResult = await runLoop({
+              data: {
+                projectId: id,
+                github_repo: repo,
+                expectedChanges: Object.keys(changedFiles),
+                userPrompt: messages[messages.length - 2]?.content ?? "",
+              }
+            });
+            if (loopResult.ok) {
+              setDeployStatus("success");
+              toast.success("✅ All checks passed — GitHub, Vercel, and live site confirmed.", { description: loopResult.liveUrl ?? "" });
+            } else {
+              setDeployStatus("fixed");
+              toast.success("🔧 Issue detected and auto-fixed — redeploying.");
+            }
+          } catch {
+            setDeployStatus("idle");
+          }
+        }, 75_000);
+      }
+
       if (res.method !== "github") window.open(res.url, "_blank", "noopener");
     } catch (e: any) { setErr(e.message); toast.error(e.message); }
     finally { setPublishBusy(false); }
@@ -490,12 +590,7 @@ function ProjectPage() {
     const f = e.target.files?.[0]; if (!f) return;
     const reader = new FileReader();
     if (f.type.startsWith("image/")) {
-      reader.onload = () => {
-        const b64 = String(reader.result ?? "");
-        // Embed image as data URL so AI can read it via the prompt context
-        setInput((p) => (p ? p + "\n\n" : "") + `[IMAGE ATTACHED: "${f.name}" — data URL below. Read this image and build/edit accordingly.]\n${b64}`);
-        toast("Image attached — describe what you want and the AI will read it.");
-      };
+      reader.onload = () => setInput((p) => (p ? p + "\n\n" : "") + `Attached image "${f.name}": ${String(reader.result ?? "")}`);
       reader.readAsDataURL(f);
     } else {
       reader.onload = () => setInput((p) => (p ? p + "\n\n" : "") + `Attached "${f.name}":\n${String(reader.result ?? "").slice(0, 8000)}`);
@@ -545,8 +640,13 @@ function ProjectPage() {
           </button>
         </div>
         {publishedUrl && (
-          <div className="px-3 pb-2 text-xs text-emerald-400 truncate">
+          <div className="px-3 pb-2 text-xs text-emerald-400 truncate flex items-center gap-2 flex-wrap">
             ● {isReactSource ? "Pushed to GitHub → Vercel redeploying" : "Live:"} <a href={publishedUrl} target="_blank" rel="noreferrer" className="underline">{publishedUrl}</a>
+            {deployStatus === "checking" && <span className="flex items-center gap-1 text-yellow-400"><Loader2 className="h-3 w-3 animate-spin" />Checking Vercel…</span>}
+            {deployStatus === "success" && <span className="text-emerald-400">✅ Live</span>}
+            {deployStatus === "fixing" && <span className="flex items-center gap-1 text-orange-400"><Loader2 className="h-3 w-3 animate-spin" />AI auto-fixing error…</span>}
+            {deployStatus === "fixed" && <span className="text-emerald-400">🔧 Auto-fixed — redeploying</span>}
+            {deployStatus === "error" && <span className="text-red-400">❌ Auto-fix failed — check GitHub</span>}
           </div>
         )}
       </header>
@@ -555,11 +655,28 @@ function ProjectPage() {
         <aside className="md:w-[35%] md:min-w-[320px] md:max-w-[520px] border-r border-border flex flex-col min-h-0 max-h-[55vh] md:max-h-none">
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4">
             {messages.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-center gap-4 pt-6">
+              <div className="h-full flex flex-col items-center justify-center text-center gap-4 pt-4 pb-4">
                 <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-primary/30 to-accent/30 flex items-center justify-center"><Sparkles className="h-6 w-6 text-primary" /></div>
-                <div><h2 className="font-semibold">Start your {isMobile ? "app" : "website"}</h2><p className="text-sm text-muted-foreground">Pick a starter or describe what you want.</p></div>
-                <div className="grid grid-cols-1 gap-2 w-full">
-                  {suggestions.map((s) => (<button key={s} onClick={() => send(s)} className="text-left text-sm px-3 py-2 rounded-lg border border-border hover:bg-accent/10 transition-colors">{s}</button>))}
+                <div><h2 className="font-semibold">Start your {isMobile ? "app" : "website"}</h2><p className="text-sm text-muted-foreground">Pick a template or describe what you want.</p></div>
+                {/* Template gallery — grouped by category */}
+                {(["Website","App","Mobile","Nigerian"] as const).map((cat) => (
+                  <div key={cat} className="w-full text-left">
+                    <div className="text-xs font-semibold text-muted-foreground mb-1 px-1">{cat}</div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {STARTER_TEMPLATES.filter((t) => t.category === cat).map((t) => (
+                        <button key={t.name} onClick={() => { setInput(t.prompt); }} className="text-left text-xs px-2.5 py-2 rounded-lg border border-border hover:bg-accent/10 hover:border-primary/40 transition-colors flex items-center gap-1.5">
+                          <span className="text-base">{t.icon}</span>
+                          <span className="font-medium">{t.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <div className="w-full text-left">
+                  <div className="text-xs font-semibold text-muted-foreground mb-1 px-1">Quick Prompts</div>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {suggestions.map((s) => (<button key={s} onClick={() => send(s)} className="text-left text-sm px-3 py-2 rounded-lg border border-border hover:bg-accent/10 transition-colors">{s}</button>))}
+                  </div>
                 </div>
               </div>
             ) : (
@@ -578,7 +695,7 @@ function ProjectPage() {
                 </div>
               ))
             )}
-            {busy && <div className="text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Thinking…</div>}
+            {busy && <div className="text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />{autoRetrying ? "Wrong file detected — auto-retrying…" : "Thinking…"}</div>}
             {err && (
               <div className="text-sm text-destructive flex items-center gap-2 flex-wrap">
                 <span>{err}</span>
@@ -621,7 +738,9 @@ function ProjectPage() {
                 <button onClick={() => setDevice("mobile")} className={`px-3 h-11 text-xs flex items-center gap-1 min-w-[44px] ${device === "mobile" ? "bg-accent/30" : ""}`}><Smartphone className="h-4 w-4" /> Mobile</button>
               </div>
             )}
-            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Refresh" onClick={() => setIframeKey((k) => k + 1)}><RefreshCw className="h-4 w-4" /></button>
+            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Refresh preview" onClick={() => setIframeKey((k) => k + 1)}><RefreshCw className="h-4 w-4" /></button>
+            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Pull latest from GitHub" onClick={handlePullFromGitHub}><GitPullRequest className="h-4 w-4" /></button>
+            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Push to Cloudflare Pages" onClick={handlePushToCloudflare}><CloudUpload className="h-4 w-4" /></button>
             <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Undo last AI edit" onClick={handleUndo} disabled={undoStack.length === 0}><Undo2 className="h-4 w-4" /></button>
             <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Version history" onClick={() => setShowHistory((v) => !v)}><History className="h-4 w-4" /></button>
             <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Open in new tab" onClick={openInNewTab} disabled={!previewHtml}><ExternalLink className="h-4 w-4" /></button>
