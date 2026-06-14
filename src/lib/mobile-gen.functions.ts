@@ -9,7 +9,7 @@ const GenInput = z.object({
   appName: z.string().min(1).max(60),
 });
 
-const MOBILE_SYSTEM = `You are an expert React Native + Expo SDK 52 engineer.
+const MOBILE_SYSTEM = `You are an expert React Native + Expo SDK 52 engineer. Build with TypeScript 6.0 strict mode, React 19, and modern React Native patterns.
 Generate the source code for App.tsx of an Expo app based on the user's prompt.
 Requirements:
 - TypeScript, React Native + Expo components only.
@@ -102,7 +102,7 @@ function packageJson(name: string) {
         react: "18.3.1",
         "react-native": "0.76.0",
       },
-      devDependencies: { "@types/react": "~18.3.0", typescript: "^5.3.0" },
+      devDependencies: { "@types/react": "~19.0.0", typescript: "^5.3.0" },
     },
     null,
     2,
@@ -234,7 +234,7 @@ function wrapperPackageJson(name: string) {
         "react-native": "0.76.0",
         "react-native-webview": "13.12.5",
       },
-      devDependencies: { "@types/react": "~18.3.0", typescript: "^5.3.0" },
+      devDependencies: { "@types/react": "~19.0.0", typescript: "^5.3.0" },
     },
     null,
     2,
