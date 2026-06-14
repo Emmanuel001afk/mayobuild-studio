@@ -1,10 +1,10 @@
-import { cleanFilePaths, getActuallyChangedFiles, matchFileFromCode, validateFilesForPush, deriveVercelUrl, extractFilesFromScaffold, rebuildScaffold, EDIT_SYSTEM_PROMPT } from "@/mayobuild.config";
+import { cleanFilePaths, getActuallyChangedFiles, matchFileFromCode, validateFilesForPush, deriveVercelUrl, extractFilesFromScaffold, rebuildScaffold, EDIT_SYSTEM_PROMPT, BUILD_SYSTEM_PROMPT, STARTER_TEMPLATES } from "@/mayobuild.config";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/hooks/use-auth";
 import {
-  getProject, savePreview, publishSite, saveApiKey, listApiKeys,
+  getProject, savePreview, publishSite, saveApiKey, listApiKeys, runProjectSQL,
 } from "@/lib/projects.functions";
 import { callRouter } from "@/lib/router.functions";
 import { wrapWebsiteAsApp } from "@/lib/mobile-gen.functions";
@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft, Loader2, Send, Globe, Smartphone, Monitor, RefreshCw,
   ExternalLink, Rocket, Paperclip, ChevronDown, Download, Sparkles,
-  KeyRound, X, Wrench,
+  KeyRound, X, Wrench, Undo2, History,
 } from "lucide-react";
 
 export const Route = createFileRoute("/projects/$id")({
@@ -32,6 +32,8 @@ type ChatMsg = {
 };
 
 // ── AI System Prompts ─────────────────────────────────────────────────────────
+// BUILD_SYSTEM_PROMPT = first message ever (no existing code yet) → scaffolds full React/TS project
+// EDIT_SYSTEM_PROMPT  = all edits after that (existing code present) → precise file edits only
 const SYSTEM_WEBSITE = EDIT_SYSTEM_PROMPT;
 
 const SYSTEM_MOBILE_BASE = [
@@ -59,6 +61,11 @@ const MOBILE_SUGGESTIONS = [
 
 const PROVIDER_ORDER_WEB = ["deepseek", "gemini", "groq", "openrouter", "mistral", "cerebras", "huggingface"];
 const PROVIDER_ORDER_MOBILE = ["gemini", "deepseek", "groq", "openrouter", "mistral", "cerebras", "huggingface"];
+
+function extractSql(text: string): string | null {
+  const m = text.match(/```sql\s*\n([\s\S]*?)```/i);
+  return m ? m[1].trim() : null;
+}
 
 function extractHtml(text: string): string | null {
   const m = text.match(/```(?:html)?\s*\n([\s\S]*?)```/i);
@@ -137,6 +144,7 @@ function ProjectPage() {
   const publish = useServerFn(publishSite);
   const saveKey = useServerFn(saveApiKey);
   const listKeys = useServerFn(listApiKeys);
+  const runSQL = useServerFn(runProjectSQL);
 
   const [data, setData] = useState<any>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -149,6 +157,7 @@ function ProjectPage() {
   const [previewHtml, setPreviewHtml] = useState<string>("");
   const [previewFiles, setPreviewFiles] = useState<Record<string, string> | null>(null);
   const [changedFiles, setChangedFiles] = useState<Record<string, string>>({});
+  const [undoStack, setUndoStack] = useState<{ html: string; files: Record<string, string> | null }[]>([]);
   const [iframeKey, setIframeKey] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [wrapBusy, setWrapBusy] = useState(false);
@@ -157,6 +166,9 @@ function ProjectPage() {
   const [keyModal, setKeyModal] = useState<{ service: string; value: string } | null>(null);
   const [keyBusy, setKeyBusy] = useState(false);
   const [savedKeys, setSavedKeys] = useState<{ service: string }[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [autoRetrying, setAutoRetrying] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -176,23 +188,11 @@ function ProjectPage() {
       if (d.project.preview_html) {
         const html = d.project.preview_html;
         setPreviewHtml(html);
-        // Extract React source files for WebContainer
+        // Extract React source files using guardian from mayobuild.config
         if (html.includes('id="react-source"')) {
           try {
-            const match = html.match(/<script type="text\/plain" id="react-source"[^>]*>([\s\S]*?)<\/script>/);
-            if (match) {
-              const rawFiles: Record<string, string> = {};
-              const fileBlocks = match[1].matchAll(/\/\* ===== FILE: (.+?) ===== \*\/([\s\S]*?)(?=\/\* ===== FILE:|$)/g);
-              for (const block of fileBlocks) {
-                // Strip the ZIP root folder prefix (e.g. "lite-read-main/src/..." -> "src/...")
-                const rawPath = block[1].trim();
-                const cleanPath = rawPath.includes("/") && !rawPath.startsWith("src/") && !rawPath.startsWith("public/")
-                  ? rawPath.split("/").slice(1).join("/")
-                  : rawPath;
-                rawFiles[cleanPath] = block[2].trim();
-              }
-              if (Object.keys(rawFiles).length > 0) setPreviewFiles(rawFiles);
-            }
+            const extracted = extractFilesFromScaffold(html);
+            if (extracted && Object.keys(extracted).length > 0) setPreviewFiles(extracted);
           } catch {}
         }
         // Load past conversation history from Supabase so AI remembers previous sessions
@@ -257,11 +257,13 @@ function ProjectPage() {
     const history = messages.map((m) => ({ role: m.role, content: m.content }));
     const next: ChatMsg[] = [...messages, { role: "user", content: trimmed }];
     setMessages(next); setInput(""); setBusy(true);
+    // Save current state to undo stack (keep last 5)
+    setUndoStack((prev) => [...prev.slice(-4), { html: previewHtml, files: previewFiles }]);
     try {
       const changeContext = messages.filter((m) => m.role === "assistant" && m.summary).slice(-10)
         .map((m, i) => `Turn ${i + 1}: +${m.summary!.added.join(",")} ~${m.summary!.changed.join(",")} -${m.summary!.removed.join(",")}`).join("\n");
 
-      const sysBase = mode === "Plan" ? PLAN_SYSTEM : isMobile ? SYSTEM_MOBILE_BASE : SYSTEM_WEBSITE;
+      const sysBase = mode === "Plan" ? PLAN_SYSTEM : isMobile ? SYSTEM_MOBILE_BASE : (!previewHtml && !isReactSource) ? BUILD_SYSTEM_PROMPT : SYSTEM_WEBSITE;
 
       // Pass React files if available — routes first, capped at 40000 chars to avoid AI truncation
       const fileContext = isReactSource && previewFiles
@@ -321,55 +323,15 @@ function ProjectPage() {
                   : rawPath;
                 updatedFiles[cleanedPath] = code;
               } else {
-                // AI returned code without a filename — try to detect which file it is
-                // by matching the first export or route definition
-                const routeMatch = code.match(/createFileRoute\(["']([^"']+)["']\)/);
-                const exportMatch = code.match(/export (?:default )?(?:function|const) (\w+)/);
+                // AI returned code without a filename — use matchFileFromCode guardian from mayobuild.config
+                // This reads clues inside the code itself (route path, component name, imports, prompt words)
                 const knownPaths = Object.keys(previewFiles ?? {});
-                // Find the best matching existing file
-                let bestPath = knownPaths.find(p => {
-                  if (routeMatch) return p.includes(routeMatch[1].replace("/", "").replace("$", ""));
-                  if (exportMatch) return p.toLowerCase().includes(exportMatch[1].toLowerCase());
-                  return false;
-                });
-                if (!bestPath && knownPaths.length > 0) {
-                  // Better fallback: search content for clues about which file this is
-                  // Look for component names, route paths, or distinctive strings
-                  const codeWords = code.match(/(?:function|const)\s+(\w+Page|\w+Component|\w+Route)/g) ?? [];
-                  const routePath = code.match(/createFileRoute\(["']([^"']+)["']\)/)?.[1] ?? "";
-                  if (routePath) {
-                    // Most reliable: match by route path
-                    const routeName = routePath.replace(/\//g, "").replace(/\$/g, "");
-                    bestPath = knownPaths.find(p => p.toLowerCase().includes(routeName.toLowerCase()));
-                  }
-                  if (!bestPath && codeWords.length > 0) {
-                    // Match by component/function name
-                    for (const word of codeWords) {
-                      const name = word.replace(/(?:function|const)\s+/, "").replace(/Page|Component|Route/i, "").toLowerCase();
-                      bestPath = knownPaths.find(p => p.toLowerCase().includes(name));
-                      if (bestPath) break;
-                    }
-                  }
-                  // Last resort: pick the most recently mentioned file in the user's prompt
-                  if (!bestPath) {
-                    const lastMsg = messages[messages.length - 1]?.content?.toLowerCase() ?? "";
-                    bestPath = knownPaths.find(p => {
-                      const fname = p.split("/").pop()?.replace(".tsx","").replace(".ts","").toLowerCase() ?? "";
-                      return lastMsg.includes(fname);
-                    }) ?? knownPaths.find(p => p.includes("/routes/"));
-                  }
-                }
+                const bestPath = matchFileFromCode(code, knownPaths, trimmed);
                 if (bestPath) updatedFiles[bestPath] = code;
               }
             }
-            // Check if AI actually changed anything vs returning same code
-            const actuallyChanged: Record<string, string> = {};
-            for (const [path, newCode] of Object.entries(updatedFiles)) {
-              const oldCode = previewFiles?.[path] ?? "";
-              if (newCode.trim() !== oldCode.trim()) {
-                actuallyChanged[path] = newCode;
-              }
-            }
+            // Use guardian to detect only files that actually changed — blocks empty commits
+            const actuallyChanged = getActuallyChangedFiles(previewFiles ?? {}, updatedFiles);
             if (Object.keys(actuallyChanged).length === 0) {
               // AI returned same code — tell user nothing changed
               summary = { added: [], changed: ["(AI returned same code — try being more specific, e.g. 'Add a search bar to the top of the Bible page')"], removed: [] };
@@ -377,9 +339,8 @@ function ProjectPage() {
             setPreviewFiles(updatedFiles);
             setChangedFiles(actuallyChanged); // only push files that actually changed
             setIframeKey((k) => k + 1);
-            // Rebuild scaffold HTML with updated files
-            const fileMap = Object.entries(updatedFiles).map(([p, c]) => `/* ===== FILE: ${p} ===== */\n${c}`).join("\n\n");
-            html = previewHtml.replace(/<script type="text\/plain" id="react-source"[^>]*>[\s\S]*?<\/script>/, `<script type="text/plain" id="react-source">${fileMap}</script>`);
+            // Rebuild scaffold HTML with updated files — use guardian from mayobuild.config
+            html = rebuildScaffold(previewHtml, updatedFiles);
             summary = { added: fileMatches.map(m => m[1]), changed: [], removed: [] };
           } else {
             // Fallback — AI returned HTML (only clear React files if AI explicitly gave us HTML back)
@@ -417,11 +378,49 @@ function ProjectPage() {
       }
       const wantKey = detectKeyRequest(raw);
       if (wantKey && !savedKeys.find((k) => k.service === wantKey)) setKeyModal({ service: wantKey, value: "" });
+
+      // Auto Supabase table creation — if AI output SQL, run it automatically on the server
+      const sqlBlock = extractSql(raw);
+      if (sqlBlock) {
+        try {
+          const result = await runSQL({ data: { projectId: id, sql: sqlBlock } });
+          if (result.ran > 0) {
+            toast.success(`Supabase: ${result.ran} table${result.ran === 1 ? "" : "s"} created automatically.`);
+          }
+          if (result.errors.length > 0) {
+            toast.warning(`Supabase SQL: ${result.errors[0]}`);
+          }
+        } catch {
+          // Non-fatal — user can still paste SQL manually from the AI message
+          toast("Supabase tables could not be auto-created. Copy the SQL from the AI message and paste it into your Supabase SQL editor.");
+        }
+      }
     } catch (e: any) {
       setErr(e.message);
       setMessages([...next, { role: "assistant", content: `Error: ${e.message}` }]);
     } finally { setBusy(false); }
   }, [busy, messages, mode, isMobile, isReactSource, previewFiles, previewHtml, id, chainOrder, savedKeys]);
+
+  function handleUndo() {
+    if (undoStack.length === 0) return;
+    const prev = undoStack[undoStack.length - 1];
+    setUndoStack((s) => s.slice(0, -1));
+    setPreviewHtml(prev.html);
+    setPreviewFiles(prev.files);
+    setIframeKey((k) => k + 1);
+    toast("Undone — restored previous version.");
+  }
+
+  async function restoreFromHistory(output: string) {
+    // output is the AI's saved HTML/scaffold from generations table
+    setUndoStack((prev) => [...prev.slice(-4), { html: previewHtml, files: previewFiles }]);
+    setPreviewHtml(output);
+    const extracted = extractFilesFromScaffold(output);
+    if (extracted) setPreviewFiles(extracted);
+    setIframeKey((k) => k + 1);
+    setShowHistory(false);
+    toast("Restored version from history.");
+  }
 
   async function exportSiteAsApp() {
     if (!previewHtml) { setErr("Generate something first."); return; }
@@ -491,7 +490,12 @@ function ProjectPage() {
     const f = e.target.files?.[0]; if (!f) return;
     const reader = new FileReader();
     if (f.type.startsWith("image/")) {
-      reader.onload = () => setInput((p) => (p ? p + "\n\n" : "") + `Attached image "${f.name}": ${String(reader.result ?? "")}`);
+      reader.onload = () => {
+        const b64 = String(reader.result ?? "");
+        // Embed image as data URL so AI can read it via the prompt context
+        setInput((p) => (p ? p + "\n\n" : "") + `[IMAGE ATTACHED: "${f.name}" — data URL below. Read this image and build/edit accordingly.]\n${b64}`);
+        toast("Image attached — describe what you want and the AI will read it.");
+      };
       reader.readAsDataURL(f);
     } else {
       reader.onload = () => setInput((p) => (p ? p + "\n\n" : "") + `Attached "${f.name}":\n${String(reader.result ?? "").slice(0, 8000)}`);
@@ -618,6 +622,8 @@ function ProjectPage() {
               </div>
             )}
             <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Refresh" onClick={() => setIframeKey((k) => k + 1)}><RefreshCw className="h-4 w-4" /></button>
+            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Undo last AI edit" onClick={handleUndo} disabled={undoStack.length === 0}><Undo2 className="h-4 w-4" /></button>
+            <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Version history" onClick={() => setShowHistory((v) => !v)}><History className="h-4 w-4" /></button>
             <button className="mb-btn-ghost h-11 w-11 p-0 justify-center shrink-0" title="Open in new tab" onClick={openInNewTab} disabled={!previewHtml}><ExternalLink className="h-4 w-4" /></button>
             <div className="flex-1" />
             {isMobile ? (
@@ -650,6 +656,34 @@ function ProjectPage() {
           </div>
         </section>
       </div>
+
+      {showHistory && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+          <div className="mb-card p-6 max-w-lg w-full space-y-3 relative max-h-[80vh] flex flex-col">
+            <button onClick={() => setShowHistory(false)} className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+            <h3 className="text-lg font-semibold flex items-center gap-2"><History className="h-5 w-5" /> Version History</h3>
+            <p className="text-xs text-muted-foreground">Click any version to restore it. Your current version is saved first so you can undo.</p>
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {messages.filter((m) => m.role === "assistant" && m.html).map((m, i) => (
+                <button key={i} onClick={() => restoreFromHistory(m.html!)}
+                  className="w-full text-left px-3 py-2 rounded-lg border border-border hover:bg-accent/10 text-sm transition-colors">
+                  <div className="font-medium">Version {messages.filter((x) => x.role === "assistant" && x.html).length - i}</div>
+                  <div className="text-xs text-muted-foreground truncate">{m.content || "Build updated"}</div>
+                  {m.summary && (
+                    <div className="flex gap-1 mt-1 flex-wrap">
+                      {m.summary.added.slice(0,3).map((t, j) => <span key={j} className="text-[10px] text-emerald-400">+{t}</span>)}
+                      {m.summary.changed.slice(0,3).map((t, j) => <span key={j} className="text-[10px] text-amber-400">~{t}</span>)}
+                    </div>
+                  )}
+                </button>
+              )).reverse()}
+              {messages.filter((m) => m.role === "assistant" && m.html).length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-4">No versions yet. Build something first.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {keyModal && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
