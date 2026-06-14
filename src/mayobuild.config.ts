@@ -540,6 +540,7 @@ export const BUILD_SYSTEM_PROMPT = [
   "  - Toast notifications for success/error feedback",
   "FILE STRUCTURE: src/routes/ for pages, src/components/ for UI, src/components/ui/ for shadcn, src/lib/ for utils, src/hooks/ for custom hooks.",
   "SUPABASE: Auth with supabase.auth, database with supabase.from(), RLS must be noted.",
+  "SUPABASE TABLES: At the END of your response, after all code files, output a fenced ```sql block containing the complete CREATE TABLE statements and RLS policies needed for this app. Label it clearly: '-- PASTE THIS INTO YOUR SUPABASE SQL EDITOR'. This is mandatory so the user knows exactly what to create.",
   "RETURN FORMAT: Each file wrapped in ```tsx path/to/file.tsx with the exact path.",
   "COMPLETENESS: Generate ALL files needed. No placeholders. No 'add implementation here'. Write everything.",
   "QUALITY: This must look and work like a real, professional, launched product.",
@@ -669,6 +670,31 @@ export const FOLDER_STRUCTURE = {
   "src/styles.css": "Global styles + Tailwind imports",
   "public/": "Static assets",
 } as const;
+
+// ─── 13. STARTER TEMPLATES ───────────────────────────────────────────────────
+// Ready-made prompts users can click to start building immediately.
+// Each has a category, display name, and the full prompt sent to BUILD_SYSTEM_PROMPT.
+
+export const STARTER_TEMPLATES = [
+  // Websites
+  { category: "Website", name: "Landing Page", icon: "🚀", prompt: "Build a modern SaaS landing page with hero section, features grid, pricing table with 3 tiers, testimonials carousel, FAQ accordion, and email signup footer. Dark theme, green accent color." },
+  { category: "Website", name: "Portfolio", icon: "🎨", prompt: "Build a personal portfolio website with animated hero, about section, projects grid with filter by category, skills progress bars, contact form with validation, and smooth scroll navigation." },
+  { category: "Website", name: "Blog", icon: "📝", prompt: "Build a blog platform with home page showing latest posts, individual post pages with markdown support, categories and tags, search, author profile, and newsletter signup." },
+  { category: "Website", name: "Restaurant", icon: "🍽️", prompt: "Build a restaurant website with hero image, menu page organized by category, online table reservation form, gallery, location map embed, opening hours, and contact page." },
+  // Apps
+  { category: "App", name: "SaaS Dashboard", icon: "📊", prompt: "Build a SaaS admin dashboard with sidebar navigation, analytics overview with charts, user management table with search and filters, settings page, and dark/light mode toggle. Use Supabase for auth and data." },
+  { category: "App", name: "E-Commerce Store", icon: "🛍️", prompt: "Build an e-commerce store with product listing grid, product detail page, shopping cart with quantity controls, checkout form, order history page, and admin product management. Use Supabase." },
+  { category: "App", name: "Task Manager", icon: "✅", prompt: "Build a task management app like Trello with drag-and-drop kanban board, task creation modal, due dates, priority labels, project folders, and team member assignment. Use Supabase." },
+  { category: "App", name: "Social Platform", icon: "💬", prompt: "Build a social platform with user profiles, post feed with likes and comments, follow/unfollow system, notifications page, direct messaging, and image upload support. Use Supabase auth and storage." },
+  { category: "App", name: "Event Booking", icon: "🎟️", prompt: "Build an event booking platform with event listings, event detail page, seat/ticket selection, booking confirmation, user booking history, and organizer dashboard. Use Supabase." },
+  { category: "App", name: "Finance Tracker", icon: "💰", prompt: "Build a personal finance tracker with income/expense logging, category breakdown charts, monthly budget goals, transaction history with filters, CSV export, and summary dashboard. Use Supabase." },
+  // Mobile
+  { category: "Mobile", name: "Meditation App", icon: "🧘", prompt: "Build a meditation mobile app with daily session timer, breathing exercise guide, streak tracker, calming background sounds selector, progress calendar, and mood log." },
+  { category: "Mobile", name: "Habit Tracker", icon: "📅", prompt: "Build a habit tracker mobile app with daily habit checklist, streak counter, weekly progress charts, reminder notifications, habit categories, and achievement badges." },
+  // Nigerian
+  { category: "Nigerian", name: "Marketplace", icon: "🛒", prompt: "Build a Nigerian online marketplace with product listings in Naira, seller profiles, buyer-seller chat, Flutterwave payment integration, Lagos/Abuja delivery zones, and order tracking." },
+  { category: "Nigerian", name: "Fintech App", icon: "🏦", prompt: "Build a Nigerian fintech dashboard with wallet balance in Naira, send/receive money flow, transaction history, bank account linking, airtime purchase, and Paystack payment integration." },
+] as const;
 
 // ─── EXPORT SUMMARY ──────────────────────────────────────────────────────────
 // Everything this file exports, for easy reference:
