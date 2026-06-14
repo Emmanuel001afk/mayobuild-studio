@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { createProject } from "@/lib/projects.functions";
+import { BUILD_SYSTEM_PROMPT, createProjectZip, deriveVercelUrl } from "@/mayobuild.config";
 import { callRouter } from "@/lib/router.functions";
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -74,19 +75,8 @@ function BuildProject() {
 
       // Step 2: Build the full system prompt
       const themeDesc = COLOR_THEMES.find(t => t.id === theme);
-      const systemPrompt = [
-        "You are Mayobuild AI — a full-stack React/TypeScript engineer building a complete, production-ready application.",
-        "Generate a COMPLETE, FULLY FUNCTIONAL React/TypeScript component with:",
-        "1. Full TailwindCSS styling — use the color theme specified",
-        "2. All pages and navigation the app needs",
-        "3. Working interactive features (state management, forms, modals, etc.)",
-        "4. Mobile responsive design",
-        "5. Realistic placeholder data and content",
-        "6. Professional, polished UI — not a demo or wireframe",
-        "Return the code as a single complete TSX file wrapped in: ```tsx App.tsx",
-        "The file must be a default export React component.",
-        "IMPORTANT: Make it look and feel like a real, professional product.",
-      ].join(" ");
+      const systemPrompt = BUILD_SYSTEM_PROMPT;
+
 
       const userPrompt = [
         `Build a complete ${kind === "mobile" ? "mobile app" : "web application"} called "${appName}".`,
@@ -147,6 +137,17 @@ function BuildProject() {
       const saveFn = useServerFn(savePreview);
       // Navigate to the project — it will load the generated code
       setProgress("Done! Taking you to your new app…");
+      // Offer ZIP download — user can also push to GitHub from the editor
+      try {
+        const files = { "src/App.tsx": code };
+        const zipBlob = await createProjectZip(appName, files);
+        const zipUrl = URL.createObjectURL(zipBlob);
+        const a = document.createElement("a");
+        a.href = zipUrl;
+        a.download = `${appName.replace(/\s+/g, "-").toLowerCase()}.zip`;
+        a.click();
+        URL.revokeObjectURL(zipUrl);
+      } catch {}
       navigate({ to: "/projects/$id", params: { id: project.id }, search: { generated: "true" } });
 
     } catch (e: any) {
