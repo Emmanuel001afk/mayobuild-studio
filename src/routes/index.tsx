@@ -131,8 +131,14 @@ function Dashboard({ user }: { user: { id: string; email?: string } }) {
             <h2 className="text-xl font-bold flex items-center gap-2">
               <Zap className="h-5 w-5 text-primary" /> Your workspace
             </h2>
-            <Link to="/projects/new" className="mb-btn"><Plus className="h-4 w-4" /> Import & edit</Link>
-            <Link to="/projects/build" className="mb-btn" style={{background:"linear-gradient(135deg,#6366f1,#4ade80)",color:"#000"}}><Sparkles className="h-4 w-4" /> Build from scratch</Link>
+            <div className="flex gap-2">
+              <Link to="/projects/build" className="mb-btn" style={{background:"linear-gradient(135deg,#6366f1,#4ade80)",color:"#000",fontWeight:"bold"}}>
+                <Sparkles className="h-4 w-4" /> Build new app
+              </Link>
+              <Link to="/projects/new" className="mb-btn-ghost border border-border">
+                <Plus className="h-4 w-4" /> Import existing site
+              </Link>
+            </div>
           </div>
           {loadingProjects ? (
             <div className="text-muted-foreground">Loading projects…</div>
