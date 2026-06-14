@@ -84,7 +84,7 @@ export const Groq: Provider = {
 
 export const OpenRouter: Provider = {
   name: "openrouter",
-  models: ["anthropic/claude-3.5-sonnet", "meta-llama/llama-3.3-70b-instruct"],
+  models: ["deepseek/deepseek-chat-v3-0324:free", "meta-llama/llama-3.3-70b-instruct:free"],
   chat: (messages, o) =>
     openaiChat({
       url: "https://openrouter.ai/api/v1/chat/completions",
@@ -103,7 +103,7 @@ export const Mistral: Provider = {
     openaiChat({
       url: "https://api.mistral.ai/v1/chat/completions",
       apiKey: need("MISTRAL_API_KEY"),
-      model: o?.model ?? "mistral-small-latest",
+      model: o?.model ?? "mistral-large-latest",
       messages,
       provider: "mistral",
     }),
