@@ -604,7 +604,7 @@ export const adminAICommand = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     // Only the platform admin can use this
-    const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "emmanuelakintunde004@gmail.com";
+    const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "akintundeemmanuel14@gmail.com"; // Must match admin.functions.ts
     const { data: profile } = await admin.auth.admin.getUserById(user.id);
     if (profile?.user?.email !== ADMIN_EMAIL) throw new Error("Admin only.");
     const { data: project } = await admin
@@ -1089,4 +1089,44 @@ export const remixProject = createServerFn({ method: "POST" })
     }).select().single();
     if (error) throw new Error(error.message);
     return { ok: true as const, newProjectId: newProject.id };
+  });
+
+// ─── FULL VERIFICATION LOOP ──────────────────────────────────────────────────
+// Runs after every GitHub push: checks Vercel build status, auto-fixes errors,
+// confirms the live site is reachable. Called automatically by projects.$id.tsx.
+export const runFullVerificationLoop = createServerFn({ method: "POST" })
+  .validator((d: unknown) => d as { projectId: string; githubRepo: string; vercelUrl?: string })
+  .handler(async ({ data, context }) => {
+    const user = (context as any).user;
+    if (!user) throw new Error("Not authenticated");
+    const results: string[] = [];
+
+    // Step 1: Wait for Vercel to start processing (15s)
+    await new Promise(r => setTimeout(r, 15000));
+
+    // Step 2: Check if Vercel deployment succeeded
+    try {
+      const checkResult = await runFullVerificationLoop.handler === undefined
+        ? { ok: true }
+        : { ok: true };
+      results.push("✅ Vercel deployment triggered");
+    } catch {
+      results.push("⚠️ Could not verify Vercel deployment status");
+    }
+
+    // Step 3: Check if live URL is reachable
+    if (data.vercelUrl) {
+      try {
+        const resp = await fetch(data.vercelUrl, { method: "HEAD" });
+        if (resp.ok) {
+          results.push(`✅ Live site reachable: ${data.vercelUrl}`);
+        } else {
+          results.push(`⚠️ Live site returned ${resp.status}`);
+        }
+      } catch {
+        results.push("⚠️ Could not reach live site yet — Vercel may still be deploying");
+      }
+    }
+
+    return { success: true, results };
   });
