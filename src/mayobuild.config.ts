@@ -546,6 +546,8 @@ export const BUILD_SYSTEM_PROMPT = [
   "RETURN FORMAT: Each file wrapped in ```tsx path/to/file.tsx with the exact path.",
   "COMPLETENESS: Generate ALL files needed. No placeholders. No 'add implementation here'. Write everything.",
   "QUALITY: This must look and work like a real, professional, launched product.",
+  "SECURITY: Always sanitize user inputs. Never expose API keys in client code. Use environment variables. Add input validation on all forms. Prevent XSS by never using dangerouslySetInnerHTML with user data.",
+  "SEO: Every page must have a <title>, meta description, og:title, og:description. Root layout must include these as head meta tags.",
 ].join(" ");
 
 // EDITING EXISTING CODE — what Mayobuild tells the AI when editing Lovable-created sites
