@@ -1,3 +1,4 @@
+import { cleanFilePaths, getActuallyChangedFiles, matchFileFromCode, validateFilesForPush, deriveVercelUrl, extractFilesFromScaffold, rebuildScaffold, EDIT_SYSTEM_PROMPT } from "@/mayobuild.config";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useServerFn } from "@tanstack/react-start";
@@ -31,24 +32,7 @@ type ChatMsg = {
 };
 
 // ── AI System Prompts ─────────────────────────────────────────────────────────
-const SYSTEM_WEBSITE_BASE = [
-  "You are Mayobuild AI — a full-stack React/TypeScript engineer.",
-  "When given React/TypeScript source files: read ALL of them fully, understand every page, component, feature, and logic, then make ONLY the change the user requested by returning the specific updated file(s) as complete tsx/ts code blocks.",
-  "When given plain HTML: improve and edit it, returning a complete updated HTML document.",
-  "Never rewrite from scratch unless the user says 'start over completely'.",
-  "Preserve ALL existing features, colors, layout, copy, and structure — only change what was asked.",
-  "For React projects: respond with ONLY the changed file(s) each in a ```tsx filepath.tsx ... ``` block. No HTML output.",
-  "For HTML projects: respond with ONE ```html ... ``` block containing the complete updated single-file HTML.",
-  "Use rich visuals: Unsplash images, CSS gradients, SVG icons, mobile-first responsive layout.",
-  "Never apologize. Never say you are an AI. Never mention Lovable.",
-  "If a feature needs an API key (Flutterwave, Paystack, Stripe, Mapbox etc), insert __API_KEY_<SERVICE>__ and say: 'I need your <SERVICE> API key — click the Add API key button.'",
-  "AUTO-FIX: If you see an error message in the prompt, scan the code for the root cause and fix it automatically without being asked.",
-  "VALIDATE: Before returning code, mentally check it compiles and the logic is correct.",
-  "SOURCE FILES: If you see /* ===== FILE: path ===== */ markers in the prompt, those ARE the source files. Read them all. Never say there are no source files if those markers exist.",
-  "PROACTIVE: After completing any edit, always add a short note: (1) what you changed and why, (2) if you noticed any other issues or improvements nearby, mention them. Be a helpful partner, not just a code machine.",
-  "MEMORY: If past edits are shown in RECENT CHANGES, use them to understand the project history. Reference them when relevant.",
-  "BUILD FROM SCRATCH: If the user asks to build a new app or page from scratch with no source files provided, generate a complete working React/TypeScript component with full functionality, proper imports, and TailwindCSS styling.",
-].join(" ");
+const const SYSTEM_WEBSITE = EDIT_SYSTEM_PROMPT;
 
 const SYSTEM_MOBILE_BASE = [
   "You are Mayobuild AI. You improve an existing Expo React Native App.tsx (TypeScript) only.",
@@ -248,13 +232,7 @@ function ProjectPage() {
 
   const isMobile = data?.project?.kind === "mobile";
   const suggestions = isMobile ? MOBILE_SUGGESTIONS : WEBSITE_SUGGESTIONS;
-  // Derive live Vercel URL from github_repo: "Emmanuel001afk/lite-read" -> "https://lite-read.vercel.app"
-  const liveUrl = data?.project?.github_repo
-    ? (() => {
-        const repoName = data.project.github_repo.split("/")[1] ?? "";
-        return `https://${repoName}.vercel.app`;
-      })()
-    : undefined;
+  const liveUrl = data?.project?.github_repo ? deriveVercelUrl(data.project.github_repo) : undefined;
   const chainOrder = isMobile ? PROVIDER_ORDER_MOBILE : PROVIDER_ORDER_WEB;
   const showMobileOnly = isPhone || isMobile;
   const isReactSource = !!(previewFiles && Object.keys(previewFiles).length > 0);
@@ -283,7 +261,7 @@ function ProjectPage() {
       const changeContext = messages.filter((m) => m.role === "assistant" && m.summary).slice(-10)
         .map((m, i) => `Turn ${i + 1}: +${m.summary!.added.join(",")} ~${m.summary!.changed.join(",")} -${m.summary!.removed.join(",")}`).join("\n");
 
-      const sysBase = mode === "Plan" ? PLAN_SYSTEM : isMobile ? SYSTEM_MOBILE_BASE : SYSTEM_WEBSITE_BASE;
+      const sysBase = mode === "Plan" ? PLAN_SYSTEM : isMobile ? SYSTEM_MOBILE_BASE : SYSTEM_WEBSITE;
 
       // Pass React files if available — routes first, capped at 40000 chars to avoid AI truncation
       const fileContext = isReactSource && previewFiles
@@ -355,14 +333,49 @@ function ProjectPage() {
                   return false;
                 });
                 if (!bestPath && knownPaths.length > 0) {
-                  // Fallback: update the first route file
-                  bestPath = knownPaths.find(p => p.includes("/routes/")) ?? knownPaths[0];
+                  // Better fallback: search content for clues about which file this is
+                  // Look for component names, route paths, or distinctive strings
+                  const codeWords = code.match(/(?:function|const)\s+(\w+Page|\w+Component|\w+Route)/g) ?? [];
+                  const routePath = code.match(/createFileRoute\(["']([^"']+)["']\)/)?.[1] ?? "";
+                  if (routePath) {
+                    // Most reliable: match by route path
+                    const routeName = routePath.replace(/\//g, "").replace(/\$/g, "");
+                    bestPath = knownPaths.find(p => p.toLowerCase().includes(routeName.toLowerCase()));
+                  }
+                  if (!bestPath && codeWords.length > 0) {
+                    // Match by component/function name
+                    for (const word of codeWords) {
+                      const name = word.replace(/(?:function|const)\s+/, "").replace(/Page|Component|Route/i, "").toLowerCase();
+                      bestPath = knownPaths.find(p => p.toLowerCase().includes(name));
+                      if (bestPath) break;
+                    }
+                  }
+                  // Last resort: pick the most recently mentioned file in the user's prompt
+                  if (!bestPath) {
+                    const lastMsg = messages[messages.length - 1]?.content?.toLowerCase() ?? "";
+                    bestPath = knownPaths.find(p => {
+                      const fname = p.split("/").pop()?.replace(".tsx","").replace(".ts","").toLowerCase() ?? "";
+                      return lastMsg.includes(fname);
+                    }) ?? knownPaths.find(p => p.includes("/routes/"));
+                  }
                 }
                 if (bestPath) updatedFiles[bestPath] = code;
               }
             }
+            // Check if AI actually changed anything vs returning same code
+            const actuallyChanged: Record<string, string> = {};
+            for (const [path, newCode] of Object.entries(updatedFiles)) {
+              const oldCode = previewFiles?.[path] ?? "";
+              if (newCode.trim() !== oldCode.trim()) {
+                actuallyChanged[path] = newCode;
+              }
+            }
+            if (Object.keys(actuallyChanged).length === 0) {
+              // AI returned same code — tell user nothing changed
+              summary = { added: [], changed: ["(AI returned same code — try being more specific, e.g. 'Add a search bar to the top of the Bible page')"], removed: [] };
+            }
             setPreviewFiles(updatedFiles);
-            setChangedFiles(updatedFiles); // track only what AI changed
+            setChangedFiles(actuallyChanged); // only push files that actually changed
             setIframeKey((k) => k + 1);
             // Rebuild scaffold HTML with updated files
             const fileMap = Object.entries(updatedFiles).map(([p, c]) => `/* ===== FILE: ${p} ===== */\n${c}`).join("\n\n");
@@ -448,6 +461,14 @@ function ProjectPage() {
           const cleanPath = path.replace(/^[^/]+\//, "");
           cleanFiles[cleanPath] = fileContent;
         }
+      }
+      // Validate before pushing — block empty commits and bad paths
+      const validation = validateFilesForPush(cleanFiles ?? {});
+      if (!validation.valid) {
+        throw new Error("Cannot push: " + validation.errors.join(" | ") + " — Fix this then try again.");
+      }
+      if (validation.warnings.length > 0) {
+        toast.warning("Push warning: " + validation.warnings[0]);
       }
       const res = await publish({ data: { projectId: id, html: previewHtml, files: cleanFiles } });
       setPublishedUrl(res.url);
