@@ -960,22 +960,43 @@ export const pushToCloudflare = createServerFn({ method: "POST" })
     const projectName = createJson.result?.name ?? safeName;
 
     // Create deployment via direct upload
-    const formData = new FormData();
+    // Build multipart form data using Node.js Buffer (not browser FormData/Blob)
+    const boundary = `----MayobuildBoundary${Date.now()}`;
+    const parts: Buffer[] = [];
     const manifest: Record<string, string> = {};
+
     for (const [path, content] of Object.entries(data.files)) {
-      const blob = new Blob([content], { type: "text/plain" });
-      formData.append("files", blob, path);
-      // Cloudflare needs a hash of each file for the manifest
-      const encoder = new TextEncoder();
-      const hashBuffer = await crypto.subtle.digest("SHA-256", encoder.encode(content));
-      const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
-      manifest["/" + path] = hashHex;
+      const contentBuf = Buffer.from(content, "utf-8");
+      // Simple hash using Node crypto
+      const { createHash } = await import("crypto");
+      const hash = createHash("sha256").update(contentBuf).digest("hex");
+      manifest["/" + path] = hash;
+      parts.push(Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="${path}"\r\nContent-Type: text/plain\r\n\r\n`
+      ));
+      parts.push(contentBuf);
+      parts.push(Buffer.from("\r\n"));
     }
-    formData.append("manifest", JSON.stringify(manifest));
+
+    // Add manifest
+    const manifestStr = JSON.stringify(manifest);
+    parts.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="manifest"\r\nContent-Type: application/json\r\n\r\n${manifestStr}\r\n`
+    ));
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
+
+    const body = Buffer.concat(parts);
 
     const deployRes = await fetch(
       `https://api.cloudflare.com/client/v4/accounts/${cfAccountId}/pages/projects/${projectName}/deployments`,
-      { method: "POST", headers: { Authorization: `Bearer ${cfToken}` }, body: formData }
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfToken}`,
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+        },
+        body,
+      }
     );
     const deployJson = await deployRes.json();
     const deployUrl = deployJson.result?.url ? `https://${deployJson.result.url}` : `https://${projectName}.pages.dev`;
