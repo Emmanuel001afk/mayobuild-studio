@@ -169,6 +169,9 @@ function ProjectPage() {
   const [previewHtml, setPreviewHtml] = useState<string>("");
   const [previewFiles, setPreviewFiles] = useState<Record<string, string> | null>(null);
   const [changedFiles, setChangedFiles] = useState<Record<string, string>>({});
+  // True once this project has been pushed to GitHub at least once in this session.
+  // Used to tell a genuine "first full push" apart from a later no-op edit.
+  const [hasPublished, setHasPublished] = useState(false);
   const [undoStack, setUndoStack] = useState<{ html: string; files: Record<string, string> | null }[]>([]);
   const [iframeKey, setIframeKey] = useState(0);
   const [err, setErr] = useState<string | null>(null);
@@ -293,19 +296,32 @@ function ProjectPage() {
         ? `\n\nPROJECT FILE TREE (these are the ONLY valid file paths — copy paths exactly from this list):\n${Object.keys(previewFiles).map((p) => `  - ${p}`).join("\n")}\n`
         : "";
 
-      // Pass React files if available — routes first, capped at 40000 chars to avoid AI truncation
+      // Pass React files if available.
+      // Two fixes here:
+      // 1) Files whose name is mentioned in the user's prompt (e.g. "bible" → bible.tsx)
+      //    go FIRST, so the target file is always sent to the AI — even on a large project.
+      // 2) Budget raised from 40,000 to 120,000 chars (~30K tokens). All providers in the
+      //    chain (deepseek, gemini, groq, mistral, cerebras) support well beyond this, and
+      //    40,000 was smaller than this project's /routes folder alone — entire files like
+      //    library.tsx, scan.tsx and reader.$documentId.tsx were silently never sent.
       const fileContext = isReactSource && previewFiles
         ? (() => {
             const entries = Object.entries(previewFiles);
-            const routes = entries.filter(([p]) => p.includes("/routes/") || p.includes("route"));
-            const others = entries.filter(([p]) => !p.includes("/routes/") && !p.includes("route"));
-            const ordered = [...routes, ...others];
+            const promptLower = trimmed.toLowerCase();
+            const mentioned = entries.filter(([p]) => {
+              const fname = p.split("/").pop()?.replace(/\.tsx?$/, "").toLowerCase() ?? "";
+              return fname.length > 2 && promptLower.includes(fname);
+            });
+            const mentionedPaths = new Set(mentioned.map(([p]) => p));
+            const routes = entries.filter(([p]) => !mentionedPaths.has(p) && (p.includes("/routes/") || p.includes("route")));
+            const others = entries.filter(([p]) => !mentionedPaths.has(p) && !p.includes("/routes/") && !p.includes("route"));
+            const ordered = [...mentioned, ...routes, ...others];
             let total = 0;
-            const MAX = 40000;
+            const MAX = 120000;
             const chosen: string[] = [];
             for (const [path, content] of ordered) {
               const block = `/* ===== FILE: ${path} ===== */\n${content}`;
-              if (total + block.length > MAX) break;
+              if (total + block.length > MAX) continue; // skip oversized files, keep including smaller ones
               chosen.push(block);
               total += block.length;
             }
@@ -334,6 +350,9 @@ function ProjectPage() {
       const changesLine = parseChangesLine(raw);
       // Declared here so auto-retry block can always access it regardless of mode
       const updatedFiles: Record<string, string> = { ...(previewFiles ?? {}) };
+      // Tracks whether the AI's response actually changed any file content.
+      // Defaults to true for modes/paths that don't run the diff guardian (mobile, plain HTML).
+      let hasRealChange = true;
 
       if (mode === "Build") {
         if (isMobile) {
@@ -365,16 +384,25 @@ function ProjectPage() {
             }
             // Use guardian to detect only files that actually changed — blocks empty commits
             const actuallyChanged = getActuallyChangedFiles(previewFiles ?? {}, updatedFiles);
-            if (Object.keys(actuallyChanged).length === 0) {
-              // AI returned same code — tell user nothing changed
-              summary = { added: [], changed: ["(AI returned same code — try being more specific, e.g. 'Add a search bar to the top of the Bible page')"], removed: [] };
-            }
+            hasRealChange = Object.keys(actuallyChanged).length > 0;
             setPreviewFiles(updatedFiles);
             setChangedFiles(actuallyChanged); // only push files that actually changed
             setIframeKey((k) => k + 1);
             // Rebuild scaffold HTML with updated files — use guardian from mayobuild.config
             html = rebuildScaffold(previewHtml, updatedFiles);
-            summary = { added: fileMatches.map(m => m[1]), changed: [], removed: [] };
+            if (hasRealChange) {
+              summary = { added: Object.keys(actuallyChanged), changed: [], removed: [] };
+            } else {
+              // AI said it made a change but every file is byte-for-byte identical —
+              // don't trust its "CHANGES:" claim, tell the user nothing actually changed.
+              summary = {
+                added: [],
+                changed: [
+                  "⚠️ No real code change was made — the file(s) the AI returned are identical to what's already there. Its description above may be inaccurate. Try rephrasing your request to name the exact file/section (e.g. 'In src/routes/bible.tsx, add a search input above the book selector').",
+                ],
+                removed: [],
+              };
+            }
           } else {
             // Fallback — AI returned HTML (only clear React files if AI explicitly gave us HTML back)
             const found = extractHtml(raw);
@@ -385,7 +413,9 @@ function ProjectPage() {
           const found = extractHtml(raw);
           if (found) { html = found; summary = diffSummary(previewHtml || null, found); }
         }
-        if (changesLine && summary) summary.changed.unshift(changesLine);
+        // Only append the AI's own "CHANGES:" line when a real change was verified —
+        // otherwise it would mask the warning above with the AI's unverified claim.
+        if (changesLine && summary && hasRealChange) summary.changed.unshift(changesLine);
       }
 
       // Extract readable summary - if AI only returned code, show which files changed
@@ -524,10 +554,18 @@ function ProjectPage() {
       // GitHub repo structure starts from "src/", not from the zip folder name
       let cleanFiles: Record<string, string> | undefined;
       if (previewFiles) {
-        // Only push files that the AI actually changed, not ALL files
-        // If AI changed specific files this session, push only those
-        // Otherwise push all (e.g. first push after import)
-        const filesToPush = Object.keys(changedFiles).length > 0 ? changedFiles : previewFiles;
+        // Only push files that the AI actually changed, not ALL files.
+        // - If specific files changed this session, push only those.
+        // - If nothing changed yet AND we've never published this project before,
+        //   this is a genuine first full push (e.g. right after import) — push everything.
+        // - If nothing changed AND we HAVE published before, this is a no-op edit —
+        //   block it below instead of generating a fake "Updated X" commit.
+        const filesToPush =
+          Object.keys(changedFiles).length > 0
+            ? changedFiles
+            : !hasPublished
+              ? previewFiles
+              : {};
         cleanFiles = {};
         for (const [path, fileContent] of Object.entries(filesToPush)) {
           // Remove leading folder prefix (e.g. "lite-read-main/" -> "")
@@ -545,6 +583,7 @@ function ProjectPage() {
       }
       const res = await publish({ data: { projectId: id, html: previewHtml, files: cleanFiles } });
       setPublishedUrl(res.url);
+      setHasPublished(true);
       toast.success(res.method === "github" ? "Pushed to GitHub! Vercel is redeploying…" : "Live!", { description: res.url });
       setChangedFiles({}); // reset after successful push
 
