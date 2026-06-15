@@ -323,7 +323,9 @@ function ProjectPage() {
       const autonomousBlock = `\n\n${AUTONOMOUS_THINKING_PROMPT}`;
       const system = `${sysBase}${knowledgeBlock}${fileTree}${codeBlock}${historyBlock}${autonomousBlock}\n\nMODE: ${mode.toUpperCase()}`;
 
-      const res = await callWithFailover({ task: isMobile ? "mobile_code" : "website", prompt: trimmed, system, projectId: id, history });
+      // First build = complex_app (creative, high temperature). Editing = website (precise, low temperature).
+      const aiTask = isMobile ? "mobile_code" : (!previewHtml && !isReactSource) ? "complex_app" : "website";
+      const res = await callWithFailover({ task: aiTask, prompt: trimmed, system, projectId: id, history });
       if (res.kind !== "text") return;
       const raw = res.text ?? "";
       let html: string | null = null;
@@ -431,7 +433,7 @@ function ProjectPage() {
         toast("AI picked the wrong file — auto-retrying with file guidance...");
         const fileList = Object.keys(previewFiles).map((p) => `  - ${p}`).join("\n");
         const retryPrompt = `Your previous response did not match any file in this project.\nUser asked: "${trimmed}"\nYou MUST use a path from this exact list:\n${fileList}\nApply the change now using the correct path.`;
-        const retryRes = await callWithFailover({ task: isMobile ? "mobile_code" : "website", prompt: retryPrompt, system, projectId: id, history });
+        const retryRes = await callWithFailover({ task: aiTask, prompt: retryPrompt, system, projectId: id, history });
         setAutoRetrying(false);
         if (retryRes.kind === "text" && retryRes.text) {
           for (const block of retryRes.text.matchAll(/```(?:tsx?|jsx?|css|json)\s+([^\s`]+)\s*\n([\s\S]*?)```/g)) {
