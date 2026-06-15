@@ -277,12 +277,13 @@ function ProjectPage() {
         .map((m, i) => `Turn ${i + 1}: +${m.summary!.added.join(",")} ~${m.summary!.changed.join(",")} -${m.summary!.removed.join(",")}`).join("\n");
 
       // Build knowledge block from project settings (if set)
-      const knowledgeBlock = project?.knowledge_description ? "\n\n" + buildKnowledgeBlock({
-        projectName: project.name ?? "",
-        description: project.knowledge_description ?? "",
-        importantFiles: project.knowledge_important_files ?? [],
-        doNotTouch: project.knowledge_do_not_touch ?? [],
-        customInstructions: project.knowledge_custom_instructions ?? "",
+      const proj = data?.project;
+      const knowledgeBlock = proj?.knowledge_description ? "\n\n" + buildKnowledgeBlock({
+        projectName: proj.name ?? "",
+        description: proj.knowledge_description ?? "",
+        importantFiles: proj.knowledge_important_files ?? [],
+        doNotTouch: proj.knowledge_do_not_touch ?? [],
+        customInstructions: proj.knowledge_custom_instructions ?? "",
       }) : "";
 
       const sysBase = mode === "Plan" ? PLAN_SYSTEM : isMobile ? SYSTEM_MOBILE_BASE : (!previewHtml && !isReactSource) ? BUILD_SYSTEM_PROMPT : SYSTEM_WEBSITE;
@@ -471,7 +472,7 @@ function ProjectPage() {
   }
 
   async function handlePullFromGitHub() {
-    if (!project?.github_repo) { toast.error("No GitHub repo linked to this project."); return; }
+    if (!data?.project?.github_repo) { toast.error("No GitHub repo linked to this project."); return; }
     toast("Pulling latest code from GitHub...");
     try {
       const result = await pullGitHub({ data: { projectId: id } });
@@ -488,7 +489,7 @@ function ProjectPage() {
     toast("Pushing to Cloudflare Pages...");
     try {
       const filesToPush = previewFiles ?? { "index.html": previewHtml ?? "" };
-      const result = await pushCloudflare({ data: { projectId: id, files: filesToPush, projectName: project?.name ?? "mayobuild-site" } });
+      const result = await pushCloudflare({ data: { projectId: id, files: filesToPush, projectName: data?.project?.name ?? "mayobuild-site" } });
       if (result.ok) toast.success(`Deployed to Cloudflare Pages!`, { description: result.url });
       else toast.error(result.reason ?? "Cloudflare push failed.");
     } catch (e: any) { toast.error(e.message); }
@@ -548,8 +549,8 @@ function ProjectPage() {
 
       // After GitHub push — run the FULL AUTONOMOUS VERIFICATION LOOP
       // AI checks GitHub → Vercel → Live site → auto-fixes if anything wrong
-      if (res.method === "github" && project?.github_repo) {
-        const repo = project.github_repo;
+      if (res.method === "github" && data?.project?.github_repo) {
+        const repo = data.project.github_repo;
         setDeployStatus("checking");
         // Start loop after 75 seconds (enough time for Vercel to begin)
         setTimeout(async () => {
