@@ -332,6 +332,8 @@ function ProjectPage() {
       let html: string | null = null;
       let summary: ChatMsg["summary"] | undefined;
       const changesLine = parseChangesLine(raw);
+      // Declared here so auto-retry block can always access it regardless of mode
+      const updatedFiles: Record<string, string> = { ...(previewFiles ?? {}) };
 
       if (mode === "Build") {
         if (isMobile) {
@@ -340,7 +342,6 @@ function ProjectPage() {
           summary = diffSummary(previewHtml || null, code);
         } else if (isReactSource) {
           // For React projects — extract updated files and merge into previewFiles
-          const updatedFiles: Record<string, string> = { ...(previewFiles ?? {}) };
           const fileMatches = [...raw.matchAll(/```(?:tsx|ts|jsx|js|typescript)(?:\s+([\w./\-\s]+?))?\s*\n([\s\S]*?)```/g)];
           if (fileMatches.length > 0) {
             // m[1] is the filepath (may be undefined if AI didn't include it)
