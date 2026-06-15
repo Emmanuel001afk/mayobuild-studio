@@ -1104,14 +1104,41 @@ export const runFullVerificationLoop = createServerFn({ method: "POST" })
     // Step 1: Wait for Vercel to start processing (15s)
     await new Promise(r => setTimeout(r, 15000));
 
-    // Step 2: Check if Vercel deployment succeeded
+    // Step 2: Check Vercel deployment status via API
     try {
-      const checkResult = await runFullVerificationLoop.handler === undefined
-        ? { ok: true }
-        : { ok: true };
-      results.push("✅ Vercel deployment triggered");
-    } catch {
-      results.push("⚠️ Could not verify Vercel deployment status");
+      const vercelToken = process.env.VERCEL_TOKEN;
+      if (vercelToken) {
+        const repoName = data.github_repo.split("/")[1];
+        const listRes = await fetch(`https://api.vercel.com/v9/projects?search=${repoName}&limit=3`, {
+          headers: { Authorization: `Bearer ${vercelToken}` },
+        });
+        if (listRes.ok) {
+          const listJson = await listRes.json();
+          const vProject = listJson.projects?.[0];
+          if (vProject) {
+            const depRes = await fetch(`https://api.vercel.com/v6/deployments?projectId=${vProject.id}&limit=1`, {
+              headers: { Authorization: `Bearer ${vercelToken}` },
+            });
+            if (depRes.ok) {
+              const depJson = await depRes.json();
+              const latest = depJson.deployments?.[0];
+              if (latest?.state === "READY") {
+                results.push(`✅ Vercel deployment succeeded — live at https://${latest.url}`);
+                await admin.from("projects").update({ live_url: `https://${latest.url}`, last_deploy_status: "success" }).eq("id", data.projectId);
+              } else if (latest?.state === "ERROR") {
+                results.push(`❌ Vercel deployment failed — triggering auto-fix`);
+                await admin.from("projects").update({ last_deploy_status: "error" }).eq("id", data.projectId);
+              } else {
+                results.push(`⏳ Vercel still building — state: ${latest?.state ?? "unknown"}`);
+              }
+            }
+          }
+        }
+      } else {
+        results.push("⚠️ No VERCEL_TOKEN — skipping Vercel check. Add it to environment variables.");
+      }
+    } catch (e: any) {
+      results.push(`⚠️ Vercel check error: ${e.message}`);
     }
 
     // Step 3: Check if live URL is reachable
