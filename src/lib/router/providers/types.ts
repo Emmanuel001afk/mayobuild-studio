@@ -11,5 +11,5 @@ export type ChatResult = {
 export interface Provider {
   name: string;
   models: string[]; // priority order
-  chat(messages: ChatMessage[], opts?: { model?: string }): Promise<ChatResult>;
+  chat(messages: ChatMessage[], opts?: { model?: string; temperature?: number }): Promise<ChatResult>;
 }
