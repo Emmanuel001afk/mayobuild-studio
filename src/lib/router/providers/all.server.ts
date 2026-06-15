@@ -7,6 +7,7 @@ async function openaiChat(opts: {
   model: string;
   messages: ChatMessage[];
   provider: string;
+  temperature?: number;
   extraHeaders?: Record<string, string>;
 }): Promise<ChatResult> {
   const res = await fetch(opts.url, {
@@ -19,7 +20,7 @@ async function openaiChat(opts: {
     body: JSON.stringify({
       model: opts.model,
       messages: opts.messages,
-      temperature: 0.7,
+      temperature: opts.temperature ?? 0.5,
     }),
   });
   if (!res.ok) {
@@ -51,6 +52,7 @@ export const OpenAI: Provider = {
       url: "https://api.openai.com/v1/chat/completions",
       apiKey: need("OPENAI_API_KEY"),
       model: o?.model ?? "gpt-4o-mini",
+      temperature: o?.temperature,
       messages,
       provider: "openai",
     }),
@@ -64,6 +66,7 @@ export const DeepSeek: Provider = {
       url: "https://api.deepseek.com/v1/chat/completions",
       apiKey: need("DEEPSEEK_API_KEY"),
       model: o?.model ?? "deepseek-chat",
+      temperature: o?.temperature,
       messages,
       provider: "deepseek",
     }),
@@ -77,6 +80,7 @@ export const Groq: Provider = {
       url: "https://api.groq.com/openai/v1/chat/completions",
       apiKey: need("GROQ_API_KEY"),
       model: o?.model ?? "llama-3.3-70b-versatile",
+      temperature: o?.temperature,
       messages,
       provider: "groq",
     }),
@@ -90,6 +94,7 @@ export const OpenRouter: Provider = {
       url: "https://openrouter.ai/api/v1/chat/completions",
       apiKey: need("OPENROUTER_API_KEY"),
       model: o?.model ?? "deepseek/deepseek-chat-v3-0324:free",
+      temperature: o?.temperature,
       messages,
       provider: "openrouter",
       extraHeaders: { "HTTP-Referer": "https://mayobuild.studio", "X-Title": "Mayobuild Studio" },
@@ -104,6 +109,7 @@ export const Mistral: Provider = {
       url: "https://api.mistral.ai/v1/chat/completions",
       apiKey: need("MISTRAL_API_KEY"),
       model: o?.model ?? "mistral-large-latest",
+      temperature: o?.temperature,
       messages,
       provider: "mistral",
     }),
@@ -117,6 +123,7 @@ export const Cerebras: Provider = {
       url: "https://api.cerebras.ai/v1/chat/completions",
       apiKey: need("CEREBRAS_API_KEY"),
       model: o?.model ?? "llama3.1-70b",
+      temperature: o?.temperature,
       messages,
       provider: "cerebras",
     }),
@@ -129,6 +136,7 @@ export const Gemini: Provider = {
   async chat(messages, o) {
     const apiKey = need("GEMINI_API_KEY");
     const model = o?.model ?? "gemini-2.5-flash";
+    const temperature = o?.temperature ?? 0.5;
     const contents = messages
       .filter((m) => m.role !== "system")
       .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
@@ -139,6 +147,7 @@ export const Gemini: Provider = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents,
+        generationConfig: { temperature },
         ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
       }),
     });
@@ -167,6 +176,7 @@ export const HuggingFace: Provider = {
       url: "https://router.huggingface.co/v1/chat/completions",
       apiKey: need("HUGGINGFACE_API_KEY"),
       model: o?.model ?? "meta-llama/Llama-3.3-70B-Instruct",
+      temperature: o?.temperature,
       messages,
       provider: "huggingface",
     }),
