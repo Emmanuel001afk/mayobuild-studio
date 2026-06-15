@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { getSupabase } from "@/integrations/mysupabase/client";
 
-export const ADMIN_EMAIL = "akintundeemmanuel14@gmail.com";
+export const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL ?? "akintundeemmanuel14@gmail.com";
 
 export function useAuth() {
   const [session, setSession] = useState<Session | null>(null);
