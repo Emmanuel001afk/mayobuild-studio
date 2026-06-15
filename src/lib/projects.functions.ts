@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser } from "@/integrations/mysupabase/middleware.server";
 import { getAdmin } from "@/integrations/mysupabase/admin.server";
+import { createHash } from "node:crypto";
 
 function getDefaultSubdomain(project: { id: string; name: string }) {
   const label = project.name
@@ -605,8 +606,14 @@ export const adminAICommand = createServerFn({ method: "POST" })
     const { admin, user } = context;
     // Only the platform admin can use this
     const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "akintundeemmanuel14@gmail.com"; // Must match admin.functions.ts
-    const { data: profile } = await admin.auth.admin.getUserById(user.id);
-    if (profile?.user?.email !== ADMIN_EMAIL) throw new Error("Admin only.");
+    // Check admin by looking up profile email directly — avoids auth.admin API dependency
+    const { data: profile } = await admin
+      .from("profiles")
+      .select("email")
+      .eq("id", user.id)
+      .maybeSingle();
+    const userEmail = profile?.email ?? user.email ?? "";
+    if (userEmail !== ADMIN_EMAIL) throw new Error("Admin only.");
     const { data: project } = await admin
       .from("projects").select("github_repo,name").eq("id", data.projectId).maybeSingle();
     // Log the command to Supabase for audit trail
@@ -968,7 +975,6 @@ export const pushToCloudflare = createServerFn({ method: "POST" })
     for (const [path, content] of Object.entries(data.files)) {
       const contentBuf = Buffer.from(content, "utf-8");
       // Simple hash using Node crypto
-      const { createHash } = await import("crypto");
       const hash = createHash("sha256").update(contentBuf).digest("hex");
       manifest["/" + path] = hash;
       parts.push(Buffer.from(
