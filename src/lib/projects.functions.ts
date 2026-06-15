@@ -1095,10 +1095,15 @@ export const remixProject = createServerFn({ method: "POST" })
 // Runs after every GitHub push: checks Vercel build status, auto-fixes errors,
 // confirms the live site is reachable. Called automatically by projects.$id.tsx.
 export const runFullVerificationLoop = createServerFn({ method: "POST" })
-  .validator((d: unknown) => d as { projectId: string; githubRepo: string; vercelUrl?: string })
+  .middleware([requireUser])
+  .inputValidator((d: unknown) => z.object({
+    projectId: z.string().uuid(),
+    github_repo: z.string(),
+    expectedChanges: z.array(z.string()).optional(),
+    userPrompt: z.string().optional(),
+  }).parse(d))
   .handler(async ({ data, context }) => {
-    const user = (context as any).user;
-    if (!user) throw new Error("Not authenticated");
+    const { admin, user } = context;
     const results: string[] = [];
 
     // Step 1: Wait for Vercel to start processing (15s)
