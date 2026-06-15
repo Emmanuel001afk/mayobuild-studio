@@ -34,12 +34,11 @@ export async function routeChat(
     const head = chain.find((p) => p.name === opts.preferProvider);
     if (head) chain = [head, ...chain.filter((p) => p !== head)];
   }
-  // Temperature per task: editing needs precision (0.2), building needs creativity (0.8)
   const temperature = task === "website" ? 0.2 : task === "complex_app" ? 0.8 : task === "mobile_code" ? 0.7 : 0.5;
   const attempts: { provider: string; error: string }[] = [];
   for (const provider of chain) {
     try {
-      const out = await provider.chat(messages);
+      const out = await provider.chat(messages, { temperature });
       return { ...out, attempts };
     } catch (e) {
       attempts.push({ provider: provider.name, error: (e as Error).message });
