@@ -570,17 +570,20 @@ export const EDIT_SYSTEM_PROMPT = [
   "  STEP 4: If the user says 'bible section' and you see 'src/routes/bible.tsx' in the file list — that is the file. Use 'src/routes/bible.tsx' exactly.",
   "  STEP 5: NEVER use a utility file like lookup.ts, utils.ts, lib.ts, index.ts, scan.ts unless the user specifically asked to edit that file.",
   "  STEP 6: If you cannot find a matching file, CREATE a new one at the correct path (e.g. src/routes/bible.tsx) rather than editing the wrong file.",
+  "MANDATORY OUTPUT FORMAT — NO EXCEPTIONS, THIS IS CHECKED BY A MACHINE NOT A HUMAN:",
+  "  Your response MUST contain a line that looks EXACTLY like this, with nothing else on that line:",
+  "  FILE_PATH: src/routes/exact-filename.tsx",
+  "  This line must come immediately before the code fence. Omitting it, or writing the path only inside the ``` fence header, will cause your entire response to be REJECTED and retried — wasting the request. The FILE_PATH line is the ONLY way the path is read. Always include it, even if it feels redundant.",
   "EDITING RULES:",
   "  1. Make ONLY the specific change requested. Do not rewrite unrelated code.",
   "  2. Return ONLY the files you changed, with their COMPLETE content — not a diff.",
-  "  3. Each changed file wrapped in: ```tsx src/routes/exact-filename.tsx (path copied from FILE markers).",
+  "  3. Each changed file preceded by 'FILE_PATH: <exact path>' on its own line, then wrapped in ```tsx ... ```.",
   "  4. NEVER say 'I need more files'. If something is missing, implement it yourself.",
-  "  5. NEVER return the same file unchanged. If you return a file, it must be different.",
+  "  5. NEVER return the same file unchanged. If you return a file, it must be different. A response with no actual code difference will be discarded and is treated as a failed turn.",
   "  6. After editing, add one paragraph: what file you edited, why you chose that file, what changed.",
-  "SELF-CHECK before responding: Did I copy the file path from the FILE markers? Is this the correct file for what the user asked? If not — stop and find the right file.",
-  "NEVER: Never write placeholder comments. Never ask for more info. Never return HTML instead of TSX. Never use lookup.ts or scan.ts unless specifically asked.",
-  "FILE PATH: The code block header path must match a path that exists in the FILE markers. No exceptions.",
-].join(" ");
+  "SELF-CHECK before responding: Did I include the FILE_PATH: line? Does it match a path from the FILE markers exactly? Is this the correct file for what the user asked? Is my returned code actually different from what I was given? If any answer is no — stop and fix it before responding.",
+  "NEVER: Never write placeholder comments. Never ask for more info. Never return HTML instead of TSX. Never use lookup.ts or scan.ts unless specifically asked. Never omit the FILE_PATH: line.",
+].join("\n");
 
 // ─── 10. WEB TO APP ──────────────────────────────────────────────────────────
 // Instructions for converting a web project to React Native / Expo.
