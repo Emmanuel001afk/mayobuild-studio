@@ -38,19 +38,26 @@
 // "src/routes/index.tsx"                     → "src/routes/index.tsx" (untouched)
 
 export function cleanFilePath(rawPath: string): string {
-  const p = rawPath.trim();
-  // Already clean — starts with a known source folder
-  if (
-    p.startsWith("src/") ||
-    p.startsWith("public/") ||
-    p.startsWith("components/") ||
-    p.startsWith("lib/") ||
-    p.startsWith("hooks/") ||
-    p.startsWith(".") ||
-    !p.includes("/")
-  ) return p;
-  // Strip everything before and including the first "/"
-  return p.split("/").slice(1).join("/");
+  let p = rawPath.trim();
+  // Strip leading "./" if present
+  if (p.startsWith("./")) p = p.slice(2);
+
+  const KNOWN_ROOTS = ["src/", "public/", "components/", "lib/", "hooks/", "api/", "supabase/"];
+  const isClean = (path: string) =>
+    KNOWN_ROOTS.some((root) => path.startsWith(root)) || path.startsWith(".") || !path.includes("/");
+
+  // Previously this only stripped ONE leading folder, which is why double-nested
+  // wrapper folders (e.g. "lite-read-main/lite-read-main/src/routes/bible.tsx", which
+  // happened whenever the AI echoed back an already-wrapped path) were never fully
+  // cleaned — the result still had one wrapper folder left, landing files in the wrong
+  // place on GitHub. Now it strips wrapper folders repeatedly until the path starts at
+  // a known source root, with a safety cap so a malformed path can't loop forever.
+  let guard = 0;
+  while (!isClean(p) && p.includes("/") && guard < 5) {
+    p = p.split("/").slice(1).join("/");
+    guard++;
+  }
+  return p;
 }
 
 // Clean a whole collection of files at once
