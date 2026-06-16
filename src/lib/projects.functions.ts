@@ -1,4 +1,4 @@
-import { cleanFilePaths, validateFilesForPush } from "@/mayobuild.config";
+import { cleanFilePath, cleanFilePaths, validateFilesForPush } from "@/mayobuild.config";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser } from "@/integrations/mysupabase/middleware.server";
@@ -207,20 +207,31 @@ export const publishSite = createServerFn({ method: "POST" })
       const results: { path: string; ok: boolean }[] = [];
 
       // Clean file paths: strip ZIP root folder prefix (e.g. "lite-read-main/src/..." -> "src/...")
-      // This ensures files land at the correct location in GitHub, not inside a subfolder
-      const cleanedFiles: Record<string, string> = {};
-      for (const [rawPath, fileContent] of Object.entries(data.files)) {
-        const cleanPath = (rawPath.includes("/") && !rawPath.startsWith("src/") && !rawPath.startsWith("public/") && !rawPath.startsWith("."))
-          ? rawPath.split("/").slice(1).join("/")
-          : rawPath;
-        cleanedFiles[cleanPath] = fileContent;
-      }
+      // This ensures files land at the correct location in GitHub, not inside a subfolder.
+      // Uses the shared cleanFilePath guardian (handles nested/double-wrapped folders),
+      // instead of a weaker inline one-level strip that left double-wrapped paths intact.
+      const cleanedFiles = cleanFilePaths(data.files);
 
       for (const [filePath, content] of Object.entries(cleanedFiles)) {
         try {
           // Get current SHA so we can update existing files
           const getRes = await fetch(`${baseUrl}/${filePath}`, { headers });
           const current = getRes.ok ? await getRes.json() : null;
+          const currentContent = current?.content
+            ? Buffer.from(current.content, "base64").toString("utf-8")
+            : null;
+
+          // VERIFICATION GUARD: if the file already exists on GitHub with this exact
+          // content, skip the push entirely. This is the root cause of "Updated X.tsx"
+          // commits appearing on GitHub with nothing actually different inside them —
+          // previously this function trusted the AI's file list blindly and pushed
+          // every "changed" file even when its content was identical to what GitHub
+          // already had. A 200 OK from GitHub only means "I saved this", not "this is
+          // new" — so that check alone could never catch a no-op edit.
+          if (currentContent !== null && currentContent === content) {
+            results.push({ path: filePath, ok: true, skipped: true, reason: "unchanged" });
+            continue;
+          }
 
           const pushRes = await fetch(`${baseUrl}/${filePath}`, {
             method: "PUT",
@@ -231,35 +242,62 @@ export const publishSite = createServerFn({ method: "POST" })
               sha: current?.sha ?? undefined,
             }),
           });
-          results.push({ path: filePath, ok: pushRes.ok });
-        } catch {
-          results.push({ path: filePath, ok: false });
+
+          if (!pushRes.ok) {
+            const errBody = await pushRes.text().catch(() => "");
+            results.push({ path: filePath, ok: false, skipped: false, reason: `GitHub rejected push (${pushRes.status}): ${errBody.slice(0, 200)}` });
+            continue;
+          }
+
+          // VERIFICATION: re-fetch the file from GitHub after pushing and confirm the
+          // content GitHub now holds actually matches what we sent. This catches cases
+          // where the PUT returns 200 but the content didn't land correctly (encoding
+          // issues, GitHub API caching, partial writes) — previously invisible because
+          // only pushRes.ok was checked.
+          const verifyRes = await fetch(`${baseUrl}/${filePath}`, { headers });
+          const verifyData = verifyRes.ok ? await verifyRes.json() : null;
+          const verifiedContent = verifyData?.content
+            ? Buffer.from(verifyData.content, "base64").toString("utf-8")
+            : null;
+          const verified = verifiedContent === content;
+
+          results.push({ path: filePath, ok: verified, skipped: false, reason: verified ? undefined : "Push succeeded but verification read-back did not match — content may not have landed correctly." });
+        } catch (e: any) {
+          results.push({ path: filePath, ok: false, skipped: false, reason: e?.message ?? "Network or unexpected error during push." });
         }
       }
 
-      // Push MAYOBUILD_CHANGES.md — a running log of every edit so user can always see what changed and where
-      try {
-        const timestamp = new Date().toISOString();
-        const changedPaths = Object.keys(cleanedFiles).join("\n  - ");
-        const logEntry = `\n---\n**${timestamp}**\nFiles changed:\n  - ${changedPaths}\nPushed by: Mayobuild Studio\n`;
-        const logPath = "MAYOBUILD_CHANGES.md";
-        const logGetRes = await fetch(`${baseUrl}/${logPath}`, { headers });
-        const logCurrent = logGetRes.ok ? await logGetRes.json() : null;
-        const existingContent = logCurrent?.content
-          ? Buffer.from(logCurrent.content, "base64").toString("utf-8")
-          : "# Mayobuild Studio — Change Log\nAll edits made through Mayobuild Studio are recorded here.\n";
-        const newContent = existingContent + logEntry;
-        await fetch(`${baseUrl}/${logPath}`, {
-          method: "PUT",
-          headers,
-          body: JSON.stringify({
-            message: `Mayobuild change log update`,
-            content: Buffer.from(newContent).toString("base64"),
-            sha: logCurrent?.sha ?? undefined,
-          }),
-        });
-      } catch {
-        // Non-fatal — change log update failed silently
+      const failedPushes = results.filter((r) => !r.ok);
+      const realPushes = results.filter((r) => r.ok && !r.skipped);
+      const skippedPushes = results.filter((r) => r.skipped);
+
+      // Push MAYOBUILD_CHANGES.md — a running log of every edit so user can always see what changed and where.
+      // Only logged when at least one file was genuinely pushed — a turn where every
+      // file was skipped as unchanged no longer writes a misleading log entry.
+      if (realPushes.length > 0) {
+        try {
+          const timestamp = new Date().toISOString();
+          const changedPaths = realPushes.map((r) => r.path).join("\n  - ");
+          const logEntry = `\n---\n**${timestamp}**\nFiles changed:\n  - ${changedPaths}\nPushed by: Mayobuild Studio\n`;
+          const logPath = "MAYOBUILD_CHANGES.md";
+          const logGetRes = await fetch(`${baseUrl}/${logPath}`, { headers });
+          const logCurrent = logGetRes.ok ? await logGetRes.json() : null;
+          const existingContent = logCurrent?.content
+            ? Buffer.from(logCurrent.content, "base64").toString("utf-8")
+            : "# Mayobuild Studio — Change Log\nAll edits made through Mayobuild Studio are recorded here.\n";
+          const newContent = existingContent + logEntry;
+          await fetch(`${baseUrl}/${logPath}`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({
+              message: `Mayobuild change log update`,
+              content: Buffer.from(newContent).toString("base64"),
+              sha: logCurrent?.sha ?? undefined,
+            }),
+          });
+        } catch {
+          // Non-fatal — change log update failed silently
+        }
       }
 
       // Save record in Supabase
@@ -269,12 +307,25 @@ export const publishSite = createServerFn({ method: "POST" })
         .eq("id", data.projectId);
 
       const liveUrl = `https://github.com/${repo}`;
+
+      // If every single file was either skipped (unchanged) or failed, this push did
+      // nothing real — surface that clearly instead of returning a generic ok:true that
+      // the UI would otherwise report as a successful deploy.
+      if (realPushes.length === 0) {
+        const reason = failedPushes.length > 0
+          ? `All ${failedPushes.length} file(s) failed to push: ${failedPushes.map((r) => `${r.path} (${r.reason})`).join("; ")}`
+          : `No files were pushed — all ${skippedPushes.length} file(s) were already identical on GitHub. Nothing changed.`;
+        throw new Error(reason);
+      }
+
       return {
         ok: true as const,
         url: liveUrl,
         path: repo,
         method: "github",
         pushed: results,
+        skipped: skippedPushes.map((r) => r.path),
+        failed: failedPushes.map((r) => ({ path: r.path, reason: r.reason })),
       };
     }
 
@@ -783,7 +834,7 @@ export const autoFixFromVercelError = createServerFn({ method: "POST" })
       return { ok: false, reason: "AI could not determine a fix." };
     }
 
-    const fixPath = fixMatch[1].trim();
+    const fixPath = cleanFilePath(fixMatch[1].trim());
     const fixContent = fixMatch[2].trim();
 
     // Get SHA of file to update
@@ -791,7 +842,19 @@ export const autoFixFromVercelError = createServerFn({ method: "POST" })
       `https://api.github.com/repos/${data.github_repo}/contents/${fixPath}`,
       { headers: { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json" } }
     );
-    const getSha = getRes.ok ? (await getRes.json())?.sha : undefined;
+    const getJson = getRes.ok ? await getRes.json() : null;
+    const getSha = getJson?.sha;
+    const beforeContent = getJson?.content ? Buffer.from(getJson.content, "base64").toString("utf-8") : null;
+
+    // If the AI's "fix" is identical to what's already there, this would just be
+    // another empty commit pretending to be a real fix — block it the same way the
+    // main publish path now blocks no-op pushes.
+    if (beforeContent !== null && beforeContent === fixContent) {
+      await admin.from("projects")
+        .update({ last_deploy_status: "auto_fix_failed", updated_at: new Date().toISOString() })
+        .eq("id", data.projectId);
+      return { ok: false, reason: `AI returned ${fixPath} unchanged — could not determine a real fix from the error log.` };
+    }
 
     // Commit the fix
     const commitRes = await fetch(
@@ -811,6 +874,11 @@ export const autoFixFromVercelError = createServerFn({ method: "POST" })
     await admin.from("projects")
       .update({ last_deploy_status: committed ? "auto_fix_committed" : "auto_fix_failed", updated_at: new Date().toISOString() })
       .eq("id", data.projectId);
+
+    if (!committed) {
+      const errBody = await commitRes.text().catch(() => "");
+      return { ok: false, reason: `GitHub rejected the auto-fix commit to ${fixPath}: ${errBody.slice(0, 200)}` };
+    }
 
     // Log to MAYOBUILD_CHANGES.md
     try {
@@ -1128,64 +1196,121 @@ export const runFullVerificationLoop = createServerFn({ method: "POST" })
     github_repo: z.string(),
     expectedChanges: z.array(z.string()).optional(),
     userPrompt: z.string().optional(),
+    vercelUrl: z.string().optional(),
   }).parse(d))
   .handler(async ({ data, context }) => {
-    const { admin, user } = context;
+    const { admin } = context;
     const results: string[] = [];
+    const vercelToken = process.env.VERCEL_TOKEN;
 
-    // Step 1: Wait for Vercel to start processing (15s)
-    await new Promise(r => setTimeout(r, 15000));
+    if (!vercelToken) {
+      results.push("⚠️ No VERCEL_TOKEN — skipping Vercel check. Add it to environment variables.");
+      return { success: false, results, liveUrl: null };
+    }
 
-    // Step 2: Check Vercel deployment status via API
-    try {
-      const vercelToken = process.env.VERCEL_TOKEN;
-      if (vercelToken) {
-        const repoName = data.github_repo.split("/")[1];
-        const listRes = await fetch(`https://api.vercel.com/v9/projects?search=${repoName}&limit=3`, {
+    const repoName = data.github_repo.split("/")[1];
+    const listRes = await fetch(`https://api.vercel.com/v9/projects?search=${repoName}&limit=3`, {
+      headers: { Authorization: `Bearer ${vercelToken}` },
+    });
+    if (!listRes.ok) {
+      results.push("⚠️ Could not reach Vercel API to find the project.");
+      return { success: false, results, liveUrl: null };
+    }
+    const listJson = await listRes.json();
+    const vProject = listJson.projects?.[0];
+    if (!vProject) {
+      results.push(`⚠️ No Vercel project found matching "${repoName}".`);
+      return { success: false, results, liveUrl: null };
+    }
+
+    // POLL until the deployment leaves BUILDING/QUEUED, instead of checking once after a
+    // fixed 15s and assuming that's the final state. Builds in this project regularly take
+    // 45-55s, so the previous single early check almost always caught "still building" and
+    // reported it as if it were done — which is why "all checks passed" was never accurate.
+    // Poll every 8s for up to 2 minutes (15 attempts).
+    let latest: any = null;
+    for (let attempt = 0; attempt < 15; attempt++) {
+      await new Promise((r) => setTimeout(r, 8000));
+      const depRes = await fetch(`https://api.vercel.com/v6/deployments?projectId=${vProject.id}&limit=1`, {
+        headers: { Authorization: `Bearer ${vercelToken}` },
+      });
+      if (!depRes.ok) continue;
+      const depJson = await depRes.json();
+      latest = depJson.deployments?.[0] ?? null;
+      if (latest && latest.state !== "BUILDING" && latest.state !== "QUEUED" && latest.state !== "INITIALIZING") {
+        break;
+      }
+    }
+
+    if (!latest) {
+      results.push("⚠️ Could not get deployment status from Vercel after polling.");
+      return { success: false, results, liveUrl: null };
+    }
+
+    if (latest.state === "BUILDING" || latest.state === "QUEUED" || latest.state === "INITIALIZING") {
+      results.push(`⏳ Vercel is still ${latest.state.toLowerCase()} after 2 minutes — check the Vercel dashboard directly, this deployment is taking longer than usual.`);
+      return { success: false, results, liveUrl: null };
+    }
+
+    if (latest.state === "ERROR") {
+      results.push("❌ Vercel deployment failed.");
+      await admin.from("projects").update({ last_deploy_status: "error" }).eq("id", data.projectId);
+
+      // autoFixFromVercelError requires the actual error log text, which we don't have
+      // yet — pull it from Vercel's deployment events first.
+      let errorLines = "";
+      try {
+        const logRes = await fetch(`https://api.vercel.com/v2/deployments/${latest.uid}/events?limit=50`, {
           headers: { Authorization: `Bearer ${vercelToken}` },
         });
-        if (listRes.ok) {
-          const listJson = await listRes.json();
-          const vProject = listJson.projects?.[0];
-          if (vProject) {
-            const depRes = await fetch(`https://api.vercel.com/v6/deployments?projectId=${vProject.id}&limit=1`, {
-              headers: { Authorization: `Bearer ${vercelToken}` },
-            });
-            if (depRes.ok) {
-              const depJson = await depRes.json();
-              const latest = depJson.deployments?.[0];
-              if (latest?.state === "READY") {
-                results.push(`✅ Vercel deployment succeeded — live at https://${latest.url}`);
-                await admin.from("projects").update({ live_url: `https://${latest.url}`, last_deploy_status: "success" }).eq("id", data.projectId);
-              } else if (latest?.state === "ERROR") {
-                results.push(`❌ Vercel deployment failed — triggering auto-fix`);
-                await admin.from("projects").update({ last_deploy_status: "error" }).eq("id", data.projectId);
-              } else {
-                results.push(`⏳ Vercel still building — state: ${latest?.state ?? "unknown"}`);
-              }
-            }
-          }
-        }
-      } else {
-        results.push("⚠️ No VERCEL_TOKEN — skipping Vercel check. Add it to environment variables.");
+        const logJson = logRes.ok ? await logRes.json() : [];
+        errorLines = (Array.isArray(logJson) ? logJson : logJson.events ?? [])
+          .filter((e: any) => e.type === "stderr" || e.text?.includes("error") || e.text?.includes("Error"))
+          .map((e: any) => e.text ?? "")
+          .filter(Boolean)
+          .slice(0, 20)
+          .join("\n");
+      } catch {
+        // fall through with empty errorLines — autoFix will report it can't find a suspect file
       }
-    } catch (e: any) {
-      results.push(`⚠️ Vercel check error: ${e.message}`);
+
+      // Pull the build error log and actually trigger the existing auto-fix function —
+      // previously this step only logged "triggering auto-fix" as text and never called it.
+      try {
+        const fixResult = await autoFixFromVercelError({
+          data: { projectId: data.projectId, github_repo: data.github_repo, errorLog: errorLines },
+        });
+        if (fixResult?.ok) {
+          results.push("🔧 Auto-fix applied and pushed. Vercel will redeploy — run a check again shortly to confirm.");
+        } else {
+          results.push(`⚠️ Auto-fix did not complete: ${fixResult?.reason ?? "unknown reason"}`);
+        }
+      } catch (e: any) {
+        results.push(`⚠️ Auto-fix attempt failed: ${e?.message ?? "unknown error"}`);
+      }
+      return { success: false, results, liveUrl: null };
     }
 
-    // Step 3: Check if live URL is reachable
-    if (data.vercelUrl) {
+    // latest.state === "READY"
+    const liveUrl = latest.url ? `https://${latest.url}` : null;
+    results.push(`✅ Vercel deployment succeeded${liveUrl ? ` — live at ${liveUrl}` : ""}.`);
+    await admin.from("projects").update({ live_url: liveUrl, last_deploy_status: "success" }).eq("id", data.projectId);
+
+    // Confirm the live site is actually reachable, not just that Vercel marked it READY.
+    if (liveUrl) {
       try {
-        const resp = await fetch(data.vercelUrl, { method: "HEAD" });
+        const resp = await fetch(liveUrl, { method: "HEAD" });
         if (resp.ok) {
-          results.push(`✅ Live site reachable: ${data.vercelUrl}`);
+          results.push(`✅ Live site reachable: ${liveUrl}`);
         } else {
-          results.push(`⚠️ Live site returned ${resp.status}`);
+          results.push(`⚠️ Vercel says READY but the live site returned HTTP ${resp.status}.`);
+          return { success: false, results, liveUrl };
         }
       } catch {
-        results.push("⚠️ Could not reach live site yet — Vercel may still be deploying");
+        results.push("⚠️ Vercel says READY but the live site could not be reached.");
+        return { success: false, results, liveUrl };
       }
     }
 
-    return { success: true, results };
+    return { success: true, results, liveUrl };
   });
