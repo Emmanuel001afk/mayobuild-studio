@@ -1,4 +1,4 @@
-import { cleanFilePath, cleanFilePaths, getActuallyChangedFiles, matchFileFromCode, validateFilesForPush, deriveVercelUrl, extractFilesFromScaffold, rebuildScaffold, EDIT_SYSTEM_PROMPT, BUILD_SYSTEM_PROMPT, AUTONOMOUS_THINKING_PROMPT, buildKnowledgeBlock, STARTER_TEMPLATES } from "@/mayobuild.config";
+import { cleanFilePath, cleanFilePaths, getActuallyChangedFiles, detectDestructiveEdits, matchFileFromCode, validateFilesForPush, deriveVercelUrl, extractFilesFromScaffold, rebuildScaffold, EDIT_SYSTEM_PROMPT, BUILD_SYSTEM_PROMPT, AUTONOMOUS_THINKING_PROMPT, buildKnowledgeBlock, STARTER_TEMPLATES } from "@/mayobuild.config";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useServerFn } from "@tanstack/react-start";
@@ -421,13 +421,37 @@ function ProjectPage() {
             const actuallyChanged = getActuallyChangedFiles(previewFiles ?? {}, updatedFiles);
             hasRealChange = Object.keys(actuallyChanged).length > 0;
             setPreviewFiles(updatedFiles);
-            setChangedFiles(actuallyChanged); // only push files that actually changed
+
+            // Check for destructive edits BEFORE marking files as ready to push — catches
+            // the pattern where the AI was asked to add a feature to a shared file and
+            // instead wiped most of that file's other exports, breaking every other file
+            // that imported them. This doesn't block setPreviewFiles (so the preview still
+            // shows what the AI did) but it does keep changedFiles empty so publish can't
+            // push it until the user has seen the warning.
+            const destructiveWarnings = hasRealChange
+              ? detectDestructiveEdits(previewFiles ?? {}, actuallyChanged)
+              : [];
+
+            if (destructiveWarnings.length > 0) {
+              setChangedFiles({}); // block push until reviewed
+              summary = {
+                added: [],
+                changed: [
+                  `⚠️ Possible destructive edit detected — push blocked. ${destructiveWarnings
+                    .map((w) => `"${w.path}" — ${w.reason}.`)
+                    .join(" ")} If this removed code other files depend on, ask the AI to add the feature WITHOUT removing the existing exports, or restore the file and try a more specific instruction.`,
+                ],
+                removed: [],
+              };
+            } else {
+              setChangedFiles(actuallyChanged); // only push files that actually changed
+            }
             setIframeKey((k) => k + 1);
             // Rebuild scaffold HTML with updated files — use guardian from mayobuild.config
             html = rebuildScaffold(previewHtml, updatedFiles);
-            if (hasRealChange) {
+            if (hasRealChange && destructiveWarnings.length === 0) {
               summary = { added: Object.keys(actuallyChanged), changed: [], removed: [] };
-            } else {
+            } else if (!hasRealChange) {
               // AI said it made a change but every file is byte-for-byte identical —
               // don't trust its "CHANGES:" claim, tell the user nothing actually changed.
               summary = {
