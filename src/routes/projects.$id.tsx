@@ -360,19 +360,58 @@ function ProjectPage() {
           html = `<!doctype html><html><body style="margin:0;font:13px ui-monospace,Menlo,monospace;background:#0b0f1a;color:#e6edf3;padding:14px;white-space:pre-wrap;word-break:break-word">${code.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!)}</body></html>`;
           summary = diffSummary(previewHtml || null, code);
         } else if (isReactSource) {
-          // For React projects — extract updated files and merge into previewFiles
-          const fileMatches = [...raw.matchAll(/```(?:tsx|ts|jsx|js|typescript)(?:\s+([\w./\-\s]+?))?\s*\n([\s\S]*?)```/g)];
-          if (fileMatches.length > 0) {
-            // m[1] is the filepath (may be undefined if AI didn't include it)
-            // Try to match against known previewFiles paths, else use a generated name
-            for (const m of fileMatches) {
-              const rawPath = m[1]?.trim() ?? "";
-              const code = m[2].trim();
-              if (rawPath) {
-                updatedFiles[cleanFilePath(rawPath)] = code;
+          // Parse files using the FILE_PATH: marker the system prompt now mandates,
+          // instead of relying on the optional filename inside the ``` fence header —
+          // weak/free-tier models (deepseek, groq, etc.) frequently dropped that optional
+          // group entirely, especially with many files in context, which silently sent
+          // the edit through matchFileFromCode's guesswork and landed it in the wrong file.
+          const parseFilesFromResponse = (text: string) => {
+            const blocks: { path: string | null; code: string }[] = [];
+            // Match a FILE_PATH: line immediately followed by a fenced code block
+            const withMarker = [...text.matchAll(
+              /FILE_PATH:\s*([^\n]+)\s*\n+```(?:tsx|ts|jsx|js|typescript)?\s*\n([\s\S]*?)```/g,
+            )];
+            if (withMarker.length > 0) {
+              for (const m of withMarker) blocks.push({ path: m[1].trim(), code: m[2].trim() });
+              return blocks;
+            }
+            // Fall back to the old optional-header style for responses that still slip
+            // through without the marker (handled by the retry logic below, not silently).
+            const fallback = [...text.matchAll(/```(?:tsx|ts|jsx|js|typescript)(?:\s+([\w./\-\s]+?))?\s*\n([\s\S]*?)```/g)];
+            for (const m of fallback) blocks.push({ path: m[1]?.trim() || null, code: m[2].trim() });
+            return blocks;
+          };
+
+          let fileBlocks = parseFilesFromResponse(raw);
+          const missingPath = fileBlocks.length > 0 && fileBlocks.every((b) => !b.path);
+
+          // ENFORCEMENT: if the model ignored the mandatory format (no FILE_PATH: line at
+          // all, on a response that does contain code), retry once with an explicit
+          // correction naming exactly what was missing — this is what actually makes the
+          // format reliable, rather than trusting the prompt wording to be followed.
+          if (missingPath) {
+            try {
+              const knownPaths = Object.keys(previewFiles ?? {});
+              const correctionPrompt = `Your previous response did not include the required "FILE_PATH: <exact path>" line before the code block. Resend your COMPLETE previous answer, this time with a "FILE_PATH: <path>" line (copied exactly from this list) immediately before each code fence:\n${knownPaths.map((p) => `  - ${p}`).join("\n")}\n\nOriginal request: ${trimmed}`;
+              const retry = await callWithFailover({ task: aiTask, prompt: correctionPrompt, system, projectId: id, history });
+              if (retry.kind === "text" && retry.text) {
+                const retryBlocks = parseFilesFromResponse(retry.text);
+                if (retryBlocks.length > 0 && retryBlocks.some((b) => b.path)) {
+                  fileBlocks = retryBlocks;
+                }
+              }
+            } catch {
+              // Retry failed — fall through and use matchFileFromCode guessing below as last resort
+            }
+          }
+
+          if (fileBlocks.length > 0) {
+            for (const block of fileBlocks) {
+              const code = block.code;
+              if (block.path) {
+                updatedFiles[cleanFilePath(block.path)] = code;
               } else {
-                // AI returned code without a filename — use matchFileFromCode guardian from mayobuild.config
-                // This reads clues inside the code itself (route path, component name, imports, prompt words)
+                // Last resort only — the retry above should normally prevent reaching here
                 const knownPaths = Object.keys(previewFiles ?? {});
                 const bestPath = matchFileFromCode(code, knownPaths, trimmed);
                 if (bestPath) updatedFiles[bestPath] = code;
@@ -415,11 +454,13 @@ function ProjectPage() {
       }
 
       // Extract readable summary - if AI only returned code, show which files changed
-      let plain = raw.replace(/```[\s\S]*?```/g, "").replace(/CHANGES:[^\n]*/i, "").trim();
+      let plain = raw.replace(/FILE_PATH:[^\n]*/g, "").replace(/```[\s\S]*?```/g, "").replace(/CHANGES:[^\n]*/i, "").trim();
       if (!plain && html && isReactSource) {
-        const changedFiles = [...raw.matchAll(/```(?:tsx|ts|jsx|js|typescript)(?:\s+([\w./\-\s]+?))?\s*\n/g)]
-          .map(m => m[1]?.trim().split("/").pop() ?? "file")
-          .filter(Boolean);
+        const fromMarkers = [...raw.matchAll(/FILE_PATH:\s*([^\n]+)/g)].map((m) => m[1].trim().split("/").pop() ?? "file");
+        const fromFences = fromMarkers.length === 0
+          ? [...raw.matchAll(/```(?:tsx|ts|jsx|js|typescript)(?:\s+([\w./\-\s]+?))?\s*\n/g)].map((m) => m[1]?.trim().split("/").pop() ?? "file")
+          : [];
+        const changedFiles = [...fromMarkers, ...fromFences].filter(Boolean);
         plain = changedFiles.length > 0
           ? `Updated: ${changedFiles.join(", ")}`
           : "Files updated.";
