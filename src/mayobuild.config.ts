@@ -97,6 +97,66 @@ export function getActuallyChangedFiles(
   return changed;
 }
 
+// ─── 2b. DESTRUCTIVE-EDIT DETECTOR ───────────────────────────────────────────
+// PROBLEM: An AI edit can pass the "did anything change" check above while still
+// being destructive — e.g. asked to add ONE feature to a shared lib file, it
+// instead deletes everything else in that file and replaces it with a small
+// mock implementation. This silently breaks every other file that imported the
+// now-missing exports, and the build only fails downstream, far from the real
+// cause, making it hard to trace.
+//
+// FIX: For files that already existed (not new), flag a likely destructive edit
+// when either: (a) the new file is less than half the size of the old one, or
+// (b) the new file exports noticeably fewer top-level names than the old one
+// did. This is a heuristic, not a guarantee — it will not catch every bad edit,
+// but it catches the common "wiped a shared file" pattern cheaply, before push.
+export type DestructiveEditWarning = {
+  path: string;
+  oldExportCount: number;
+  newExportCount: number;
+  oldSize: number;
+  newSize: number;
+  reason: string;
+};
+
+function countTopLevelExports(code: string): number {
+  const matches = code.match(/^export\s+(async\s+)?(function|const|class|type|interface)\s+\w+/gm);
+  return matches ? matches.length : 0;
+}
+
+export function detectDestructiveEdits(
+  oldFiles: Record<string, string>,
+  changedFiles: Record<string, string>,
+): DestructiveEditWarning[] {
+  const warnings: DestructiveEditWarning[] = [];
+  for (const [path, newContent] of Object.entries(changedFiles)) {
+    const oldContent = oldFiles[path];
+    if (!oldContent) continue; // new file — nothing to lose, not destructive
+    const oldSize = oldContent.length;
+    const newSize = newContent.length;
+    const oldExports = countTopLevelExports(oldContent);
+    const newExports = countTopLevelExports(newContent);
+
+    const shrankALot = oldSize > 200 && newSize < oldSize * 0.5;
+    const lostExports = oldExports >= 2 && newExports < oldExports * 0.6;
+
+    if (shrankALot || lostExports) {
+      const reasons: string[] = [];
+      if (shrankALot) reasons.push(`file shrank from ${oldSize} to ${newSize} characters`);
+      if (lostExports) reasons.push(`exports dropped from ${oldExports} to ${newExports}`);
+      warnings.push({
+        path,
+        oldExportCount: oldExports,
+        newExportCount: newExports,
+        oldSize,
+        newSize,
+        reason: reasons.join(" and "),
+      });
+    }
+  }
+  return warnings;
+}
+
 // ─── 3. FILE MATCHER ─────────────────────────────────────────────────────────
 // PROBLEM: When AI edits a file, it sometimes doesn't say which file it changed.
 // The code picks the wrong file — e.g. scan.tsx gets updated instead of bible.tsx.
