@@ -1,4 +1,4 @@
-import { cleanFilePaths, getActuallyChangedFiles, matchFileFromCode, validateFilesForPush, deriveVercelUrl, extractFilesFromScaffold, rebuildScaffold, EDIT_SYSTEM_PROMPT, BUILD_SYSTEM_PROMPT, AUTONOMOUS_THINKING_PROMPT, buildKnowledgeBlock, STARTER_TEMPLATES } from "@/mayobuild.config";
+import { cleanFilePath, cleanFilePaths, getActuallyChangedFiles, matchFileFromCode, validateFilesForPush, deriveVercelUrl, extractFilesFromScaffold, rebuildScaffold, EDIT_SYSTEM_PROMPT, BUILD_SYSTEM_PROMPT, AUTONOMOUS_THINKING_PROMPT, buildKnowledgeBlock, STARTER_TEMPLATES } from "@/mayobuild.config";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useServerFn } from "@tanstack/react-start";
@@ -369,11 +369,7 @@ function ProjectPage() {
               const rawPath = m[1]?.trim() ?? "";
               const code = m[2].trim();
               if (rawPath) {
-                // Strip ZIP root folder prefix if present
-                const cleanedPath = rawPath.includes("/") && !rawPath.startsWith("src/") && !rawPath.startsWith("public/")
-                  ? rawPath.split("/").slice(1).join("/")
-                  : rawPath;
-                updatedFiles[cleanedPath] = code;
+                updatedFiles[cleanFilePath(rawPath)] = code;
               } else {
                 // AI returned code without a filename — use matchFileFromCode guardian from mayobuild.config
                 // This reads clues inside the code itself (route path, component name, imports, prompt words)
@@ -568,9 +564,7 @@ function ProjectPage() {
               : {};
         cleanFiles = {};
         for (const [path, fileContent] of Object.entries(filesToPush)) {
-          // Remove leading folder prefix (e.g. "lite-read-main/" -> "")
-          const cleanPath = path.replace(/^[^/]+\//, "");
-          cleanFiles[cleanPath] = fileContent;
+          cleanFiles[cleanFilePath(path)] = fileContent;
         }
       }
       // Validate before pushing — block empty commits and bad paths
@@ -592,7 +586,9 @@ function ProjectPage() {
       if (res.method === "github" && data?.project?.github_repo) {
         const repo = data.project.github_repo;
         setDeployStatus("checking");
-        // Start loop after 75 seconds (enough time for Vercel to begin)
+        // Start loop after 10 seconds (just enough for Vercel to register the push and
+        // create a new deployment entry — the loop itself now polls every 8s for up to
+        // 2 minutes until the build actually finishes, instead of checking once early).
         setTimeout(async () => {
           try {
             const loopResult = await runLoop({
@@ -603,17 +599,17 @@ function ProjectPage() {
                 userPrompt: messages[messages.length - 2]?.content ?? "",
               }
             });
-            if (loopResult.ok) {
+            if (loopResult.success) {
               setDeployStatus("success");
               toast.success("✅ All checks passed — GitHub, Vercel, and live site confirmed.", { description: loopResult.liveUrl ?? "" });
             } else {
-              setDeployStatus("fixed");
-              toast.success("🔧 Issue detected and auto-fixed — redeploying.");
+              setDeployStatus("idle");
+              toast.error(loopResult.results[loopResult.results.length - 1] ?? "Deploy verification found an issue.");
             }
           } catch {
             setDeployStatus("idle");
           }
-        }, 75_000);
+        }, 10_000);
       }
 
       if (res.method !== "github") window.open(res.url, "_blank", "noopener");
