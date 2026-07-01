@@ -40,7 +40,7 @@ function AdminPage() {
           <ShieldAlert className="h-10 w-10 text-destructive mx-auto mb-3" />
           <h1 className="text-xl font-bold mb-1">Restricted area</h1>
           <p className="text-sm text-muted-foreground mb-4">
-            The overseer dashboard is locked to <span className="font-mono">{ADMIN_EMAIL}</span> only.
+            This area is restricted to administrators.
           </p>
           <Link to="/" className="mb-btn"><ArrowLeft className="h-4 w-4" /> Back to workspace</Link>
         </div>
