@@ -45,8 +45,10 @@ export const callRouter = createServerFn({ method: "POST" })
         ...(data.history ?? []).map((m) => ({ role: m.role, content: m.content })),
         { role: "user" as const, content: data.prompt },
       ];
+      const rank = await buildRanker(admin, data.task).catch(() => undefined);
       const result = await routeChat(data.task as RouteTask, messages, {
         preferProvider: data.preferProvider,
+        rank,
       });
 
       await admin.from("generations").insert({
