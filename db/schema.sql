@@ -157,8 +157,13 @@ create policy "collab write owner" on public.project_collaborators for all to au
 );
 
 -- Generations / mobile_builds: project access
+-- Null-project rows (generations made without a project context) must only be readable
+-- by the row's owner. The previous policy exposed them to every authenticated user.
 drop policy if exists "gen read" on public.generations;
-create policy "gen read" on public.generations for select to authenticated using (project_id is null or public.has_project_access(project_id));
+create policy "gen read" on public.generations for select to authenticated using (
+  user_id = auth.uid()
+  or (project_id is not null and public.has_project_access(project_id))
+);
 drop policy if exists "gen insert own" on public.generations;
 create policy "gen insert own" on public.generations for insert to authenticated with check (user_id = auth.uid());
 
