@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser } from "@/integrations/mysupabase/middleware.server";
 import { routeChat, routeImage, type RouteTask, PROVIDERS_META } from "./router/index.server";
+import { buildRanker } from "./orchestrator.functions";
 
 const RouteInput = z.object({
   task: z.enum(["complex_app", "mobile_code", "website", "image"]),
