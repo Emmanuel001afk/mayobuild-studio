@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { useAuth, ADMIN_EMAIL } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/use-auth";
 import { getAdminOverview } from "@/lib/admin.functions";
 import { AdminFeatureToggles } from "@/components/AdminFeatureToggles";
 import { AdminCustomDomain } from "@/components/AdminCustomDomain";
