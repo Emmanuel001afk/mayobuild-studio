@@ -357,7 +357,7 @@ function ProjectPage() {
       if (mode === "Build") {
         if (isMobile) {
           const code = extractCode(raw) ?? raw;
-          html = `<!doctype html><html><body style="margin:0;font:13px ui-monospace,Menlo,monospace;background:#0b0f1a;color:#e6edf3;padding:14px;white-space:pre-wrap;word-break:break-word">${code.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!)}</body></html>`;
+          html = `<!doctype html><html><body style="margin:0;font:13px ui-monospace,Menlo,monospace;background:#0b0f1a;color:#e6edf3;padding:14px;white-space:pre-wrap;word-break:break-word">${code.replace(/[&<>]/g, (c: string) => (({ "&": "&amp;", "<": "&lt;", ">": "&gt;" } as Record<string, string>)[c]!))}</body></html>`;
           summary = diffSummary(previewHtml || null, code);
         } else if (isReactSource) {
           // Parse files using the FILE_PATH: marker the system prompt now mandates,
