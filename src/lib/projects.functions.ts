@@ -204,7 +204,7 @@ export const publishSite = createServerFn({ method: "POST" })
         "Content-Type": "application/json",
       };
 
-      const results: { path: string; ok: boolean }[] = [];
+      const results: { path: string; ok: boolean; skipped?: boolean; reason?: string }[] = [];
 
       // Clean file paths: strip ZIP root folder prefix (e.g. "lite-read-main/src/..." -> "src/...")
       // This ensures files land at the correct location in GitHub, not inside a subfolder.
