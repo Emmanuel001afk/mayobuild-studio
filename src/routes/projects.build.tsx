@@ -99,7 +99,7 @@ function BuildProject() {
         }
       });
 
-      const raw = res?.content ?? res?.output ?? "";
+      const raw = (res as any)?.text ?? (res as any)?.content ?? (res as any)?.output ?? "";
 
       // Step 4: Extract the generated code
       const codeMatch = raw.match(/```(?:tsx?|jsx?)\s+\S+\s*\n([\s\S]*?)```/);

@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser } from "@/integrations/mysupabase/middleware.server";
 import { routeChat, routeImage, type RouteTask, PROVIDERS_META } from "./router/index.server";
+import { buildRanker } from "./orchestrator.functions";
 
 const RouteInput = z.object({
   task: z.enum(["complex_app", "mobile_code", "website", "image"]),
@@ -44,8 +45,10 @@ export const callRouter = createServerFn({ method: "POST" })
         ...(data.history ?? []).map((m) => ({ role: m.role, content: m.content })),
         { role: "user" as const, content: data.prompt },
       ];
+      const rank = await buildRanker(admin, data.task).catch(() => undefined);
       const result = await routeChat(data.task as RouteTask, messages, {
         preferProvider: data.preferProvider,
+        rank,
       });
 
       await admin.from("generations").insert({

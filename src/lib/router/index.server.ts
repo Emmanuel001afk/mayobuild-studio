@@ -5,6 +5,7 @@ import {
   Groq,
   HuggingFace,
   Mistral,
+  OpenAI,
   OpenRouter,
   huggingfaceImage,
 } from "./providers/all.server";
@@ -12,24 +13,31 @@ import type { ChatMessage, ChatResult, Provider } from "./providers/types";
 
 export type RouteTask = "complex_app" | "mobile_code" | "website" | "image";
 
-/** Routing rules per user spec. */
+/** Static routing rules per user spec. The Orchestrator brain re-ranks these at runtime. */
 const CHAIN: Record<RouteTask, Provider[]> = {
-  // Building from scratch: Gemini first (smartest, best reasoning for generating full apps)
-  complex_app: [Gemini, DeepSeek, Groq, OpenRouter, Mistral, Cerebras, HuggingFace],
-  // Mobile building: same as complex_app
-  mobile_code: [Gemini, DeepSeek, Groq, OpenRouter, Mistral, Cerebras, HuggingFace],
-  // Editing existing sites: DeepSeek first (best for understanding and editing code)
-  website: [DeepSeek, Gemini, Groq, OpenRouter, Mistral, Cerebras, HuggingFace],
-  image: [], // handled separately
+  complex_app: [Gemini, DeepSeek, OpenAI, Groq, OpenRouter, Mistral, Cerebras, HuggingFace],
+  mobile_code: [Gemini, DeepSeek, OpenAI, Groq, OpenRouter, Mistral, Cerebras, HuggingFace],
+  website: [DeepSeek, Gemini, OpenAI, Groq, OpenRouter, Mistral, Cerebras, HuggingFace],
+  image: [],
 };
+
+const PROVIDER_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(p: Promise<T>, provider: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${provider} timed out after ${PROVIDER_TIMEOUT_MS}ms`)), PROVIDER_TIMEOUT_MS);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+}
 
 export async function routeChat(
   task: RouteTask,
   messages: ChatMessage[],
-  opts?: { preferProvider?: string },
+  opts?: { preferProvider?: string; rank?: (providers: Provider[]) => Provider[] },
 ): Promise<ChatResult & { attempts: { provider: string; error: string }[] }> {
   if (task === "image") throw new Error("Use routeImage for image tasks");
   let chain = CHAIN[task];
+  if (opts?.rank) chain = opts.rank(chain);
   if (opts?.preferProvider) {
     const head = chain.find((p) => p.name === opts.preferProvider);
     if (head) chain = [head, ...chain.filter((p) => p !== head)];
@@ -38,13 +46,12 @@ export async function routeChat(
   const attempts: { provider: string; error: string }[] = [];
   for (const provider of chain) {
     try {
-      const out = await provider.chat(messages, { temperature });
+      const out = await withTimeout(provider.chat(messages, { temperature }), provider.name);
       return { ...out, attempts };
     } catch (e) {
       attempts.push({ provider: provider.name, error: (e as Error).message });
     }
   }
-  // Log the detailed provider failures server-side only; throw a sanitized error to the caller.
   console.error("[router] all providers failed", { task, attempts });
   throw new Error("AI generation failed. Please try again.");
 }
@@ -54,8 +61,8 @@ export async function routeImage(prompt: string): Promise<string> {
 }
 
 export const PROVIDERS_META = {
-  complex_app: ["Gemini 2.5", "DeepSeek", "Groq", "OpenRouter", "Mistral", "Cerebras", "HuggingFace"],
-  mobile_code: ["Gemini 2.5", "DeepSeek", "Groq", "OpenRouter", "Mistral", "Cerebras", "HuggingFace"],
-  website: ["DeepSeek", "Gemini 2.5", "Groq", "OpenRouter", "Mistral", "Cerebras", "HuggingFace"],
+  complex_app: ["Gemini 2.5", "DeepSeek", "OpenAI", "Groq", "OpenRouter", "Mistral", "Cerebras", "HuggingFace"],
+  mobile_code: ["Gemini 2.5", "DeepSeek", "OpenAI", "Groq", "OpenRouter", "Mistral", "Cerebras", "HuggingFace"],
+  website: ["DeepSeek", "Gemini 2.5", "OpenAI", "Groq", "OpenRouter", "Mistral", "Cerebras", "HuggingFace"],
   image: ["Hugging Face (FLUX.1)"],
 };
