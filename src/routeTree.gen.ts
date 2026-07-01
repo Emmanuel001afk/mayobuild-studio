@@ -44,11 +44,10 @@ const ProjectsNewRoute = ProjectsNewRouteImport.update({
   path: '/projects/new',
   getParentRoute: () => rootRouteImport,
 } as any)
-
 const ProjectsBuildRoute = ProjectsBuildRouteImport.update({
   id: '/projects/build',
   path: '/projects/build',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdRoute = ProjectsIdRouteImport.update({
   id: '/projects/$id',
@@ -73,6 +72,7 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
+  '/projects/build': typeof ProjectsBuildRoute
   '/projects/new': typeof ProjectsNewRoute
   '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
@@ -83,6 +83,7 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
+  '/projects/build': typeof ProjectsBuildRoute
   '/projects/new': typeof ProjectsNewRoute
   '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
@@ -94,6 +95,7 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
+  '/projects/build': typeof ProjectsBuildRoute
   '/projects/new': typeof ProjectsNewRoute
   '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
@@ -106,6 +108,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/api/transcribe'
     | '/projects/$id'
+    | '/projects/build'
     | '/projects/new'
     | '/api/public/supabase-config'
   fileRoutesByTo: FileRoutesByTo
@@ -116,6 +119,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/api/transcribe'
     | '/projects/$id'
+    | '/projects/build'
     | '/projects/new'
     | '/api/public/supabase-config'
   id:
@@ -126,6 +130,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/api/transcribe'
     | '/projects/$id'
+    | '/projects/build'
     | '/projects/new'
     | '/api/public/supabase-config'
   fileRoutesById: FileRoutesById
@@ -137,6 +142,7 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   ApiTranscribeRoute: typeof ApiTranscribeRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
+  ProjectsBuildRoute: typeof ProjectsBuildRoute
   ProjectsNewRoute: typeof ProjectsNewRoute
   ApiPublicSupabaseConfigRoute: typeof ApiPublicSupabaseConfigRoute
 }
@@ -178,6 +184,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsNewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects/build': {
+      id: '/projects/build'
+      path: '/projects/build'
+      fullPath: '/projects/build'
+      preLoaderRoute: typeof ProjectsBuildRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$id': {
       id: '/projects/$id'
       path: '/projects/$id'
@@ -209,8 +222,8 @@ const rootRouteChildren: RootRouteChildren = {
   ResetPasswordRoute: ResetPasswordRoute,
   ApiTranscribeRoute: ApiTranscribeRoute,
   ProjectsIdRoute: ProjectsIdRoute,
+  ProjectsBuildRoute: ProjectsBuildRoute,
   ProjectsNewRoute: ProjectsNewRoute,
-    ProjectsBuildRoute,
   ApiPublicSupabaseConfigRoute: ApiPublicSupabaseConfigRoute,
 }
 export const routeTree = rootRouteImport

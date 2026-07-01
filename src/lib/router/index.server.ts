@@ -44,7 +44,9 @@ export async function routeChat(
       attempts.push({ provider: provider.name, error: (e as Error).message });
     }
   }
-  throw new Error(`All providers failed for task=${task}: ${JSON.stringify(attempts)}`);
+  // Log the detailed provider failures server-side only; throw a sanitized error to the caller.
+  console.error("[router] all providers failed", { task, attempts });
+  throw new Error("AI generation failed. Please try again.");
 }
 
 export async function routeImage(prompt: string): Promise<string> {
