@@ -25,7 +25,8 @@ async function openaiChat(opts: {
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new Error(`${opts.provider} ${res.status}: ${txt.slice(0, 400)}`);
+    console.error(`[provider:${opts.provider}] upstream error ${res.status}`, txt.slice(0, 400));
+    throw new Error(`${opts.provider} upstream error (${res.status})`);
   }
   const json: any = await res.json();
   const text = json.choices?.[0]?.message?.content ?? "";
