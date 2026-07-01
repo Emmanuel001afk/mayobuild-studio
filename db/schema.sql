@@ -90,9 +90,12 @@ begin
   values (new.id, 'My Workspace')
   returning id into ws_id;
 
-  -- Link any pending collaborator invites by email
+  -- Link pending collaborator invites by email, but DO NOT auto-accept.
+  -- The invited user must explicitly accept the invite after login. This prevents
+  -- attackers from hijacking pending invites by registering an unverified account
+  -- with the victim's email address.
   update public.project_collaborators
-    set user_id = new.id, accepted_at = now()
+    set user_id = new.id
     where invited_email = new.email and user_id is null;
 
   return new;
