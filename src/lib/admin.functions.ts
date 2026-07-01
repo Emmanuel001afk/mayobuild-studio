@@ -1,13 +1,25 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireUser } from "@/integrations/mysupabase/middleware.server";
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "akintundeemmanuel14@gmail.com";
+function getAllowedAdminEmail(): string | null {
+  const v = process.env.ADMIN_EMAIL;
+  return v ? v.toLowerCase() : null;
+}
 
 function assertAdmin(email: string | undefined | null) {
-  if (!email || email.toLowerCase() !== ADMIN_EMAIL) {
+  const allowed = getAllowedAdminEmail();
+  if (!allowed || !email || email.toLowerCase() !== allowed) {
     throw new Error("Forbidden: admin only");
   }
 }
+
+export const checkIsAdmin = createServerFn({ method: "GET" })
+  .middleware([requireUser])
+  .handler(async ({ context }) => {
+    const allowed = getAllowedAdminEmail();
+    const email = context.user.email?.toLowerCase() ?? null;
+    return { isAdmin: !!allowed && !!email && email === allowed };
+  });
 
 export const getAdminOverview = createServerFn({ method: "GET" })
   .middleware([requireUser])
