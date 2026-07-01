@@ -46,10 +46,31 @@ export const importZipProject = createServerFn({ method: "POST" })
     let primaryHtml: string | null = null;
 
     const files = Object.values(zip.files).filter((f) => !f.dir);
+
+    // Zip-bomb guards: cap file count and total uncompressed size before decompressing.
+    const MAX_FILES = 500;
+    const MAX_UNCOMPRESSED = 50 * 1024 * 1024; // 50 MB
+    if (files.length > MAX_FILES) {
+      throw new Error(`Archive contains too many files (${files.length}); limit is ${MAX_FILES}.`);
+    }
+    let projectedUncompressed = 0;
+    for (const f of files) {
+      const size = (f as any)?._data?.uncompressedSize ?? 0;
+      projectedUncompressed += size;
+      if (projectedUncompressed > MAX_UNCOMPRESSED) {
+        throw new Error("Archive uncompressed size exceeds the 50 MB limit.");
+      }
+    }
+
+    let extractedBytes = 0;
     for (const f of files) {
       if (f.name.includes("..") || f.name.startsWith("/")) continue;
       if (TEXT_EXT.test(f.name)) {
         const text = await f.async("string");
+        extractedBytes += text.length;
+        if (extractedBytes > MAX_UNCOMPRESSED) {
+          throw new Error("Archive uncompressed size exceeds the 50 MB limit.");
+        }
         const { out, removed } = cleanText(text);
         totalRemoved += removed;
         entries.push({ path: f.name, content: out, binary: false, removed });
