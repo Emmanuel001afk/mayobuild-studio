@@ -1,17 +1,25 @@
 import { useEffect, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { getSupabase } from "@/integrations/mysupabase/client";
-
-export const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL ?? "akintundeemmanuel14@gmail.com";
+import { checkIsAdmin } from "@/lib/admin.functions";
 
 export function useAuth() {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     let unsub: (() => void) | undefined;
     let cancelled = false;
+
+    const refreshAdmin = async (u: User | null) => {
+      if (!u) { setIsAdmin(false); return; }
+      try {
+        const r = await checkIsAdmin();
+        if (!cancelled) setIsAdmin(!!r.isAdmin);
+      } catch { if (!cancelled) setIsAdmin(false); }
+    };
 
     void (async () => {
       try {
@@ -21,11 +29,13 @@ export function useAuth() {
         setSession(session);
         setUser(session?.user ?? null);
         setLoading(false);
+        void refreshAdmin(session?.user ?? null);
 
         const { data } = sb.auth.onAuthStateChange((_e, s) => {
           setSession(s);
           setUser(s?.user ?? null);
           setLoading(false);
+          void refreshAdmin(s?.user ?? null);
         });
         unsub = () => data.subscription.unsubscribe();
       } catch (error) {
@@ -43,7 +53,6 @@ export function useAuth() {
     };
   }, []);
 
-  const isAdmin = !!user?.email && user.email.toLowerCase() === ADMIN_EMAIL;
   return { session, user, loading, isAdmin };
 }
 
