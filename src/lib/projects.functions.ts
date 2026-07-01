@@ -411,6 +411,15 @@ export const saveApiKey = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => ApiKeyInput.parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
+    // Ownership check — prevent any authenticated user from overwriting another owner's
+    // vault entry via the (project_id, service) unique constraint.
+    const { data: p } = await admin
+      .from("projects")
+      .select("id")
+      .eq("id", data.projectId)
+      .eq("owner_id", user.id)
+      .maybeSingle();
+    if (!p) throw new Error("Forbidden: project not found or not owned by you");
     const { error } = await admin
       .from("project_api_keys")
       .upsert(
