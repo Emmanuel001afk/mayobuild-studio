@@ -597,7 +597,7 @@ function ProjectPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a"); a.href = url; a.download = res.filename; a.click();
       URL.revokeObjectURL(url);
-      toast.success("Android (Capacitor) ZIP downloaded");
+      toast.success("Android (Expo) ZIP downloaded — unzip, run `npm install`, then `eas build -p android`");
     } catch (e: any) { setErr(e.message); toast.error(e.message); }
     finally { setWrapBusy(false); }
   }
