@@ -71,11 +71,15 @@ function extractSql(text: string): string | null {
 }
 
 function extractHtml(text: string): string | null {
-  const m = text.match(/```(?:html)?\s*\n([\s\S]*?)```/i);
+  // Require an explicit ```html fence OR a real HTML document — do NOT grab
+  // the first arbitrary fenced block (that was catching ```tsx code and
+  // saving React source as if it were a raw HTML page).
+  const m = text.match(/```html\s*\n([\s\S]*?)```/i);
   if (m) return m[1].trim();
   if (/<!doctype html|<html[\s>]/i.test(text)) return text.trim();
   return null;
 }
+
 function extractCode(text: string): string | null {
   const m = text.match(/```(?:tsx|ts|jsx|js|html)?\s*\n([\s\S]*?)```/i);
   return m ? m[1].trim() : text.trim() || null;
