@@ -71,11 +71,15 @@ function extractSql(text: string): string | null {
 }
 
 function extractHtml(text: string): string | null {
-  const m = text.match(/```(?:html)?\s*\n([\s\S]*?)```/i);
+  // Require an explicit ```html fence OR a real HTML document — do NOT grab
+  // the first arbitrary fenced block (that was catching ```tsx code and
+  // saving React source as if it were a raw HTML page).
+  const m = text.match(/```html\s*\n([\s\S]*?)```/i);
   if (m) return m[1].trim();
   if (/<!doctype html|<html[\s>]/i.test(text)) return text.trim();
   return null;
 }
+
 function extractCode(text: string): string | null {
   const m = text.match(/```(?:tsx|ts|jsx|js|html)?\s*\n([\s\S]*?)```/i);
   return m ? m[1].trim() : text.trim() || null;
@@ -469,9 +473,41 @@ function ProjectPage() {
             // If AI gave a text-only reply (question/answer with no code) — keep previewFiles intact
           }
         } else {
-          const found = extractHtml(raw);
-          if (found) { html = found; summary = diffSummary(previewHtml || null, found); }
+          // FIRST BUILD (no previewHtml yet, not mobile): the AI outputs a full
+          // React/TypeScript project. Parse every FILE_PATH: / fenced tsx block
+          // and seed a scaffold, so this project starts as isReactSource=true
+          // and every subsequent edit uses the React edit path — NOT as a
+          // plain-HTML page.
+          const tsxBlocks: { path: string; code: string }[] = [];
+          for (const m of raw.matchAll(/FILE_PATH:\s*([^\n]+)\s*\n+```(?:tsx|ts|jsx|js|typescript|css|json|html)?\s*\n([\s\S]*?)```/g)) {
+            tsxBlocks.push({ path: m[1].trim(), code: m[2].trim() });
+          }
+          if (tsxBlocks.length === 0) {
+            for (const m of raw.matchAll(/```(?:tsx|ts|jsx|js|typescript)\s+([\w./\-]+)\s*\n([\s\S]*?)```/g)) {
+              tsxBlocks.push({ path: m[1].trim(), code: m[2].trim() });
+            }
+          }
+          if (tsxBlocks.length > 0) {
+            const seeded: Record<string, string> = {};
+            for (const b of tsxBlocks) seeded[cleanFilePath(b.path)] = b.code;
+            // Ensure App entry exists so preview + push have something to render.
+            if (!seeded["src/App.tsx"] && !seeded["src/main.tsx"]) {
+              seeded["src/App.tsx"] = tsxBlocks[0].code;
+            }
+            Object.assign(updatedFiles, seeded);
+            setPreviewFiles(seeded);
+            setChangedFiles(seeded);
+            const fileMap = Object.entries(seeded)
+              .map(([p, c]) => `/* ===== FILE: ${p} ===== */\n${c}`)
+              .join("\n\n");
+            html = `<!doctype html><html><head><meta charset="utf-8"><title>${(data?.project?.name ?? "Project").toString().replace(/[<>]/g,"")}</title><script type="text/plain" id="react-source">${fileMap}</script></head><body style="margin:0;font:14px system-ui;background:#0b0f1a;color:#e6edf3;padding:20px"><h2>React / TypeScript project ready</h2><p>${Object.keys(seeded).length} file${Object.keys(seeded).length===1?"":"s"} generated. Push to GitHub to see the live Vercel preview.</p><pre style="background:#111827;padding:12px;border-radius:8px;max-height:60vh;overflow:auto">${Object.keys(seeded).map(p=>"• "+p).join("\n")}</pre></body></html>`;
+            summary = { added: Object.keys(seeded), changed: [], removed: [] };
+          } else {
+            const found = extractHtml(raw);
+            if (found) { html = found; summary = diffSummary(previewHtml || null, found); }
+          }
         }
+
         // Only append the AI's own "CHANGES:" line when a real change was verified —
         // otherwise it would mask the warning above with the AI's unverified claim.
         if (changesLine && summary && hasRealChange) summary.changed.unshift(changesLine);
