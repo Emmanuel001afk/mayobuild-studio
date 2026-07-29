@@ -204,3 +204,22 @@ create policy "pak owner all" on public.project_api_keys for all to authenticate
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 grant select, insert, update, delete on public.project_api_keys to authenticated;
 grant all on public.project_api_keys to service_role;
+
+-- =========== User integrations (GitHub / database / deployment / own AI key) ===========
+create table if not exists public.user_integrations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  provider text not null,            -- 'github' | 'supabase' | 'deploy' | 'ai'
+  label text,                        -- e.g. repo owner, project ref, vercel project
+  secret text,                       -- token / key (server-only)
+  config jsonb default '{}'::jsonb,  -- extra non-secret settings
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique (user_id, provider)
+);
+alter table public.user_integrations enable row level security;
+drop policy if exists "ui owner all" on public.user_integrations;
+create policy "ui owner all" on public.user_integrations for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+grant select, insert, update, delete on public.user_integrations to authenticated;
+grant all on public.user_integrations to service_role;
