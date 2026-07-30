@@ -191,7 +191,11 @@ export const publishSite = createServerFn({ method: "POST" })
     if (!project) throw new Error("Project not found");
     if (project.owner_id !== user.id) throw new Error("Only the owner can publish");
 
-    const githubToken = process.env.GITHUB_TOKEN;
+    // Per-user GitHub token first (falls back to the platform token only if the
+    // user has not connected their own). A single global token was why every push
+    // could only ever reach one account's repos.
+    const { resolveGithubToken } = await import("@/lib/integrations.server");
+    const githubToken = await resolveGithubToken(admin, user.id);
     const isReactSource = data.html.includes('id="react-source"') || (data.files && Object.keys(data.files).length > 0);
 
     // --- REACT PATH: push to GitHub → Vercel auto-redeploys ---
@@ -550,7 +554,11 @@ export const readGitHubFile = createServerFn({ method: "POST" })
     const { data: project } = await admin
       .from("projects").select("github_repo").eq("id", data.projectId).eq("owner_id", user.id).maybeSingle();
     if (!project?.github_repo) throw new Error("No GitHub repo linked to this project.");
-    const githubToken = process.env.GITHUB_TOKEN;
+    // Per-user GitHub token first (falls back to the platform token only if the
+    // user has not connected their own). A single global token was why every push
+    // could only ever reach one account's repos.
+    const { resolveGithubToken } = await import("@/lib/integrations.server");
+    const githubToken = await resolveGithubToken(admin, user.id);
     if (!githubToken) throw new Error("GitHub token not configured.");
     const res = await fetch(`https://api.github.com/repos/${project.github_repo}/contents/${data.filePath}`, {
       headers: { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json" },
@@ -574,7 +582,11 @@ export const listGitHubFiles = createServerFn({ method: "POST" })
     const { data: project } = await admin
       .from("projects").select("github_repo").eq("id", data.projectId).eq("owner_id", user.id).maybeSingle();
     if (!project?.github_repo) throw new Error("No GitHub repo linked.");
-    const githubToken = process.env.GITHUB_TOKEN;
+    // Per-user GitHub token first (falls back to the platform token only if the
+    // user has not connected their own). A single global token was why every push
+    // could only ever reach one account's repos.
+    const { resolveGithubToken } = await import("@/lib/integrations.server");
+    const githubToken = await resolveGithubToken(admin, user.id);
     if (!githubToken) throw new Error("GitHub token not configured.");
     const res = await fetch(`https://api.github.com/repos/${project.github_repo}/git/trees/HEAD?recursive=1`, {
       headers: { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json" },
@@ -608,7 +620,11 @@ export const selfFixCommit = createServerFn({ method: "POST" })
       .from("projects").select("github_repo,owner_id").eq("id", data.projectId).maybeSingle();
     if (!project) throw new Error("Project not found.");
     if (project.owner_id !== user.id) throw new Error("Only the owner can trigger self-fix.");
-    const githubToken = process.env.GITHUB_TOKEN;
+    // Per-user GitHub token first (falls back to the platform token only if the
+    // user has not connected their own). A single global token was why every push
+    // could only ever reach one account's repos.
+    const { resolveGithubToken } = await import("@/lib/integrations.server");
+    const githubToken = await resolveGithubToken(admin, user.id);
     if (!githubToken) throw new Error("GitHub token not configured.");
     const baseUrl = `https://api.github.com/repos/${project.github_repo}/contents`;
     const headers = {
@@ -783,7 +799,11 @@ export const autoFixFromVercelError = createServerFn({ method: "POST" })
   }).parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
-    const githubToken = process.env.GITHUB_TOKEN;
+    // Per-user GitHub token first (falls back to the platform token only if the
+    // user has not connected their own). A single global token was why every push
+    // could only ever reach one account's repos.
+    const { resolveGithubToken } = await import("@/lib/integrations.server");
+    const githubToken = await resolveGithubToken(admin, user.id);
     if (!githubToken) throw new Error("GitHub token not configured.");
 
     // Get full file tree so AI knows what files exist
@@ -936,7 +956,11 @@ export const runScheduledHealthCheck = createServerFn({ method: "POST" })
 
       // Check GitHub reachability
       if (project.github_repo) {
-        const githubToken = process.env.GITHUB_TOKEN;
+        // Per-user GitHub token first (falls back to the platform token only if the
+    // user has not connected their own). A single global token was why every push
+    // could only ever reach one account's repos.
+    const { resolveGithubToken } = await import("@/lib/integrations.server");
+    const githubToken = await resolveGithubToken(admin, user.id);
         const res = await fetch(`https://api.github.com/repos/${project.github_repo}`, {
           headers: { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json" },
         });
@@ -977,7 +1001,11 @@ export const pullFromGitHub = createServerFn({ method: "POST" })
     const { data: project } = await admin
       .from("projects").select("github_repo,html_output").eq("id", data.projectId).eq("owner_id", user.id).maybeSingle();
     if (!project?.github_repo) throw new Error("No GitHub repo linked.");
-    const githubToken = process.env.GITHUB_TOKEN;
+    // Per-user GitHub token first (falls back to the platform token only if the
+    // user has not connected their own). A single global token was why every push
+    // could only ever reach one account's repos.
+    const { resolveGithubToken } = await import("@/lib/integrations.server");
+    const githubToken = await resolveGithubToken(admin, user.id);
     const headers = { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json" };
 
     // Get full file tree
