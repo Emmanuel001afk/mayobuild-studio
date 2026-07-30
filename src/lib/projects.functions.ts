@@ -960,7 +960,8 @@ export const runScheduledHealthCheck = createServerFn({ method: "POST" })
     // user has not connected their own). A single global token was why every push
     // could only ever reach one account's repos.
     const { resolveGithubToken } = await import("@/lib/integrations.server");
-    const githubToken = await resolveGithubToken(admin, user.id);
+    const githubToken = await resolveGithubToken(admin, data.userId);
+
         const res = await fetch(`https://api.github.com/repos/${project.github_repo}`, {
           headers: { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json" },
         });
