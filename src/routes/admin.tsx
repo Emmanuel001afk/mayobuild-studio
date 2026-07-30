@@ -54,7 +54,10 @@ function AdminPage() {
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <ShieldAlert className="h-6 w-6 text-primary" /> Overseer dashboard
         </h1>
-        <Link to="/" className="mb-btn-ghost"><ArrowLeft className="h-4 w-4" /> Workspace</Link>
+        <div className="flex gap-2">
+          <Link to="/console" className="mb-btn">AI Ops Console</Link>
+          <Link to="/" className="mb-btn-ghost"><ArrowLeft className="h-4 w-4" /> Workspace</Link>
+        </div>
       </div>
 
       {err && <div className="mb-card p-4 text-destructive mb-4">{err}</div>}
