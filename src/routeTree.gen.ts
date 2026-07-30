@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
@@ -22,6 +23,11 @@ import { Route as ApiPublicSupabaseConfigRouteImport } from './routes/api/public
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
   path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConsoleRoute = ConsoleRouteImport.update({
+  id: '/console',
+  path: '/console',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthRoute = AuthRouteImport.update({
@@ -69,6 +75,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/auth': typeof AuthRoute
+  '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
@@ -80,6 +87,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/auth': typeof AuthRoute
+  '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
@@ -92,6 +100,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/auth': typeof AuthRoute
+  '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
@@ -105,6 +114,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/auth'
+    | '/console'
     | '/reset-password'
     | '/api/transcribe'
     | '/projects/$id'
@@ -116,6 +126,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/auth'
+    | '/console'
     | '/reset-password'
     | '/api/transcribe'
     | '/projects/$id'
@@ -127,6 +138,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/auth'
+    | '/console'
     | '/reset-password'
     | '/api/transcribe'
     | '/projects/$id'
@@ -139,6 +151,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
   AuthRoute: typeof AuthRoute
+  ConsoleRoute: typeof ConsoleRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   ApiTranscribeRoute: typeof ApiTranscribeRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
@@ -154,6 +167,13 @@ declare module '@tanstack/react-router' {
       path: '/reset-password'
       fullPath: '/reset-password'
       preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/console': {
+      id: '/console'
+      path: '/console'
+      fullPath: '/console'
+      preLoaderRoute: typeof ConsoleRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth': {
@@ -219,6 +239,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
   AuthRoute: AuthRoute,
+  ConsoleRoute: ConsoleRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   ApiTranscribeRoute: ApiTranscribeRoute,
   ProjectsIdRoute: ProjectsIdRoute,
