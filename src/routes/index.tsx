@@ -10,7 +10,7 @@ import { useProjectPresence } from "@/hooks/use-presence";
 import { toast } from "sonner";
 import {
   Sparkles, Plus, LogOut, Globe, Smartphone, Users, Eye, FileText,
-  Cpu, Mic, Zap, Loader2, ShieldAlert, ExternalLink, Trash2, Layers,
+  Cpu, Mic, Zap, Loader2, ShieldAlert, ExternalLink, Trash2, Layers, Bot,
 } from "lucide-react";
 
 
