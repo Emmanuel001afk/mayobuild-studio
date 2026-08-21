@@ -1,4 +1,4 @@
-// src/lib/local-model-tab.client.ts
+// src/lib/local-model-tab.browser.ts
 // Runs INSIDE your open browser tab (not on the server). Loads your
 // downloaded model via wllama, connects to /api/hub-relay, and answers
 // whatever prompts get forwarded to it. Keep this tab open (can be

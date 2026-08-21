@@ -56,7 +56,7 @@ function AemPage() {
   async function handleLoadModel() {
     try {
       setModelStatus("Waiting for file picker...");
-      const { pickModelFileFromDevice, startLocalModelTab } = await import("@/lib/local-model-tab.client");
+      const { pickModelFileFromDevice, startLocalModelTab } = await import("@/lib/local-model-tab.browser");
       const files = await pickModelFileFromDevice();
       const { deviceId } = await startLocalModelTab(files, (status) => setModelStatus(status));
       deviceIdRef.current = deviceId;
