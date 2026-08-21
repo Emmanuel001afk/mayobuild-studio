@@ -59,7 +59,7 @@ function NewProject() {
     setBusy(true); setErr(null);
     try {
       const p = await create({ data: { name, kind, description: desc || undefined, github_repo: githubRepo || undefined } });
-      navigate({ to: "/projects/$id", params: { id: p.id } });
+      navigate({ to: "/projects/$id", params: { id: p.id }, search: {} });
     } catch (e: any) { setErr(e.message); }
     finally { setBusy(false); }
   }

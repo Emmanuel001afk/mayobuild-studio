@@ -148,7 +148,7 @@ function BuildProject() {
         a.click();
         URL.revokeObjectURL(zipUrl);
       } catch {}
-      navigate({ to: "/projects/$id", params: { id: project.id }, search: { generated: "true" } });
+      navigate({ to: "/projects/$id", params: { id: project.id }, search: {} });
 
     } catch (e: any) {
       setErr(e.message ?? "Something went wrong. Please try again.");

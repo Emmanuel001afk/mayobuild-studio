@@ -40,6 +40,7 @@ export async function startLocalModelTab(
   onStatus?.("Loading model into browser memory...");
 
   const wllama = new Wllama({
+    default: "/wllama/",
     "single-thread/wllama.wasm": "/wllama/single-thread.wasm",
     "multi-thread/wllama.wasm": "/wllama/multi-thread.wasm",
   });
@@ -66,10 +67,12 @@ export async function startLocalModelTab(
     if (msg.type !== "prompt") return;
 
     try {
-      const answer = await wllama.createCompletion(msg.prompt, {
-        nPredict: 512,
-        sampling: { temp: 0.4 },
+      const completion = await wllama.createCompletion({
+        prompt: msg.prompt,
+        max_tokens: 512,
+        temperature: 0.4,
       });
+      const answer = completion.choices?.[0]?.text ?? "";
       ws.send(JSON.stringify({ type: "answer", requestId: msg.requestId, answer }));
     } catch (err) {
       ws.send(JSON.stringify({

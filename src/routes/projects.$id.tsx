@@ -20,8 +20,8 @@ import {
 } from "lucide-react";
 
 export const Route = createFileRoute("/projects/$id")({
-  validateSearch: (s: Record<string, unknown>) => ({
-    firstPrompt: typeof s.firstPrompt === "string" ? s.firstPrompt : "",
+  validateSearch: (s: Record<string, unknown>): { firstPrompt?: string } => ({
+    firstPrompt: typeof s.firstPrompt === "string" ? s.firstPrompt : undefined,
   }),
   head: () => ({ meta: [{ title: "Editor — Mayobuild Studio" }] }),
   component: ProjectPage,
