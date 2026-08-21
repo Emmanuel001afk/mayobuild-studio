@@ -1,23 +1,32 @@
 // src/lib/aem-key.functions.ts
-// Server function to create a new hub API key. Matches this project's
-// real createServerFn pattern (see src/lib/api/example.functions.ts).
-// The plain-text key is only ever returned here, once — after this call
-// only its hash exists in the database.
+// Creating/listing hub API keys is OWNER-ONLY: these endpoints are locked
+// to the signed-in admin account (ADMIN_EMAIL). Without this, anyone could
+// mint themselves an owner-scope key to the hub.
 
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { generateHubKey } from "./hub-keys.server";
+import { requireUser } from "@/integrations/mysupabase/middleware.server";
 import { getAdmin } from "@/integrations/mysupabase/admin.server";
 
+function assertAdmin(email: string | null | undefined) {
+  const allowed = process.env.ADMIN_EMAIL?.toLowerCase();
+  if (!allowed || !email || email.toLowerCase() !== allowed) {
+    throw new Error("Forbidden: admin only");
+  }
+}
+
 export const createHubKey = createServerFn({ method: "POST" })
+  .middleware([requireUser])
   .inputValidator(
     z.object({
-      label: z.string().min(1),
+      label: z.string().min(1).max(80),
       scope: z.enum(["owner", "restricted"]),
       rateLimitPerHour: z.number().min(1).max(10000).optional(),
-    })
+    }),
   )
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    assertAdmin(context.user.email);
     const generated = generateHubKey(data.scope, data.rateLimitPerHour ?? 50);
 
     const db = getAdmin();
@@ -36,11 +45,28 @@ export const createHubKey = createServerFn({ method: "POST" })
     return { fullKey: generated.fullKey, label: data.label, scope: generated.scope };
   });
 
-export const listHubKeys = createServerFn({ method: "POST" }).handler(async () => {
-  const db = getAdmin();
-  const { data } = await db
-    .from("hub_api_keys")
-    .select("id, label, key_prefix, scope, rate_limit_per_hour, revoked, last_used_at, created_at")
-    .order("created_at", { ascending: false });
-  return data ?? [];
-});
+export const listHubKeys = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .handler(async ({ context }) => {
+    assertAdmin(context.user.email);
+    const db = getAdmin();
+    const { data } = await getAdmin()
+      .from("hub_api_keys")
+      .select("id, label, key_prefix, scope, rate_limit_per_hour, revoked, last_used_at, created_at")
+      .order("created_at", { ascending: false });
+    void db;
+    return data ?? [];
+  });
+
+export const revokeHubKey = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .inputValidator(z.object({ keyId: z.string().uuid() }))
+  .handler(async ({ data, context }) => {
+    assertAdmin(context.user.email);
+    const { error } = await getAdmin()
+      .from("hub_api_keys")
+      .update({ revoked: true })
+      .eq("id", data.keyId);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
