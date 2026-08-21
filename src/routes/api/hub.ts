@@ -155,7 +155,7 @@ export const Route = createFileRoute("/api/hub")({
         const deviceId = body?.deviceId as string | undefined;
         const localModelEligible = ["SIMPLE", "REASONING", "CODING"].includes(category);
 
-        if (USE_LOCAL_MODEL && deviceId && isDeviceOnline(deviceId) && localModelEligible) {
+        if (USE_LOCAL_MODEL && deviceId && localModelEligible && (await isDeviceOnline(deviceId))) {
           try {
             // RAG still applies even on the temporary path — the hub does
             // the retrieval itself and hands the local model pre-loaded

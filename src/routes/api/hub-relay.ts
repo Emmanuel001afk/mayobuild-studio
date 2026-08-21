@@ -1,92 +1,127 @@
 // src/routes/api/hub-relay.ts
-// Keeps a live connection open to whichever browser tab has the local
-// model loaded (via wllama), so /api/hub can forward a request to it and
-// get a real answer back — instead of only calling Gemini/Groq.
+// Bridges the hub to whichever browser tab currently has your local GGUF
+// model loaded (via wllama).
 //
-// IMPORTANT DEPLOYMENT NOTE: this requires a persistent Node server, not
-// a serverless/edge deploy target — WebSocket connections can't survive
-// on platforms that spin functions up per-request (e.g. plain Vercel
-// serverless functions). Confirm mayobuild-studio's actual host supports
-// long-lived connections before relying on this in production.
+// WHY THIS IS NOT A WEBSOCKET: this app is deployed on a serverless/edge
+// runtime where functions spin up per request, so a long-lived socket (and
+// any in-memory Map of sockets) cannot survive between calls. Instead the
+// tab and the hub talk through a tiny job queue table in the database:
+//
+//   1. hub inserts a row into hub_local_jobs (status = 'pending')
+//   2. the tab long-polls  POST /api/hub-relay { action: 'poll' }
+//   3. the tab answers     POST /api/hub-relay { action: 'answer' }
+//   4. hub reads the answer back off the same row
+//
+// This works on any host, survives restarts, and needs no real server.
 
 import { createFileRoute } from "@tanstack/react-router";
-import { randomUUID } from "node:crypto";
+import { getAdmin } from "@/integrations/mysupabase/admin.server";
 
-// In-memory map of active device connections. Lives only as long as the
-// server process does — fine for this use case since a tab reconnecting
-// simply re-registers.
-type PendingRequest = { resolve: (answer: string) => void; reject: (err: Error) => void };
+const DEVICE_ONLINE_WINDOW_MS = 60_000;
 
-const activeSockets = new Map<string, WebSocket>();
-const pendingRequests = new Map<string, PendingRequest>();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Called by /api/hub when it wants an answer from the browser-tab model
- * instead of (or in addition to) the hosted providers. Times out if the
- * tab doesn't respond — e.g. the tab was closed. */
-export function askLocalModel(deviceId: string, prompt: string, timeoutMs = 30000): Promise<string> {
-  const socket = activeSockets.get(deviceId);
-  if (!socket) return Promise.reject(new Error("No active browser tab connected for this device"));
-
-  const requestId = randomUUID();
-
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pendingRequests.delete(requestId);
-      reject(new Error("Local model tab did not respond in time (tab may be closed)"));
-    }, timeoutMs);
-
-    pendingRequests.set(requestId, {
-      resolve: (answer) => { clearTimeout(timer); resolve(answer); },
-      reject: (err) => { clearTimeout(timer); reject(err); },
-    });
-
-    socket.send(JSON.stringify({ type: "prompt", requestId, prompt }));
-  });
+/** True if a tab with this deviceId has checked in within the last minute. */
+export async function isDeviceOnline(deviceId: string): Promise<boolean> {
+  const db = getAdmin();
+  const { data } = await db
+    .from("hub_devices")
+    .select("last_seen_at")
+    .eq("device_id", deviceId)
+    .maybeSingle();
+  if (!data?.last_seen_at) return false;
+  return Date.now() - new Date(data.last_seen_at).getTime() < DEVICE_ONLINE_WINDOW_MS;
 }
 
-export function isDeviceOnline(deviceId: string): boolean {
-  return activeSockets.has(deviceId);
+/** Hands a prompt to the browser-tab model and waits for its answer. */
+export async function askLocalModel(deviceId: string, prompt: string, timeoutMs = 45_000): Promise<string> {
+  const db = getAdmin();
+  const { data: job, error } = await db
+    .from("hub_local_jobs")
+    .insert({ device_id: deviceId, prompt, status: "pending" })
+    .select("id")
+    .single();
+  if (error || !job) throw new Error(`Could not queue local job: ${error?.message}`);
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(800);
+    const { data: row } = await db
+      .from("hub_local_jobs")
+      .select("status, answer")
+      .eq("id", job.id)
+      .maybeSingle();
+    if (row?.status === "done") return row.answer ?? "";
+    if (row?.status === "error") throw new Error(row.answer ?? "local model error");
+  }
+
+  await db.from("hub_local_jobs").update({ status: "expired" }).eq("id", job.id);
+  throw new Error("Local model tab did not respond in time (tab may be closed)");
 }
 
 export const Route = createFileRoute("/api/hub-relay")({
   server: {
     handlers: {
-      // Browser tab connects here once wllama has the model loaded.
-      // deviceId is a stable id the tab generates once and reuses across
-      // reconnects (e.g. stored in localStorage on the tab's own side).
-      GET: async ({ request }) => {
-        const url = new URL(request.url);
-        const deviceId = url.searchParams.get("deviceId");
-        if (!deviceId) return new Response("deviceId query param required", { status: 400 });
+      POST: async ({ request }) => {
+        const body = (await request.json().catch(() => null)) as
+          | { action?: string; deviceId?: string; jobId?: string; answer?: string; error?: string }
+          | null;
+        const deviceId = body?.deviceId;
+        if (!body?.action || !deviceId) {
+          return new Response("action and deviceId are required", { status: 400 });
+        }
 
-        // @ts-expect-error -- Deno/Node WebSocket upgrade API varies by
-        // runtime; wire this to whatever WebSocket upgrade mechanism the
-        // actual deploy target provides (e.g. Deno.upgradeWebSocket, or
-        // the equivalent for the Node adapter in use).
-        const { socket, response } = Deno.upgradeWebSocket(request);
+        const db = getAdmin();
+        const now = new Date().toISOString();
 
-        socket.onopen = () => {
-          activeSockets.set(deviceId, socket);
-          console.log(`[hub-relay] device connected: ${deviceId}`);
-        };
+        // Every call doubles as a heartbeat, so the hub knows the tab is alive.
+        await db
+          .from("hub_devices")
+          .upsert({ device_id: deviceId, last_seen_at: now }, { onConflict: "device_id" });
 
-        socket.onmessage = (event: MessageEvent) => {
-          const msg = JSON.parse(event.data);
-          if (msg.type === "answer" && msg.requestId) {
-            const pending = pendingRequests.get(msg.requestId);
-            if (pending) {
-              pending.resolve(msg.answer);
-              pendingRequests.delete(msg.requestId);
+        if (body.action === "heartbeat") {
+          return Response.json({ ok: true });
+        }
+
+        if (body.action === "poll") {
+          // Short long-poll: look for work for up to ~20s, then return empty
+          // so the tab can immediately re-poll (keeps the request short
+          // enough for serverless limits).
+          const deadline = Date.now() + 20_000;
+          while (Date.now() < deadline) {
+            const { data: jobs } = await db
+              .from("hub_local_jobs")
+              .select("id, prompt")
+              .eq("device_id", deviceId)
+              .eq("status", "pending")
+              .order("created_at", { ascending: true })
+              .limit(1);
+
+            const job = jobs?.[0];
+            if (job) {
+              await db.from("hub_local_jobs").update({ status: "working" }).eq("id", job.id);
+              return Response.json({ job: { id: job.id, prompt: job.prompt } });
             }
+            await sleep(1500);
           }
-        };
+          return Response.json({ job: null });
+        }
 
-        socket.onclose = () => {
-          activeSockets.delete(deviceId);
-          console.log(`[hub-relay] device disconnected: ${deviceId}`);
-        };
+        if (body.action === "answer") {
+          if (!body.jobId) return new Response("jobId required", { status: 400 });
+          await db
+            .from("hub_local_jobs")
+            .update({
+              status: body.error ? "error" : "done",
+              answer: body.error ?? body.answer ?? "",
+              answered_at: now,
+            })
+            .eq("id", body.jobId)
+            .eq("device_id", deviceId);
+          return Response.json({ ok: true });
+        }
 
-        return response;
+        return new Response("Unknown action", { status: 400 });
       },
     },
   },
