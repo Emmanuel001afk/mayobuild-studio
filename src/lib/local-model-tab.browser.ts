@@ -50,6 +50,7 @@ export async function startLocalModelTab(
   onStatus?.("Loading model into browser memory…");
 
   const wllama = new Wllama({
+    default: "/wllama/",
     "single-thread/wllama.wasm": "/wllama/single-thread.wasm",
     "multi-thread/wllama.wasm": "/wllama/multi-thread.wasm",
   });
@@ -80,10 +81,12 @@ export async function startLocalModelTab(
 
         onStatus?.("Thinking…");
         try {
-          const answer = await wllama.createCompletion(job.prompt, {
-            nPredict: 512,
-            sampling: { temp: 0.4 },
+          const completion = await wllama.createChatCompletion({
+            messages: [{ role: "user", content: job.prompt }],
+            temperature: 0.4,
+            max_tokens: 512,
           });
+          const answer = completion.choices?.[0]?.message?.content ?? "";
           await relay({ action: "answer", deviceId, jobId: job.id, answer });
           onStatus?.("Idle — ready for the next request.");
         } catch (err) {
