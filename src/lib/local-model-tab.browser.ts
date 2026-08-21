@@ -51,8 +51,8 @@ export async function startLocalModelTab(
 
   const wllama = new Wllama({
     default: "/wllama/",
-    "single-thread/wllama.wasm": "/wllama/single-thread.wasm",
-    "multi-thread/wllama.wasm": "/wllama/multi-thread.wasm",
+    "single-thread/wllama.wasm": "/wllama/wllama.wasm",
+    "multi-thread/wllama.wasm": "/wllama/wllama.wasm",
   });
 
   // Two ways in: a URL (re-downloads the file), or File objects picked
