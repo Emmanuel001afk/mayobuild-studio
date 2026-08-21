@@ -9,7 +9,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { Loader2, Send, Cpu, CheckCircle2, KeyRound, Copy } from "lucide-react";
-import { pickModelFileFromDevice, startLocalModelTab } from "@/lib/local-model-tab.client";
 import { createHubKey, listHubKeys } from "@/lib/aem-key.functions";
 
 export const Route = createFileRoute("/aem")({
@@ -57,6 +56,7 @@ function AemPage() {
   async function handleLoadModel() {
     try {
       setModelStatus("Waiting for file picker...");
+      const { pickModelFileFromDevice, startLocalModelTab } = await import("@/lib/local-model-tab.client");
       const files = await pickModelFileFromDevice();
       const { deviceId } = await startLocalModelTab(files, (status) => setModelStatus(status));
       deviceIdRef.current = deviceId;
