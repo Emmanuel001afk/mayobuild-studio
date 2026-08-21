@@ -12,12 +12,15 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as AuthRouteImport } from './routes/auth'
+import { Route as AemRouteImport } from './routes/aem'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
 import { Route as ProjectsBuildRouteImport } from './routes/projects.build'
 import { Route as ProjectsIdRouteImport } from './routes/projects.$id'
 import { Route as ApiTranscribeRouteImport } from './routes/api/transcribe'
+import { Route as ApiHubRelayRouteImport } from './routes/api/hub-relay'
+import { Route as ApiHubRouteImport } from './routes/api/hub'
 import { Route as ApiPublicSupabaseConfigRouteImport } from './routes/api/public/supabase-config'
 
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -33,6 +36,11 @@ const ConsoleRoute = ConsoleRouteImport.update({
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
   path: '/auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AemRoute = AemRouteImport.update({
+  id: '/aem',
+  path: '/aem',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -65,6 +73,16 @@ const ApiTranscribeRoute = ApiTranscribeRouteImport.update({
   path: '/api/transcribe',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiHubRelayRoute = ApiHubRelayRouteImport.update({
+  id: '/api/hub-relay',
+  path: '/api/hub-relay',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiHubRoute = ApiHubRouteImport.update({
+  id: '/api/hub',
+  path: '/api/hub',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicSupabaseConfigRoute = ApiPublicSupabaseConfigRouteImport.update({
   id: '/api/public/supabase-config',
   path: '/api/public/supabase-config',
@@ -74,9 +92,12 @@ const ApiPublicSupabaseConfigRoute = ApiPublicSupabaseConfigRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/api/hub': typeof ApiHubRoute
+  '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
   '/projects/build': typeof ProjectsBuildRoute
@@ -86,9 +107,12 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/api/hub': typeof ApiHubRoute
+  '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
   '/projects/build': typeof ProjectsBuildRoute
@@ -99,9 +123,12 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/api/hub': typeof ApiHubRoute
+  '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
   '/projects/build': typeof ProjectsBuildRoute
@@ -113,9 +140,12 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/aem'
     | '/auth'
     | '/console'
     | '/reset-password'
+    | '/api/hub'
+    | '/api/hub-relay'
     | '/api/transcribe'
     | '/projects/$id'
     | '/projects/build'
@@ -125,9 +155,12 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/admin'
+    | '/aem'
     | '/auth'
     | '/console'
     | '/reset-password'
+    | '/api/hub'
+    | '/api/hub-relay'
     | '/api/transcribe'
     | '/projects/$id'
     | '/projects/build'
@@ -137,9 +170,12 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/aem'
     | '/auth'
     | '/console'
     | '/reset-password'
+    | '/api/hub'
+    | '/api/hub-relay'
     | '/api/transcribe'
     | '/projects/$id'
     | '/projects/build'
@@ -150,9 +186,12 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
+  AemRoute: typeof AemRoute
   AuthRoute: typeof AuthRoute
   ConsoleRoute: typeof ConsoleRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
+  ApiHubRoute: typeof ApiHubRoute
+  ApiHubRelayRoute: typeof ApiHubRelayRoute
   ApiTranscribeRoute: typeof ApiTranscribeRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ProjectsBuildRoute: typeof ProjectsBuildRoute
@@ -181,6 +220,13 @@ declare module '@tanstack/react-router' {
       path: '/auth'
       fullPath: '/auth'
       preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/aem': {
+      id: '/aem'
+      path: '/aem'
+      fullPath: '/aem'
+      preLoaderRoute: typeof AemRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -225,6 +271,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTranscribeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/hub-relay': {
+      id: '/api/hub-relay'
+      path: '/api/hub-relay'
+      fullPath: '/api/hub-relay'
+      preLoaderRoute: typeof ApiHubRelayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/hub': {
+      id: '/api/hub'
+      path: '/api/hub'
+      fullPath: '/api/hub'
+      preLoaderRoute: typeof ApiHubRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/supabase-config': {
       id: '/api/public/supabase-config'
       path: '/api/public/supabase-config'
@@ -238,9 +298,12 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
+  AemRoute: AemRoute,
   AuthRoute: AuthRoute,
   ConsoleRoute: ConsoleRoute,
   ResetPasswordRoute: ResetPasswordRoute,
+  ApiHubRoute: ApiHubRoute,
+  ApiHubRelayRoute: ApiHubRelayRoute,
   ApiTranscribeRoute: ApiTranscribeRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ProjectsBuildRoute: ProjectsBuildRoute,
@@ -250,3 +313,13 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}
