@@ -196,7 +196,7 @@ function PageCard({
   text: string;
 }) {
   return (
-    <Link to={to} className="mb-card p-4 block hover:border-primary transition-colors">
+    <Link to={to as never} className="mb-card p-4 block hover:border-primary transition-colors">
       <div className="flex items-center gap-2 font-medium mb-1">{icon}{name}</div>
       <p className="text-sm text-muted-foreground">{text}</p>
     </Link>
