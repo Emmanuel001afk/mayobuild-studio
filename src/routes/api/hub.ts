@@ -28,7 +28,7 @@ import { CORE_TOOLS, runCoreTool } from "@/lib/aem-core-tools.server";
 // straight to the hosted providers (Gemini/Groq/etc). Never delete this —
 // once a real server exists, just leave this env var off. The code stays
 // dormant and ready if it's ever useful again.
-const USE_LOCAL_MODEL = process.env.USE_LOCAL_MODEL === "true";
+const USE_LOCAL_MODEL = process.env.USE_LOCAL_MODEL !== "false";
 
 function unauthorized(msg = "Unauthorized") {
   return new Response(msg, { status: 401 });

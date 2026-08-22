@@ -9,7 +9,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { Loader2, Send, Cpu, CheckCircle2, KeyRound, Copy } from "lucide-react";
-import { createHubKey, listHubKeys } from "@/lib/aem-key.functions";
+import { createHubKey, listHubKeys, revokeHubKey } from "@/lib/aem-key.functions";
+import { useAuth } from "@/hooks/use-auth";
+import { Link } from "@tanstack/react-router";
+import { ShieldAlert } from "lucide-react";
 
 export const Route = createFileRoute("/aem")({
   head: () => ({ meta: [{ title: "AEM AI Workspace" }] }),
@@ -23,8 +26,10 @@ interface ChatMessage {
 }
 
 function AemPage() {
+  const { user, loading, isAdmin } = useAuth();
   const createKeyFn = useServerFn(createHubKey);
   const listKeysFn = useServerFn(listHubKeys);
+  const revokeKeyFn = useServerFn(revokeHubKey);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -42,8 +47,9 @@ function AemPage() {
   const [justCreatedKey, setJustCreatedKey] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!isAdmin) return;
     listKeysFn().then(setKeys).catch(() => {});
-  }, []);
+  }, [isAdmin]);
 
   async function handleCreateKey() {
     if (!newKeyLabel.trim()) return;
@@ -99,9 +105,31 @@ function AemPage() {
     }
   }
 
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center text-muted-foreground">Loading…</div>;
+  }
+
+  if (!user || !isAdmin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <div className="mb-card p-8 max-w-md text-center">
+          <ShieldAlert className="h-10 w-10 text-destructive mx-auto mb-3" />
+          <h1 className="text-xl font-bold mb-1">Restricted area</h1>
+          <p className="text-sm text-muted-foreground mb-4">
+            The AEM AI hub is available to the overseer account only.
+          </p>
+          <Link to="/" className="mb-btn">Back to workspace</Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen p-6 max-w-3xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">AEM AI Workspace</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-semibold">AEM AI Workspace</h1>
+        <Link to="/admin" className="mb-btn-ghost text-sm">Overseer</Link>
+      </div>
 
       {/* --- Key management --- */}
       <div className="mb-card p-4 mb-4">
@@ -146,7 +174,20 @@ function AemPage() {
           {keys.map((k) => (
             <div key={k.id} className="flex justify-between border-b py-1">
               <span>{k.label} <span className="text-muted-foreground">({k.scope})</span></span>
-              <span className="text-muted-foreground">{k.revoked ? "revoked" : "active"}</span>
+              <span className="flex items-center gap-2 text-muted-foreground">
+                {k.revoked ? "revoked" : "active"}
+                {!k.revoked && (
+                  <button
+                    className="text-destructive underline"
+                    onClick={async () => {
+                      await revokeKeyFn({ data: { keyId: k.id } });
+                      listKeysFn().then(setKeys).catch(() => {});
+                    }}
+                  >
+                    revoke
+                  </button>
+                )}
+              </span>
             </div>
           ))}
         </div>
@@ -171,6 +212,11 @@ function AemPage() {
           <div>
             <div className="font-medium">Local model (this tab)</div>
             <div className="text-sm text-muted-foreground">{modelStatus}</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Pick the .gguf file already saved on this phone — it stays on the device,
+              nothing is uploaded. Keep this tab open (it can be minimised) and the hub
+              will send it work automatically.
+            </div>
           </div>
         </div>
         <button
