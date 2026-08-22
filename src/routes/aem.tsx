@@ -1,21 +1,46 @@
 // src/routes/aem.tsx
-// The AEM AI workspace page — a real page you open and click, tying
-// together everything built tonight: chat (calls /api/hub), and a button
-// to load your own downloaded model into THIS tab (via file picker +
-// wllama), connecting it to the hub over the WebSocket relay so the hub
-// can use it automatically when available.
+// The AEM AI Hub workspace — this is THE page where you:
+//   Step 1  upload / pick your .gguf local model (it runs inside this tab)
+//   Step 2  issue the AM_ API keys other websites use
+//   Step 3  talk to AEM AI, which uses the local model first and falls back
+//           to the hosted providers automatically
+// Other sites reach the same brain at POST /api/hub with an AM_ key.
 
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { Loader2, Send, Cpu, CheckCircle2, KeyRound, Copy } from "lucide-react";
+import {
+  Loader2,
+  Send,
+  Cpu,
+  CheckCircle2,
+  KeyRound,
+  Copy,
+  ShieldAlert,
+  UploadCloud,
+  Database,
+  Radio,
+  Terminal,
+} from "lucide-react";
 import { createHubKey, listHubKeys, revokeHubKey } from "@/lib/aem-key.functions";
 import { useAuth } from "@/hooks/use-auth";
-import { Link } from "@tanstack/react-router";
-import { ShieldAlert } from "lucide-react";
 
 export const Route = createFileRoute("/aem")({
-  head: () => ({ meta: [{ title: "AEM AI Workspace" }] }),
+  head: () => ({
+    meta: [
+      { title: "AEM AI Hub — Mayobuild Studio" },
+      {
+        name: "description",
+        content:
+          "Load your own .gguf model into the browser, issue hub API keys and talk to AEM AI, the shared brain behind all your websites.",
+      },
+      { property: "og:title", content: "AEM AI Hub — Mayobuild Studio" },
+      { property: "og:description", content: "Local GGUF model workspace, hub API keys and the AEM AI chat." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+      { name: "robots", content: "noindex" },
+    ],
+  }),
   component: AemPage,
 });
 
@@ -36,11 +61,13 @@ function AemPage() {
   const [sending, setSending] = useState(false);
   const [apiKey, setApiKey] = useState("");
 
-  const [modelStatus, setModelStatus] = useState<string>("Not loaded");
+  const [modelStatus, setModelStatus] = useState<string>("No model loaded yet");
+  const [modelName, setModelName] = useState<string | null>(null);
   const [modelReady, setModelReady] = useState(false);
+  const [loadingModel, setLoadingModel] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const deviceIdRef = useRef<string | null>(null);
 
-  // --- Key management ---
   const [keys, setKeys] = useState<any[]>([]);
   const [newKeyLabel, setNewKeyLabel] = useState("");
   const [newKeyScope, setNewKeyScope] = useState<"owner" | "restricted">("restricted");
@@ -55,26 +82,58 @@ function AemPage() {
     if (!newKeyLabel.trim()) return;
     const result = await createKeyFn({ data: { label: newKeyLabel, scope: newKeyScope } });
     setJustCreatedKey(result.fullKey);
+    setApiKey(result.fullKey); // pre-fill the chat below so it works instantly
     setNewKeyLabel("");
     listKeysFn().then(setKeys).catch(() => {});
   }
 
-  async function handleLoadModel() {
+  async function bootModel(files: File[]) {
+    setLoadingModel(true);
     try {
-      setModelStatus("Waiting for file picker...");
-      const { pickModelFileFromDevice, startLocalModelTab } = await import("@/lib/local-model-tab.browser");
-      const files = await pickModelFileFromDevice();
+      const { startLocalModelTab } = await import("@/lib/local-model-tab.browser");
+      setModelName(files.map((f) => f.name).join(", "));
       const { deviceId } = await startLocalModelTab(files, (status) => setModelStatus(status));
       deviceIdRef.current = deviceId;
       setModelReady(true);
     } catch (err) {
       setModelStatus(`Failed: ${(err as Error).message}`);
       setModelReady(false);
+    } finally {
+      setLoadingModel(false);
     }
   }
 
+  async function handlePickModel() {
+    try {
+      setModelStatus("Waiting for the file picker…");
+      const { pickModelFileFromDevice } = await import("@/lib/local-model-tab.browser");
+      const files = await pickModelFileFromDevice();
+      await bootModel(files);
+    } catch (err) {
+      setModelStatus(`Failed: ${(err as Error).message}`);
+    }
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragging(false);
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.name.endsWith(".gguf"));
+    if (!files.length) {
+      setModelStatus("That wasn't a .gguf file — try again.");
+      return;
+    }
+    void bootModel(files);
+  }
+
   async function handleSend() {
-    if (!input.trim() || !apiKey.trim()) return;
+    if (!input.trim()) return;
+    if (!apiKey.trim()) {
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: "Add or create a hub API key in Step 2 first — the chat uses it to authenticate." },
+      ]);
+      return;
+    }
     const userMsg: ChatMessage = { role: "user", content: input };
     setMessages((m) => [...m, userMsg]);
     setInput("");
@@ -125,56 +184,112 @@ function AemPage() {
   }
 
   return (
-    <div className="min-h-screen p-6 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold">AEM AI Workspace</h1>
-        <Link to="/admin" className="mb-btn-ghost text-sm">Overseer</Link>
-      </div>
-
-      {/* --- Key management --- */}
-      <div className="mb-card p-4 mb-4">
-        <div className="flex items-center gap-2 mb-3">
-          <KeyRound className="h-5 w-5" />
-          <span className="font-medium">API Keys</span>
+    <div className="min-h-screen p-4 sm:p-6 max-w-3xl mx-auto">
+      <header className="mb-6">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <Cpu className="h-6 w-6 text-primary" /> AEM AI Hub
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Your local GGUF model workspace + the shared brain other websites call at
+              <code className="mx-1 px-1 rounded bg-muted/50 text-xs">POST /api/hub</code>.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Link to="/setup" className="mb-btn-ghost text-sm"><Database className="h-4 w-4" /> SQL</Link>
+            <Link to="/admin" className="mb-btn-ghost text-sm">Overseer</Link>
+          </div>
         </div>
 
+        <div className="flex items-center gap-2 mt-3 text-xs">
+          <span
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full ${
+              modelReady ? "bg-emerald-500/15 text-emerald-500" : "bg-muted text-muted-foreground"
+            }`}
+          >
+            <Radio className="h-3 w-3" /> {modelReady ? "Local model online" : "Local model offline"}
+          </span>
+          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-muted text-muted-foreground">
+            <KeyRound className="h-3 w-3" /> {keys.filter((k) => !k.revoked).length} active keys
+          </span>
+        </div>
+      </header>
+
+      {/* ---------- STEP 1 — GGUF upload ---------- */}
+      <Step n={1} title="Upload your local model (.gguf)">
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
+          onClick={handlePickModel}
+          className={`cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition-colors ${
+            dragging ? "border-primary bg-primary/5" : "border-border hover:border-primary/60"
+          }`}
+        >
+          {loadingModel ? (
+            <Loader2 className="h-7 w-7 mx-auto mb-2 animate-spin text-primary" />
+          ) : modelReady ? (
+            <CheckCircle2 className="h-7 w-7 mx-auto mb-2 text-emerald-500" />
+          ) : (
+            <UploadCloud className="h-7 w-7 mx-auto mb-2 text-muted-foreground" />
+          )}
+          <div className="font-medium">
+            {modelReady ? "Model running in this tab" : "Tap to choose a .gguf file (or drop it here)"}
+          </div>
+          {modelName && <div className="text-xs text-muted-foreground mt-1 font-mono break-all">{modelName}</div>}
+          <div className="text-sm text-muted-foreground mt-1">{modelStatus}</div>
+        </div>
+        <p className="text-xs text-muted-foreground mt-3">
+          The file never leaves your device — it is loaded straight into this tab's memory. Keep the tab
+          open (minimised is fine); the hub queues work to it and falls back to the hosted providers
+          whenever it's closed.
+        </p>
+      </Step>
+
+      {/* ---------- STEP 2 — Keys ---------- */}
+      <Step n={2} title="Issue API keys for your other websites">
         {justCreatedKey && (
-          <div className="mb-3 p-3 rounded bg-yellow-50 border border-yellow-300 text-sm">
+          <div className="mb-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/40 text-sm">
             <div className="font-medium mb-1">Save this now — shown only once:</div>
-            <div className="flex items-center gap-2 font-mono break-all">
+            <div className="flex items-center gap-2 font-mono break-all text-xs">
               {justCreatedKey}
-              <button onClick={() => navigator.clipboard.writeText(justCreatedKey)}>
+              <button onClick={() => navigator.clipboard.writeText(justCreatedKey)} aria-label="Copy key">
                 <Copy className="h-4 w-4" />
               </button>
             </div>
           </div>
         )}
 
-        <div className="flex gap-2 mb-3">
+        <div className="flex flex-col sm:flex-row gap-2 mb-3">
           <input
             value={newKeyLabel}
             onChange={(e) => setNewKeyLabel(e.target.value)}
             placeholder="Label (e.g. Halway production)"
-            className="flex-1 border rounded px-3 py-2 text-sm"
+            className="flex-1 border border-border bg-transparent rounded px-3 py-2 text-sm"
           />
           <select
             value={newKeyScope}
             onChange={(e) => setNewKeyScope(e.target.value as "owner" | "restricted")}
-            className="border rounded px-2 py-2 text-sm"
+            className="border border-border bg-transparent rounded px-2 py-2 text-sm"
           >
             <option value="restricted">Restricted (testing)</option>
-            <option value="owner">Owner (my own site)</option>
+            <option value="owner">Owner (full tools)</option>
           </select>
-          <button onClick={handleCreateKey} className="px-3 py-2 rounded bg-primary text-primary-foreground text-sm">
-            Create
-          </button>
+          <button onClick={handleCreateKey} className="mb-btn text-sm">Create key</button>
         </div>
 
         <div className="text-sm space-y-1">
+          {keys.length === 0 && <div className="text-muted-foreground">No keys yet.</div>}
           {keys.map((k) => (
-            <div key={k.id} className="flex justify-between border-b py-1">
-              <span>{k.label} <span className="text-muted-foreground">({k.scope})</span></span>
-              <span className="flex items-center gap-2 text-muted-foreground">
+            <div key={k.id} className="flex justify-between border-b border-border py-1 gap-2">
+              <span className="truncate">
+                {k.label} <span className="text-muted-foreground">({k.scope})</span>
+              </span>
+              <span className="flex items-center gap-2 text-muted-foreground shrink-0">
                 {k.revoked ? "revoked" : "active"}
                 {!k.revoked && (
                   <button
@@ -191,69 +306,86 @@ function AemPage() {
             </div>
           ))}
         </div>
-      </div>
 
-      {/* --- API key input (paste an owner-scope key generated earlier) --- */}
-      <div className="mb-card p-4 mb-4">
-        <label className="text-sm text-muted-foreground block mb-1">API key (AM_...)</label>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="AM_..."
-          className="w-full border rounded px-3 py-2"
-        />
-      </div>
-
-      {/* --- Local model loader --- */}
-      <div className="mb-card p-4 mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Cpu className="h-5 w-5" />
-          <div>
-            <div className="font-medium">Local model (this tab)</div>
-            <div className="text-sm text-muted-foreground">{modelStatus}</div>
-            <div className="text-xs text-muted-foreground mt-1">
-              Pick the .gguf file already saved on this phone — it stays on the device,
-              nothing is uploaded. Keep this tab open (it can be minimised) and the hub
-              will send it work automatically.
-            </div>
-          </div>
+        <div className="mt-4">
+          <label className="text-sm text-muted-foreground block mb-1">Key used by the chat below</label>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="AM_..."
+            className="w-full border border-border bg-transparent rounded px-3 py-2"
+          />
         </div>
-        <button
-          onClick={handleLoadModel}
-          className="px-4 py-2 rounded bg-primary text-primary-foreground"
-        >
-          {modelReady ? <CheckCircle2 className="h-4 w-4" /> : "Load model from phone"}
-        </button>
-      </div>
+      </Step>
 
-      {/* --- Chat --- */}
-      <div className="mb-card p-4 min-h-[300px] flex flex-col gap-3 mb-4">
-        {messages.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
-            <div className={`inline-block px-3 py-2 rounded-lg ${m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-              {m.content}
-              {m.source && <div className="text-xs opacity-60 mt-1">source: {m.source}</div>}
+      {/* ---------- STEP 3 — Chat ---------- */}
+      <Step n={3} title="Talk to AEM AI">
+        <div className="min-h-[240px] flex flex-col gap-3 mb-3">
+          {messages.map((m, i) => (
+            <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
+              <div
+                className={`inline-block px-3 py-2 rounded-lg max-w-[85%] text-left whitespace-pre-wrap ${
+                  m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
+                }`}
+              >
+                {m.content}
+                {m.source && <div className="text-xs opacity-60 mt-1">source: {m.source}</div>}
+              </div>
             </div>
-          </div>
-        ))}
-        {messages.length === 0 && (
-          <div className="text-muted-foreground text-sm">No messages yet — try asking something below.</div>
-        )}
-      </div>
+          ))}
+          {messages.length === 0 && (
+            <div className="text-muted-foreground text-sm">
+              Nothing yet — ask anything. With a model loaded above, simple questions are answered on-device;
+              anything heavier automatically goes to the hosted providers.
+            </div>
+          )}
+        </div>
 
-      <div className="flex gap-2">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          placeholder="Ask AEM AI..."
-          className="flex-1 border rounded px-3 py-2"
-        />
-        <button onClick={handleSend} disabled={sending} className="px-4 py-2 rounded bg-primary text-primary-foreground">
-          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-        </button>
-      </div>
+        <div className="flex gap-2">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSend()}
+            placeholder="Ask AEM AI…"
+            className="flex-1 border border-border bg-transparent rounded px-3 py-2"
+          />
+          <button onClick={handleSend} disabled={sending} className="mb-btn">
+            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </button>
+        </div>
+      </Step>
+
+      {/* ---------- How other sites connect ---------- */}
+      <section className="mb-card p-4">
+        <div className="flex items-center gap-2 font-medium mb-2">
+          <Terminal className="h-4 w-4" /> Connect another website
+        </div>
+        <pre className="text-xs overflow-auto rounded bg-muted/40 p-3">
+{`fetch("https://mayobuild-studio.lovable.app/api/hub", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: "Bearer AM_your_key_here"
+  },
+  body: JSON.stringify({ message: "Hello AEM" })
+}).then(r => r.json())`}
+        </pre>
+      </section>
     </div>
+  );
+}
+
+function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+  return (
+    <section className="mb-card p-4 mb-4">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="h-6 w-6 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold">
+          {n}
+        </span>
+        <h2 className="font-semibold">{title}</h2>
+      </div>
+      {children}
+    </section>
   );
 }
