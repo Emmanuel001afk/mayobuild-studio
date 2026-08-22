@@ -49,12 +49,10 @@ export const listHubKeys = createServerFn({ method: "POST" })
   .middleware([requireUser])
   .handler(async ({ context }) => {
     assertAdmin(context.user.email);
-    const db = getAdmin();
     const { data } = await getAdmin()
       .from("hub_api_keys")
       .select("id, label, key_prefix, scope, rate_limit_per_hour, revoked, last_used_at, created_at")
       .order("created_at", { ascending: false });
-    void db;
     return data ?? [];
   });
 
