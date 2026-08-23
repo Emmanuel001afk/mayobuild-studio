@@ -10,7 +10,7 @@ import { useProjectPresence } from "@/hooks/use-presence";
 import { toast } from "sonner";
 import {
   Sparkles, Plus, LogOut, Globe, Smartphone, Users, Eye, FileText,
-  Cpu, Mic, Zap, Loader2, ShieldAlert, ExternalLink, Trash2, Layers, Bot,
+  Cpu, Mic, Zap, Loader2, ShieldAlert, ExternalLink, Trash2, Layers, Bot, RefreshCw,
 } from "lucide-react";
 
 
@@ -25,7 +25,22 @@ export const Route = createFileRoute("/")({
 });
 
 function Home() {
-  const { user, loading } = useAuth();
+  const { user, loading, error } = useAuth();
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <div className="mb-card p-8 max-w-md text-center">
+          <h1 className="text-xl font-bold mb-1">Connection problem</h1>
+          <p className="text-sm text-muted-foreground mb-4">{error}</p>
+          <button onClick={() => window.location.reload()} className="mb-btn">
+            <RefreshCw className="h-4 w-4" /> Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center text-muted-foreground">
@@ -261,4 +276,3 @@ function ProjectCard({ p, shared = false, me, onDelete }: { p: any; shared?: boo
     </div>
   );
 }
-
