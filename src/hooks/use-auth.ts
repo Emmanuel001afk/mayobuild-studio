@@ -8,6 +8,7 @@ export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let unsub: (() => void) | undefined;
@@ -29,6 +30,7 @@ export function useAuth() {
         setSession(session);
         setUser(session?.user ?? null);
         setLoading(false);
+        setError(null);
         void refreshAdmin(session?.user ?? null);
 
         const { data } = sb.auth.onAuthStateChange((_e, s) => {
@@ -38,12 +40,13 @@ export function useAuth() {
           void refreshAdmin(s?.user ?? null);
         });
         unsub = () => data.subscription.unsubscribe();
-      } catch (error) {
-        console.error("Auth initialization failed", error);
+      } catch (err) {
+        console.error("Auth initialization failed", err);
         if (cancelled) return;
         setSession(null);
         setUser(null);
         setLoading(false);
+        setError((err as Error).message || "Could not connect. Check your network and try again.");
       }
     })();
 
@@ -53,7 +56,7 @@ export function useAuth() {
     };
   }, []);
 
-  return { session, user, loading, isAdmin };
+  return { session, user, loading, isAdmin, error };
 }
 
 export async function signIn(email: string, password: string) {
@@ -70,7 +73,6 @@ export async function signUp(email: string, password: string) {
     options: { emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined },
   });
   if (error) throw error;
-  // Email confirmation is disabled — auto sign in so the user lands in the dashboard immediately.
   if (!data.session) {
     const { error: siErr } = await sb.auth.signInWithPassword({ email, password });
     if (siErr) throw siErr;
