@@ -1,31 +1,39 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireUser } from "@/integrations/mysupabase/middleware.server";
 
-function getAllowedAdminEmail(): string | null {
-  const v = process.env.ADMIN_EMAIL;
-  return v ? v.toLowerCase() : null;
+// Admin/overseer status is now checked against the database
+// (public.admin_users) instead of an ADMIN_EMAIL environment variable —
+// this is fully under your own control via Supabase, no Lovable/hosting
+// settings involved at all.
+
+async function isEmailAdmin(admin: any, email: string | undefined | null): Promise<boolean> {
+  if (!email) return false;
+  const { data } = await admin
+    .from("admin_users")
+    .select("email")
+    .eq("email", email.toLowerCase())
+    .maybeSingle();
+  return !!data;
 }
 
-function assertAdmin(email: string | undefined | null) {
-  const allowed = getAllowedAdminEmail();
-  if (!allowed || !email || email.toLowerCase() !== allowed) {
-    throw new Error("Forbidden: admin only");
-  }
+async function assertAdmin(admin: any, email: string | undefined | null) {
+  const ok = await isEmailAdmin(admin, email);
+  if (!ok) throw new Error("Forbidden: admin only");
 }
 
 export const checkIsAdmin = createServerFn({ method: "GET" })
   .middleware([requireUser])
   .handler(async ({ context }) => {
-    const allowed = getAllowedAdminEmail();
     const email = context.user.email?.toLowerCase() ?? null;
-    return { isAdmin: !!allowed && !!email && email === allowed };
+    const isAdmin = await isEmailAdmin(context.admin, email);
+    return { isAdmin };
   });
 
 export const getAdminOverview = createServerFn({ method: "GET" })
   .middleware([requireUser])
   .handler(async ({ context }) => {
     const { admin, user } = context;
-    assertAdmin(user.email);
+    await assertAdmin(admin, user.email);
 
     const [{ data: projects }, { data: gens }, { data: profiles }, { data: builds }] =
       await Promise.all([
@@ -42,7 +50,6 @@ export const getAdminOverview = createServerFn({ method: "GET" })
           .order("created_at", { ascending: false }).limit(100),
       ]);
 
-    // Simple ad/revenue projection: $0.0008 per token across all generations.
     const totalTokens = (gens ?? []).reduce((s, g: any) => s + (g.tokens || 0), 0);
     const estRevenue = +(totalTokens * 0.0008).toFixed(2);
 
