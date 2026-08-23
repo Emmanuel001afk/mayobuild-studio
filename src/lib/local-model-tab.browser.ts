@@ -47,7 +47,7 @@ export async function startLocalModelTab(
   onStatus?: (s: string) => void,
 ) {
   const deviceId = getOrCreateDeviceId();
-  onStatus?.("Loading model into browser memory…");
+  onStatus?.("Preparing model loader…");
 
   const wllama = new Wllama({
     default: "/wllama/",
@@ -55,12 +55,25 @@ export async function startLocalModelTab(
     "multi-thread/wllama.wasm": "/wllama/wllama.wasm",
   });
 
+  // Real progress now, instead of one static message the whole time —
+  // this reports actual bytes loaded so a genuine hang looks different
+  // from a slow-but-working load.
+  const startedAt = Date.now();
+  const progressCallback = ({ loaded, total }: { loaded: number; total: number }) => {
+    const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
+    const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+    const secs = Math.round((Date.now() - startedAt) / 1000);
+    onStatus?.(`Loading model: ${pct}% (${mb(loaded)}MB / ${mb(total)}MB) — ${secs}s elapsed`);
+  };
+
+  const loadOpts = { n_ctx: 2048, progressCallback };
+
   // Two ways in: a URL (re-downloads the file), or File objects picked
   // directly from the phone's own storage (no re-download, no hosting).
   if (typeof modelSource === "string") {
-    await wllama.loadModelFromUrl(modelSource, { n_ctx: 2048 });
+    await wllama.loadModelFromUrl(modelSource, loadOpts);
   } else {
-    await wllama.loadModel(modelSource, { n_ctx: 2048 });
+    await wllama.loadModel(modelSource, loadOpts);
   }
 
   onStatus?.(`Model loaded — connected as ${deviceId.slice(0, 8)}…`);
