@@ -49,31 +49,44 @@ export async function startLocalModelTab(
   const deviceId = getOrCreateDeviceId();
   onStatus?.("Preparing model loader…");
 
-  const wllama = new Wllama({
-    default: "/wllama/",
-    "single-thread/wllama.wasm": "/wllama/wllama.wasm",
-    "multi-thread/wllama.wasm": "/wllama/wllama.wasm",
-  });
+  // FIX: in this wllama version, "default" must be the WASM FILE itself,
+  // not a directory — the single-thread/multi-thread keys are ignored.
+  // The old config pointed at "/wllama/" (a folder), which silently
+  // returned the app's own 404 HTML page instead of the real .wasm file,
+  // crashed wllama's error handler, and left the load hanging forever
+  // with no error shown. Verified against the live site.
+  const wllama = new Wllama({ default: "/wllama/wllama.wasm" });
 
-  // Real progress now, instead of one static message the whole time —
-  // this reports actual bytes loaded so a genuine hang looks different
-  // from a slow-but-working load.
-  const startedAt = Date.now();
+  const isUrlSource = typeof modelSource === "string";
+
+  // For a URL load, wllama reports real byte progress — use it.
   const progressCallback = ({ loaded, total }: { loaded: number; total: number }) => {
     const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
     const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
-    const secs = Math.round((Date.now() - startedAt) / 1000);
-    onStatus?.(`Loading model: ${pct}% (${mb(loaded)}MB / ${mb(total)}MB) — ${secs}s elapsed`);
+    onStatus?.(`Loading model: ${pct}% (${mb(loaded)}MB / ${mb(total)}MB)`);
   };
 
-  const loadOpts = { n_ctx: 2048, progressCallback };
+  // For a local File (the phone file-picker path), wllama does NOT fire
+  // progressCallback at all — confirmed by live testing. Without some
+  // moving indicator, it looks identical to a hang even when it's fine,
+  // so tick a visible elapsed-time counter instead, proving it's alive.
+  let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+  if (!isUrlSource) {
+    const startedAt = Date.now();
+    elapsedTimer = setInterval(() => {
+      const secs = Math.round((Date.now() - startedAt) / 1000);
+      onStatus?.(`Loading model… ${secs}s elapsed (larger files can take a few minutes on mobile)`);
+    }, 1000);
+  }
 
-  // Two ways in: a URL (re-downloads the file), or File objects picked
-  // directly from the phone's own storage (no re-download, no hosting).
-  if (typeof modelSource === "string") {
-    await wllama.loadModelFromUrl(modelSource, loadOpts);
-  } else {
-    await wllama.loadModel(modelSource, loadOpts);
+  try {
+    if (isUrlSource) {
+      await wllama.loadModelFromUrl(modelSource, { n_ctx: 2048, progressCallback });
+    } else {
+      await wllama.loadModel(modelSource, { n_ctx: 2048, progressCallback });
+    }
+  } finally {
+    if (elapsedTimer) clearInterval(elapsedTimer);
   }
 
   onStatus?.(`Model loaded — connected as ${deviceId.slice(0, 8)}…`);
