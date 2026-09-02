@@ -161,7 +161,7 @@ function AemPage() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ message: userMsg.content, deviceId: deviceIdRef.current ?? undefined }),
       });
-      if (!res.ok) { setMessages((m) => [...m, { role: "assistant", content: `Error: ${await res.text()}` }]); return; }
+      if (!res.ok) { const errText = await res.text(); setMessages((m) => [...m, { role: "assistant", content: `Error: ${errText}` }]); return; }
       const data = await res.json();
       setMessages((m) => [...m, { role: "assistant", content: data.answer, source: data.source }]);
     } catch (err) {
