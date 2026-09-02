@@ -149,25 +149,21 @@ function AemPage() {
 
   async function handleSend() {
     if (!input.trim()) return;
-    if (!apiKey.trim()) {
-      setMessages((m) => [...m, { role: "assistant", content: "Add or create a hub API key in Step 2 first — the chat uses it to authenticate." }]);
-      return;
-    }
     const userMsg: ChatMessage = { role: "user", content: input };
     setMessages((m) => [...m, userMsg]); setInput(""); setSending(true);
     try {
-      const res = await fetch("/api/hub", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ message: userMsg.content, deviceId: deviceIdRef.current ?? undefined }),
+      // No API key here on purpose: you're signed in, so you talk to the
+      // model directly. Keys are only for other websites calling /api/hub.
+      const data = await askAemFn({
+        data: { message: userMsg.content, ...(deviceIdRef.current ? { deviceId: deviceIdRef.current } : {}) },
       });
-      if (!res.ok) { const errText = await res.text(); setMessages((m) => [...m, { role: "assistant", content: `Error: ${errText}` }]); return; }
-      const data = await res.json();
-      setMessages((m) => [...m, { role: "assistant", content: data.answer, source: data.source }]);
+      if (data.error) { setMessages((m) => [...m, { role: "assistant", content: `Error: ${data.error}` }]); return; }
+      setMessages((m) => [...m, { role: "assistant", content: data.answer ?? "", source: data.source }]);
     } catch (err) {
       setMessages((m) => [...m, { role: "assistant", content: `Request failed: ${(err as Error).message}` }]);
     } finally { setSending(false); }
   }
+
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-muted-foreground">Loading…</div>;
   if (!user || !isAdmin) return <div className="min-h-screen flex items-center justify-center p-6"><div className="mb-card p-8 max-w-md text-center"><ShieldAlert className="h-10 w-10 text-destructive mx-auto mb-3" /><h1 className="text-xl font-bold mb-1">Restricted area</h1><p className="text-sm text-muted-foreground mb-4">The AEM AI hub is available to the overseer account only.</p><Link to="/" className="mb-btn">Back to workspace</Link></div></div>;
