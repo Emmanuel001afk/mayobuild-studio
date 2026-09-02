@@ -9,6 +9,7 @@ import {
   UploadCloud, Database, Radio, Terminal, Trash2,
 } from "lucide-react";
 import { createHubKey, listHubKeys, revokeHubKey } from "@/lib/aem-key.functions";
+import { askAem } from "@/lib/aem-chat.functions";
 import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/aem")({
