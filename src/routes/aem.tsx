@@ -9,6 +9,7 @@ import {
   UploadCloud, Database, Radio, Terminal, Trash2,
 } from "lucide-react";
 import { createHubKey, listHubKeys, revokeHubKey } from "@/lib/aem-key.functions";
+import { askAem } from "@/lib/aem-chat.functions";
 import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/aem")({
@@ -33,11 +34,11 @@ function AemPage() {
   const createKeyFn = useServerFn(createHubKey);
   const listKeysFn = useServerFn(listHubKeys);
   const revokeKeyFn = useServerFn(revokeHubKey);
+  const askAemFn = useServerFn(askAem);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [apiKey, setApiKey] = useState("");
   const [modelStatus, setModelStatus] = useState("No model loaded yet");
   const [modelName, setModelName] = useState<string | null>(null);
   const [modelReady, setModelReady] = useState(false);
@@ -92,7 +93,7 @@ function AemPage() {
     if (!newKeyLabel.trim()) return;
     const result = await createKeyFn({ data: { label: newKeyLabel, scope: newKeyScope } });
     setJustCreatedKey(result.fullKey);
-    setApiKey(result.fullKey);
+    
     setNewKeyLabel("");
     listKeysFn().then(setKeys).catch(() => {});
   }
@@ -149,25 +150,21 @@ function AemPage() {
 
   async function handleSend() {
     if (!input.trim()) return;
-    if (!apiKey.trim()) {
-      setMessages((m) => [...m, { role: "assistant", content: "Add or create a hub API key in Step 2 first — the chat uses it to authenticate." }]);
-      return;
-    }
     const userMsg: ChatMessage = { role: "user", content: input };
     setMessages((m) => [...m, userMsg]); setInput(""); setSending(true);
     try {
-      const res = await fetch("/api/hub", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ message: userMsg.content, deviceId: deviceIdRef.current ?? undefined }),
+      // No API key here on purpose: you're signed in, so you talk to the
+      // model directly. Keys are only for other websites calling /api/hub.
+      const data = await askAemFn({
+        data: { message: userMsg.content, ...(deviceIdRef.current ? { deviceId: deviceIdRef.current } : {}) },
       });
-      if (!res.ok) { const errText = await res.text(); setMessages((m) => [...m, { role: "assistant", content: `Error: ${errText}` }]); return; }
-      const data = await res.json();
-      setMessages((m) => [...m, { role: "assistant", content: data.answer, source: data.source }]);
+      if (data.error) { setMessages((m) => [...m, { role: "assistant", content: `Error: ${data.error}` }]); return; }
+      setMessages((m) => [...m, { role: "assistant", content: data.answer ?? "", source: data.source }]);
     } catch (err) {
       setMessages((m) => [...m, { role: "assistant", content: `Request failed: ${(err as Error).message}` }]);
     } finally { setSending(false); }
   }
+
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-muted-foreground">Loading…</div>;
   if (!user || !isAdmin) return <div className="min-h-screen flex items-center justify-center p-6"><div className="mb-card p-8 max-w-md text-center"><ShieldAlert className="h-10 w-10 text-destructive mx-auto mb-3" /><h1 className="text-xl font-bold mb-1">Restricted area</h1><p className="text-sm text-muted-foreground mb-4">The AEM AI hub is available to the overseer account only.</p><Link to="/" className="mb-btn">Back to workspace</Link></div></div>;
@@ -189,17 +186,19 @@ function AemPage() {
         <div className="flex items-center justify-between gap-3 mt-3"><p className="text-xs text-muted-foreground">The selected model is stored locally on this device so a page reload can restore it. It is persistent, not permanent: you can replace or remove it.</p><button type="button" onClick={(e) => { e.stopPropagation(); void handleRemoveModel(); }} disabled={!hasSavedModel && !modelReady} className="mb-btn-ghost text-xs shrink-0"><Trash2 className="h-3 w-3" /> Remove</button></div>
       </Step>
 
-      <Step n={2} title="Issue API keys for your other websites">
-        {justCreatedKey && <div className="mb-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/40 text-sm"><div className="font-medium mb-1">Save this now — shown only once:</div><div className="flex items-center gap-2 font-mono break-all text-xs">{justCreatedKey}<button onClick={() => navigator.clipboard.writeText(justCreatedKey)} aria-label="Copy key"><Copy className="h-4 w-4" /></button></div></div>}
-        <div className="flex flex-col sm:flex-row gap-2 mb-3"><input value={newKeyLabel} onChange={(e) => setNewKeyLabel(e.target.value)} placeholder="Label (e.g. Halway production)" className="flex-1 border border-border bg-transparent rounded px-3 py-2 text-sm" /><select value={newKeyScope} onChange={(e) => setNewKeyScope(e.target.value as "owner" | "restricted")} className="border border-border bg-transparent rounded px-2 py-2 text-sm"><option value="restricted">Restricted (testing)</option><option value="owner">Owner (full tools)</option></select><button onClick={handleCreateKey} className="mb-btn text-sm">Create key</button></div>
-        <div className="text-sm space-y-1">{keys.length === 0 && <div className="text-muted-foreground">No keys yet.</div>}{keys.map((k) => <div key={k.id} className="flex justify-between border-b border-border py-1 gap-2"><span className="truncate">{k.label} <span className="text-muted-foreground">({k.scope})</span></span><span className="flex items-center gap-2 text-muted-foreground shrink-0">{k.revoked ? "revoked" : "active"}{!k.revoked && <button className="text-destructive underline" onClick={async () => { await revokeKeyFn({ data: { keyId: k.id } }); listKeysFn().then(setKeys).catch(() => {}); }}>revoke</button>}</span></div>)}</div>
-        <div className="mt-4"><label className="text-sm text-muted-foreground block mb-1">Key used by the chat below</label><input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="AM_..." className="w-full border border-border bg-transparent rounded px-3 py-2" /></div>
-      </Step>
-
-      <Step n={3} title="Talk to AEM AI">
+      <Step n={2} title="Talk to AEM AI">
+        <p className="text-xs text-muted-foreground mb-3">No API key needed here — you're signed in. Your local model answers when it's loaded; otherwise hosted providers do.</p>
         <div className="min-h-[240px] flex flex-col gap-3 mb-3">{messages.map((m, i) => <div key={i} className={m.role === "user" ? "text-right" : "text-left"}><div className={`inline-block px-3 py-2 rounded-lg max-w-[85%] text-left whitespace-pre-wrap ${m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>{m.content}{m.source && <div className="text-xs opacity-60 mt-1">source: {m.source}</div>}</div></div>)}{messages.length === 0 && <div className="text-muted-foreground text-sm">Nothing yet — ask anything. The local model is used when available; heavier work falls back to hosted providers.</div>}</div>
         <div className="flex gap-2"><input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSend()} placeholder="Ask AEM AI…" className="flex-1 border border-border bg-transparent rounded px-3 py-2" /><button onClick={handleSend} disabled={sending} className="mb-btn">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</button></div>
       </Step>
+
+      <Step n={3} title="Issue API keys for your other websites (optional)">
+        <p className="text-xs text-muted-foreground mb-3">Only needed so outside sites can reach this same central brain at <code className="px-1 rounded bg-muted/50">/api/hub</code>. Keys never affect the chat above.</p>
+        {justCreatedKey && <div className="mb-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/40 text-sm"><div className="font-medium mb-1">Save this now — shown only once:</div><div className="flex items-center gap-2 font-mono break-all text-xs">{justCreatedKey}<button onClick={() => navigator.clipboard.writeText(justCreatedKey)} aria-label="Copy key"><Copy className="h-4 w-4" /></button></div></div>}
+        <div className="flex flex-col sm:flex-row gap-2 mb-3"><input value={newKeyLabel} onChange={(e) => setNewKeyLabel(e.target.value)} placeholder="Label (e.g. Halway production)" className="flex-1 border border-border bg-transparent rounded px-3 py-2 text-sm" /><select value={newKeyScope} onChange={(e) => setNewKeyScope(e.target.value as "owner" | "restricted")} className="border border-border bg-transparent rounded px-2 py-2 text-sm"><option value="restricted">Restricted (testing)</option><option value="owner">Owner (full tools)</option></select><button onClick={handleCreateKey} className="mb-btn text-sm">Create key</button></div>
+        <div className="text-sm space-y-1">{keys.length === 0 && <div className="text-muted-foreground">No keys yet.</div>}{keys.map((k) => <div key={k.id} className="flex justify-between border-b border-border py-1 gap-2"><span className="truncate">{k.label} <span className="text-muted-foreground">({k.scope})</span></span><span className="flex items-center gap-2 text-muted-foreground shrink-0">{k.revoked ? "revoked" : "active"}{!k.revoked && <button className="text-destructive underline" onClick={async () => { await revokeKeyFn({ data: { keyId: k.id } }); listKeysFn().then(setKeys).catch(() => {}); }}>revoke</button>}</span></div>)}</div>
+      </Step>
+
 
       <section className="mb-card p-4"><div className="flex items-center gap-2 font-medium mb-2"><Terminal className="h-4 w-4" /> Connect another website</div><pre className="text-xs overflow-auto rounded bg-muted/40 p-3">{`fetch("https://mayobuild-studio.lovable.app/api/hub", {\n  method: "POST",\n  headers: { "Content-Type": "application/json", Authorization: "Bearer AM_your_key_here" },\n  body: JSON.stringify({ message: "Hello AEM" })\n}).then(r => r.json())`}</pre></section>
     </div>
