@@ -34,11 +34,11 @@ function AemPage() {
   const createKeyFn = useServerFn(createHubKey);
   const listKeysFn = useServerFn(listHubKeys);
   const revokeKeyFn = useServerFn(revokeHubKey);
+  const askAemFn = useServerFn(askAem);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [apiKey, setApiKey] = useState("");
   const [modelStatus, setModelStatus] = useState("No model loaded yet");
   const [modelName, setModelName] = useState<string | null>(null);
   const [modelReady, setModelReady] = useState(false);
