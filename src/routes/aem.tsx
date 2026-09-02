@@ -93,7 +93,7 @@ function AemPage() {
     if (!newKeyLabel.trim()) return;
     const result = await createKeyFn({ data: { label: newKeyLabel, scope: newKeyScope } });
     setJustCreatedKey(result.fullKey);
-    setApiKey(result.fullKey);
+    
     setNewKeyLabel("");
     listKeysFn().then(setKeys).catch(() => {});
   }
