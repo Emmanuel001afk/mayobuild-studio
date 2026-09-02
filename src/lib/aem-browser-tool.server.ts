@@ -10,7 +10,8 @@
 // actually installable on wherever this project is hosted before relying
 // on it; some hosting platforms don't allow this.
 
-import { chromium, type Browser, type Page } from "playwright";
+type Page = any;
+type Browser = any;
 
 export interface BrowserActionResult {
   ok: boolean;
@@ -20,9 +21,17 @@ export interface BrowserActionResult {
   error?: string;
 }
 
+async function loadChromium(): Promise<any> {
+  // Optional dependency: resolved at runtime only, so builds (and the
+  // edge runtime, where Playwright can't run) don't require it.
+  const mod = await import(/* @vite-ignore */ "playwright" as string);
+  return (mod as any).chromium;
+}
+
 async function withPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
   let browser: Browser | null = null;
   try {
+    const chromium = await loadChromium();
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
     return await fn(page);

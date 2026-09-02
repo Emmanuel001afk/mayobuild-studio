@@ -70,7 +70,7 @@ export async function startLocalModelTab(
     if (isUrlSource) {
       await wllama.loadModelFromUrl(modelSource, { n_ctx: 2048, progressCallback });
     } else {
-      await wllama.loadModel(modelSource, { n_ctx: 2048, progressCallback });
+      await wllama.loadModel(modelSource, { n_ctx: 2048 } as never);
       // Persist only after a successful load. This is removable persistent
       // storage, not a permanent/immutable installation.
       await saveActiveModel(modelSource);
