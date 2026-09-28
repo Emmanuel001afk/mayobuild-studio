@@ -144,3 +144,26 @@ alter table public.hub_local_jobs enable row level security;
 -- Done. Nothing else to configure — the app reaches all of this through the
 -- service role from the server side only.
 -- ===========================================================================
+
+
+-- ---------------------------------------------------------------------------
+-- 6. SHARED AI TUNNEL — keyless-to-the-user transport for native APKs.
+--    Each app installation receives a random session token automatically.
+--    The token is stored only as a hash here; users never enter an AM_ key.
+--    Multiple APKs share this endpoint and identify themselves with app_id.
+-- ---------------------------------------------------------------------------
+create table if not exists public.ai_tunnel_devices (
+  id uuid primary key default gen_random_uuid(),
+  app_id text not null,
+  device_id text not null,
+  device_label text,
+  token_hash text not null unique,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  revoked boolean not null default false,
+  request_count integer not null default 0,
+  unique (app_id, device_id)
+);
+create index if not exists ai_tunnel_devices_app on public.ai_tunnel_devices (app_id, last_seen_at desc);
+grant all on public.ai_tunnel_devices to service_role;
+alter table public.ai_tunnel_devices enable row level security;
