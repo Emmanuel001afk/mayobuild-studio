@@ -167,5 +167,7 @@ create table if not exists public.ai_tunnel_devices (
   unique (app_id, device_id)
 );
 create index if not exists ai_tunnel_devices_app on public.ai_tunnel_devices (app_id, last_seen_at desc);
+alter table public.ai_tunnel_devices add column if not exists window_started_at timestamptz not null default now();
+alter table public.ai_tunnel_devices add column if not exists window_count integer not null default 0;
 grant all on public.ai_tunnel_devices to service_role;
 alter table public.ai_tunnel_devices enable row level security;
