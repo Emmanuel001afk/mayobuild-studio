@@ -20,6 +20,7 @@ import { Route as ProjectsNewRouteImport } from './routes/projects.new'
 import { Route as ProjectsBuildRouteImport } from './routes/projects.build'
 import { Route as ProjectsIdRouteImport } from './routes/projects.$id'
 import { Route as ApiTranscribeRouteImport } from './routes/api/transcribe'
+import { Route as ApiAiTunnelRouteImport } from './routes/api/ai-tunnel'
 import { Route as ApiHubRelayRouteImport } from './routes/api/hub-relay'
 import { Route as ApiHubRouteImport } from './routes/api/hub'
 import { Route as ApiPublicSupabaseConfigRouteImport } from './routes/api/public/supabase-config'
@@ -79,6 +80,11 @@ const ApiTranscribeRoute = ApiTranscribeRouteImport.update({
   path: '/api/transcribe',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAiTunnelRoute = ApiAiTunnelRouteImport.update({
+  id: '/api/ai-tunnel',
+  path: '/api/ai-tunnel',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiHubRelayRoute = ApiHubRelayRouteImport.update({
   id: '/api/hub-relay',
   path: '/api/hub-relay',
@@ -103,6 +109,7 @@ export interface FileRoutesByFullPath {
   '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
   '/setup': typeof SetupRoute
+  '/api/ai-tunnel': typeof ApiAiTunnelRoute
   '/api/hub': typeof ApiHubRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
@@ -154,6 +161,7 @@ export interface FileRouteTypes {
     | '/console'
     | '/reset-password'
     | '/setup'
+    | '/api/ai-tunnel'
     | '/api/hub'
     | '/api/hub-relay'
     | '/api/transcribe'
@@ -203,6 +211,7 @@ export interface RootRouteChildren {
   ConsoleRoute: typeof ConsoleRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   SetupRoute: typeof SetupRoute
+  ApiAiTunnelRoute: typeof ApiAiTunnelRoute
   ApiHubRoute: typeof ApiHubRoute
   ApiHubRelayRoute: typeof ApiHubRelayRoute
   ApiTranscribeRoute: typeof ApiTranscribeRoute
@@ -296,6 +305,13 @@ declare module '@tanstack/react-router' {
       path: '/api/hub-relay'
       fullPath: '/api/hub-relay'
       preLoaderRoute: typeof ApiHubRelayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/ai-tunnel': {
+      id: '/api/ai-tunnel'
+      path: '/api/ai-tunnel'
+      fullPath: '/api/ai-tunnel'
+      preLoaderRoute: typeof ApiAiTunnelRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/hub': {
