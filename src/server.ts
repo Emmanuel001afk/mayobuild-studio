@@ -40,6 +40,27 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      // TanStack Start's SSR layer currently rejects requests whose Accept header
+      // excludes HTML with HTTP 500 before it can reach an API route. Native apps
+      // and other API clients legitimately send Accept: application/json. For
+      // /api/* requests, let route matching decide the response instead of applying
+      // the HTML-only SSR content-negotiation guard. This is intentionally global
+      // so future native apps and API clients are not forced into browser-specific
+      // headers or browser-specific fixes.
+      const pathname = new URL(request.url).pathname;
+      if (pathname.startsWith("/api/")) {
+        const accept = request.headers.get("accept") ?? "";
+        const acceptsHtml = accept.split(",").some((part) => {
+          const mime = part.trim().split(";", 1)[0].toLowerCase();
+          return mime === "*/*" || mime === "text/html";
+        });
+        if (!acceptsHtml) {
+          const headers = new Headers(request.headers);
+          headers.set("accept", "*/*");
+          request = new Request(request, { headers });
+        }
+      }
+
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);
