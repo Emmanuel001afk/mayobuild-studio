@@ -162,6 +162,8 @@ create table if not exists public.ai_tunnel_devices (
   last_seen_at timestamptz not null default now(),
   revoked boolean not null default false,
   request_count integer not null default 0,
+  window_started_at timestamptz not null default now(),
+  window_count integer not null default 0,
   unique (app_id, device_id)
 );
 create index if not exists ai_tunnel_devices_app on public.ai_tunnel_devices (app_id, last_seen_at desc);
