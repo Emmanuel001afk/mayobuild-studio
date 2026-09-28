@@ -339,6 +339,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConsoleRoute: ConsoleRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   SetupRoute: SetupRoute,
+  ApiAiTunnelRoute: ApiAiTunnelRoute,
   ApiHubRoute: ApiHubRoute,
   ApiHubRelayRoute: ApiHubRelayRoute,
   ApiTranscribeRoute: ApiTranscribeRoute,
