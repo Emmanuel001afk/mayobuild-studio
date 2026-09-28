@@ -8,6 +8,7 @@ import { getAdmin } from "@/integrations/mysupabase/admin.server";
 import { answerWithAem } from "@/lib/aem-brain.server";
 
 const MAX_MESSAGE = 20000;
+const MAX_REQUESTS_PER_HOUR = 120;
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -79,7 +80,7 @@ export const Route = createFileRoute("/api/ai-tunnel")({
 
         const { data: device } = await db
           .from("ai_tunnel_devices")
-          .select("id, app_id, device_id, revoked, request_count")
+          .select("id, app_id, device_id, revoked, request_count, window_started_at, window_count")
           .eq("app_id", appId)
           .eq("device_id", deviceId)
           .eq("token_hash", hashToken(token))
@@ -91,10 +92,20 @@ export const Route = createFileRoute("/api/ai-tunnel")({
         if (!message) return jsonError("message is required", 400);
         if (message.length > MAX_MESSAGE) return jsonError("message is too large", 413);
 
-        const now = new Date().toISOString();
+        const nowDate = new Date();
+        const windowStarted = new Date(device.window_started_at ?? nowDate.toISOString());
+        const sameWindow = nowDate.getTime() - windowStarted.getTime() < 60 * 60 * 1000;
+        const windowCount = sameWindow ? (device.window_count ?? 0) : 0;
+        if (windowCount >= MAX_REQUESTS_PER_HOUR) {
+          return jsonError("AI tunnel rate limit exceeded", 429);
+        }
+
+        const now = nowDate.toISOString();
         await db.from("ai_tunnel_devices").update({
           last_seen_at: now,
           request_count: (device.request_count ?? 0) + 1,
+          window_started_at: sameWindow ? windowStarted.toISOString() : now,
+          window_count: windowCount + 1,
         }).eq("id", device.id);
 
         const result = await answerWithAem({
