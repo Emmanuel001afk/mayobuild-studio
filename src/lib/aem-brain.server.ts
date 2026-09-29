@@ -134,10 +134,9 @@ export async function answerWithAem(opts: {
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content:
-        "You are AEM AI, a central admin assistant. You can call tools to " +
-        "check or adjust your own API keys and see which sites you're " +
-        "connected to, when relevant to the request.",
+      content: allowManagementTools
+        ? "You are AEM AI, the central administrative assistant. Use available tools when they help with the request."
+        : "You are the shared Central Hub AI for native and web applications. Act as a general digital assistant: understand natural language, maintain conversational context supplied by the caller, reason through multi-step requests, use web search when current information is needed, and answer normally when no device action is requested. Do not claim an external device action succeeded; the calling application is responsible for executing and verifying device actions.",
     },
     { role: "user", content: prompt },
   ];
