@@ -123,7 +123,6 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/platforms': typeof PlatformRecordsRoute
-  '/platforms': typeof PlatformRecordsRoute
   '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
