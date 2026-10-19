@@ -132,8 +132,6 @@ export interface FileRoutesByFullPath {
   '/api/hub': typeof ApiHubRoute
   '/api/platform-registry': typeof ApiPlatformRegistryRoute
   '/api/platform-diagnostics': typeof ApiPlatformDiagnosticsRoute
-  '/api/platform-registry': typeof ApiPlatformRegistryRoute
-  '/api/platform-diagnostics': typeof ApiPlatformDiagnosticsRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
@@ -144,12 +142,15 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/platforms': typeof PlatformRecordsRoute
   '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
   '/setup': typeof SetupRoute
   '/api/hub': typeof ApiHubRoute
+  '/api/platform-registry': typeof ApiPlatformRegistryRoute
+  '/api/platform-diagnostics': typeof ApiPlatformDiagnosticsRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
@@ -161,12 +162,15 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/platforms': typeof PlatformRecordsRoute
   '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
   '/setup': typeof SetupRoute
   '/api/hub': typeof ApiHubRoute
+  '/api/platform-registry': typeof ApiPlatformRegistryRoute
+  '/api/platform-diagnostics': typeof ApiPlatformDiagnosticsRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
@@ -180,6 +184,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/platforms'
+    | '/platforms'
     | '/aem'
     | '/auth'
     | '/console'
@@ -187,6 +192,8 @@ export interface FileRouteTypes {
     | '/setup'
     | '/api/ai-tunnel'
     | '/api/hub'
+    | '/api/platform-registry'
+    | '/api/platform-diagnostics'
     | '/api/platform-registry'
     | '/api/platform-diagnostics'
     | '/api/hub-relay'
