@@ -21,7 +21,7 @@ Mayobuild Studio / Central Hub provides an optional registry and diagnostics ser
 }
 ```
 
-4. To issue or rotate a platform token, repeat registration with `"issueKey": true`. The response shows the token once. Store it in the platform's secure configuration; do not hardcode it in source control. Rotating a token revokes prior active tokens for that platform.
+4. To issue or rotate a platform token, repeat registration with `"issueKey": true`. The response shows the token once. Rotation revokes prior active tokens for that platform.
 5. Send diagnostic events to `POST /api/platform-diagnostics` with that platform token:
 
 ```json
@@ -40,7 +40,8 @@ Mayobuild Studio / Central Hub provides an optional registry and diagnostics ser
 ## Security and independence
 
 - Owner keys may register platforms and read the shared records. They must remain server-side/admin-only.
-- Platform tokens are scoped to one registered platform and can submit diagnostics only for that platform. Only token hashes are stored.
+- Platform tokens are scoped to one registered platform and only their hashes are stored. The current token flow is intended for trusted server-side agents and controlled testing.
+- **Do not embed a long-lived platform token in a publicly distributed APK or browser bundle.** APK contents can be inspected. Before enabling production diagnostic submission from public mobile clients, add a per-install enrollment/short-lived credential flow or route submissions through a trusted backend. This API does not yet implement that enrollment flow.
 - Never send passwords, API keys, access tokens, message contents, or other secrets in diagnostic details.
 - Device IDs should be random installation identifiers, not phone numbers or account IDs.
 - These endpoints are optional reporting/coordination services. A platform must not block its launcher, browsing, store, or assistant features on successful registry access.
