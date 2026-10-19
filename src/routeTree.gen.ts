@@ -15,6 +15,7 @@ import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AemRouteImport } from './routes/aem'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as PlatformRecordsRouteImport } from './routes/platforms'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
 import { Route as ProjectsBuildRouteImport } from './routes/projects.build'
@@ -23,6 +24,8 @@ import { Route as ApiTranscribeRouteImport } from './routes/api/transcribe'
 import { Route as ApiAiTunnelRouteImport } from './routes/api/ai-tunnel'
 import { Route as ApiHubRelayRouteImport } from './routes/api/hub-relay'
 import { Route as ApiHubRouteImport } from './routes/api/hub'
+import { Route as ApiPlatformRegistryRouteImport } from './routes/api/platform-registry'
+import { Route as ApiPlatformDiagnosticsRouteImport } from './routes/api/platform-diagnostics'
 import { Route as ApiPublicSupabaseConfigRouteImport } from './routes/api/public/supabase-config'
 
 const SetupRoute = SetupRouteImport.update({
@@ -53,6 +56,11 @@ const AemRoute = AemRouteImport.update({
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlatformRecordsRoute = PlatformRecordsRouteImport.update({
+  id: '/platforms',
+  path: '/platforms',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -95,6 +103,16 @@ const ApiHubRoute = ApiHubRouteImport.update({
   path: '/api/hub',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPlatformRegistryRoute = ApiPlatformRegistryRouteImport.update({
+  id: '/api/platform-registry',
+  path: '/api/platform-registry',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPlatformDiagnosticsRoute = ApiPlatformDiagnosticsRouteImport.update({
+  id: '/api/platform-diagnostics',
+  path: '/api/platform-diagnostics',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicSupabaseConfigRoute = ApiPublicSupabaseConfigRouteImport.update({
   id: '/api/public/supabase-config',
   path: '/api/public/supabase-config',
@@ -104,6 +122,7 @@ const ApiPublicSupabaseConfigRoute = ApiPublicSupabaseConfigRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/platforms': typeof PlatformRecordsRoute
   '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
@@ -111,6 +130,8 @@ export interface FileRoutesByFullPath {
   '/setup': typeof SetupRoute
   '/api/ai-tunnel': typeof ApiAiTunnelRoute
   '/api/hub': typeof ApiHubRoute
+  '/api/platform-registry': typeof ApiPlatformRegistryRoute
+  '/api/platform-diagnostics': typeof ApiPlatformDiagnosticsRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
@@ -121,12 +142,15 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/platforms': typeof PlatformRecordsRoute
   '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
   '/setup': typeof SetupRoute
   '/api/hub': typeof ApiHubRoute
+  '/api/platform-registry': typeof ApiPlatformRegistryRoute
+  '/api/platform-diagnostics': typeof ApiPlatformDiagnosticsRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
@@ -138,12 +162,15 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/platforms': typeof PlatformRecordsRoute
   '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
   '/reset-password': typeof ResetPasswordRoute
   '/setup': typeof SetupRoute
   '/api/hub': typeof ApiHubRoute
+  '/api/platform-registry': typeof ApiPlatformRegistryRoute
+  '/api/platform-diagnostics': typeof ApiPlatformDiagnosticsRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/projects/$id': typeof ProjectsIdRoute
@@ -156,6 +183,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/platforms'
     | '/aem'
     | '/auth'
     | '/console'
@@ -163,6 +191,8 @@ export interface FileRouteTypes {
     | '/setup'
     | '/api/ai-tunnel'
     | '/api/hub'
+    | '/api/platform-registry'
+    | '/api/platform-diagnostics'
     | '/api/hub-relay'
     | '/api/transcribe'
     | '/projects/$id'
@@ -173,12 +203,15 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/admin'
+    | '/platforms'
     | '/aem'
     | '/auth'
     | '/console'
     | '/reset-password'
     | '/setup'
     | '/api/hub'
+    | '/api/platform-registry'
+    | '/api/platform-diagnostics'
     | '/api/hub-relay'
     | '/api/transcribe'
     | '/projects/$id'
@@ -189,12 +222,15 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/platforms'
     | '/aem'
     | '/auth'
     | '/console'
     | '/reset-password'
     | '/setup'
     | '/api/hub'
+    | '/api/platform-registry'
+    | '/api/platform-diagnostics'
     | '/api/hub-relay'
     | '/api/transcribe'
     | '/projects/$id'
@@ -206,6 +242,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
+  PlatformRecordsRoute: typeof PlatformRecordsRoute
   AemRoute: typeof AemRoute
   AuthRoute: typeof AuthRoute
   ConsoleRoute: typeof ConsoleRoute
@@ -213,6 +250,8 @@ export interface RootRouteChildren {
   SetupRoute: typeof SetupRoute
   ApiAiTunnelRoute: typeof ApiAiTunnelRoute
   ApiHubRoute: typeof ApiHubRoute
+  ApiPlatformRegistryRoute: typeof ApiPlatformRegistryRoute
+  ApiPlatformDiagnosticsRoute: typeof ApiPlatformDiagnosticsRoute
   ApiHubRelayRoute: typeof ApiHubRelayRoute
   ApiTranscribeRoute: typeof ApiTranscribeRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
@@ -263,6 +302,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/platforms': {
+      id: '/platforms'
+      path: '/platforms'
+      fullPath: '/platforms'
+      preLoaderRoute: typeof PlatformRecordsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -321,6 +367,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHubRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/platform-registry': {
+      id: '/api/platform-registry'
+      path: '/api/platform-registry'
+      fullPath: '/api/platform-registry'
+      preLoaderRoute: typeof ApiPlatformRegistryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/platform-diagnostics': {
+      id: '/api/platform-diagnostics'
+      path: '/api/platform-diagnostics'
+      fullPath: '/api/platform-diagnostics'
+      preLoaderRoute: typeof ApiPlatformDiagnosticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/supabase-config': {
       id: '/api/public/supabase-config'
       path: '/api/public/supabase-config'
@@ -334,6 +394,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
+  PlatformRecordsRoute: PlatformRecordsRoute,
   AemRoute: AemRoute,
   AuthRoute: AuthRoute,
   ConsoleRoute: ConsoleRoute,
@@ -341,6 +402,8 @@ const rootRouteChildren: RootRouteChildren = {
   SetupRoute: SetupRoute,
   ApiAiTunnelRoute: ApiAiTunnelRoute,
   ApiHubRoute: ApiHubRoute,
+  ApiPlatformRegistryRoute: ApiPlatformRegistryRoute,
+  ApiPlatformDiagnosticsRoute: ApiPlatformDiagnosticsRoute,
   ApiHubRelayRoute: ApiHubRelayRoute,
   ApiTranscribeRoute: ApiTranscribeRoute,
   ProjectsIdRoute: ProjectsIdRoute,

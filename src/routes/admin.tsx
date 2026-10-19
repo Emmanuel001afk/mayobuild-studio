@@ -57,6 +57,7 @@ function AdminPage() {
         <div className="flex gap-2">
           <Link to="/console" className="mb-btn">AI Ops Console</Link>
           <Link to="/aem" className="mb-btn">AEM AI Hub</Link>
+          <Link to="/platforms" className="mb-btn">Platform Records</Link>
           <Link to="/setup" className="mb-btn-ghost"><Database className="h-4 w-4" /> SQL Setup</Link>
           <Link to="/" className="mb-btn-ghost"><ArrowLeft className="h-4 w-4" /> Workspace</Link>
         </div>
