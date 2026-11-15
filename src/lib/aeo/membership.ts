@@ -181,8 +181,13 @@ export async function verifyAeoMembershipCredential(
     fail("invalid_claims", "Membership scope must contain a unique member entry");
   }
 
-  const { iat, nbf, exp } = claims;
-  if (![iat, nbf, exp].every(integer) || exp <= iat || nbf < iat || nbf > exp ||
+  if (!integer(claims.iat) || !integer(claims.nbf) || !integer(claims.exp)) {
+    fail("credential_time_invalid", "Credential timestamps must be safe integers");
+  }
+  const iat = claims.iat;
+  const nbf = claims.nbf;
+  const exp = claims.exp;
+  if (exp <= iat || nbf < iat || nbf > exp ||
       iat > now + skew || nbf > now + skew || exp <= now - skew ||
       exp - iat > maxLifetime) {
     fail("credential_time_invalid", "Credential is expired, not yet valid, or has an invalid lifetime");
@@ -195,10 +200,10 @@ export async function verifyAeoMembershipCredential(
   try {
     if (!globalThis.crypto?.subtle) fail("crypto_unavailable", "WebCrypto is unavailable");
     const cryptoKey = await globalThis.crypto.subtle.importKey(
-      "raw", publicKey, { name: "Ed25519" }, false, ["verify"],
+      "raw", publicKey.slice().buffer as ArrayBuffer, { name: "Ed25519" }, false, ["verify"],
     );
     const valid = await globalThis.crypto.subtle.verify(
-      { name: "Ed25519" }, cryptoKey, signature,
+      { name: "Ed25519" }, cryptoKey, signature.slice().buffer as ArrayBuffer,
       new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
     );
     if (!valid) fail("invalid_signature", "Credential signature is invalid");
@@ -370,7 +375,9 @@ export async function verifyAeoTrustBundle(
         fail("invalid_trust_bundle", "Invalid issuer key " + field);
       }
     }
-    if (item.notBefore !== undefined && item.notAfter !== undefined && item.notAfter <= item.notBefore) {
+    const notBefore = item.notBefore;
+    const notAfter = item.notAfter;
+    if (typeof notBefore === "number" && typeof notAfter === "number" && notAfter <= notBefore) {
       fail("invalid_trust_bundle", "Issuer key validity interval is invalid");
     }
     return Object.freeze({
