@@ -329,13 +329,12 @@ export async function verifyAeoTrustBundle(
   const iat = payload.iat;
   const nbf = payload.nbf;
   const exp = payload.exp;
-  if (!Number.isSafeInteger(version) || (version as number) < 1 ||
-      (version as number) < minimumVersion ||
-      ![iat, nbf, exp].every(Number.isSafeInteger) ||
-      (exp as number) <= (iat as number) || (nbf as number) < (iat as number) ||
-      (nbf as number) > (exp as number) || (iat as number) > now + skew ||
-      (nbf as number) > now + skew || (exp as number) <= now - skew ||
-      (exp as number) - (iat as number) > 7 * 24 * 60 * 60) {
+  if (!integer(version) || version < 1 || version < minimumVersion ||
+      !integer(iat) || !integer(nbf) || !integer(exp)) {
+    fail("trust_bundle_time_or_version_invalid", "Trust bundle timestamps and version must be safe integers");
+  }
+  if (exp <= iat || nbf < iat || nbf > exp || iat > now + skew ||
+      nbf > now + skew || exp <= now - skew || exp - iat > 7 * 24 * 60 * 60) {
     fail("trust_bundle_time_or_version_invalid", "Trust bundle is expired, stale, or has an invalid lifetime/version");
   }
   const signature = decodeSegment(parts[2], "trust-bundle signature");
