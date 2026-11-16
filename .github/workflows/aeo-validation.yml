@@ -18,7 +18,9 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Type-check AEO adapter
-        run: bunx tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM src/lib/aeo/membership.ts
+      - name: Run AEO trust-bundle tests
+        run: bun test src/lib/aeo/trust-bundle.test.ts
+      - name: Type-check AEO membership and trust-bundle adapters
+        run: bunx tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM src/lib/aeo/membership.ts src/lib/aeo/trust-bundle.ts
       - name: Build application
         run: bun run build
