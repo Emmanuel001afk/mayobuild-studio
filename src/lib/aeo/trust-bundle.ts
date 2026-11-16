@@ -155,9 +155,11 @@ export async function verifyAeoTrustBundle(
   const rootBytes = publicKeyBytes(root.publicKey, "Pinned root public key");
   try {
     if (!globalThis.crypto?.subtle) fail("crypto_unavailable", "WebCrypto is unavailable");
-    const imported = await globalThis.crypto.subtle.importKey("raw", rootBytes, { name: "Ed25519" }, false, ["verify"]);
+    const rootBuffer = Uint8Array.from(rootBytes).buffer as ArrayBuffer;
+    const signatureBuffer = Uint8Array.from(signature).buffer as ArrayBuffer;
+    const imported = await globalThis.crypto.subtle.importKey("raw", rootBuffer, { name: "Ed25519" }, false, ["verify"]);
     const valid = await globalThis.crypto.subtle.verify(
-      { name: "Ed25519" }, imported, signature, new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
+      { name: "Ed25519" }, imported, signatureBuffer, new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
     );
     if (!valid) fail("invalid_trust_bundle_signature", "Trust-bundle signature is invalid");
   } catch (error) {
@@ -180,14 +182,14 @@ export async function verifyAeoTrustBundle(
     for (const field of ["notBefore", "notAfter", "revokedAt"] as const) {
       if (entry[field] !== undefined && !integer(entry[field])) fail("invalid_trust_bundle", `Invalid issuer key ${field}`);
     }
-    if (entry.notBefore !== undefined && entry.notAfter !== undefined && entry.notAfter <= entry.notBefore) {
+    if (entry.notBefore !== undefined && entry.notAfter !== undefined && (entry.notAfter as number) <= (entry.notBefore as number)) {
       fail("invalid_trust_bundle", "Issuer key validity interval is invalid");
     }
     return Object.freeze({
       kid, issuer, algorithm: "Ed25519" as const, publicKey: key,
-      ...(entry.notBefore !== undefined ? { notBefore: entry.notBefore } : {}),
-      ...(entry.notAfter !== undefined ? { notAfter: entry.notAfter } : {}),
-      ...(entry.revokedAt !== undefined ? { revokedAt: entry.revokedAt } : {}),
+      ...(entry.notBefore !== undefined ? { notBefore: entry.notBefore as number } : {}),
+      ...(entry.notAfter !== undefined ? { notAfter: entry.notAfter as number } : {}),
+      ...(entry.revokedAt !== undefined ? { revokedAt: entry.revokedAt as number } : {}),
     });
   });
   const revokedIds = payload.revokedCredentialIds ?? [];
