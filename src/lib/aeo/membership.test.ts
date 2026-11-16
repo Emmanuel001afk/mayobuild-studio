@@ -92,7 +92,7 @@ describe("AEO membership verification", () => {
 
 describe("shared AEO cross-platform conformance vector", () => {
   it("verifies the same root-signed trust bundle, membership credential and registration envelope", async () => {
-    const vector = JSON.parse(readFileSync(new URL("./fixtures/aeo-conformance-vectors-v1.json", import.meta.url), "utf8"));
+    const vector = JSON.parse(readFileSync("src/lib/aeo/fixtures/aeo-conformance-vectors-v1.json", "utf8"));
     const bundle = await verifyAeoTrustBundle(vector.trustBundle, {
       pinnedRootKeys: vector.pinnedRootKeys,
       nowSeconds: vector.nowSeconds,
