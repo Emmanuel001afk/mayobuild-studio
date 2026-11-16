@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { webcrypto } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { verifyAeoTrustBundle } from "./trust-bundle";
 import {
   AEO_FRAMEWORK_AUDIENCE,
   AEO_MEMBERSHIP_TYP,
@@ -84,5 +86,28 @@ describe("AEO membership verification", () => {
       ...registration,
       displayName: "Impersonated App",
     }, f.options)).rejects.toThrow(/does not match/i);
+  });
+});
+
+
+describe("shared AEO cross-platform conformance vector", () => {
+  it("verifies the same root-signed trust bundle, membership credential and registration envelope", async () => {
+    const vector = JSON.parse(readFileSync(new URL("./fixtures/aeo-conformance-vectors-v1.json", import.meta.url), "utf8"));
+    const bundle = await verifyAeoTrustBundle(vector.trustBundle, {
+      pinnedRootKeys: vector.pinnedRootKeys,
+      nowSeconds: vector.nowSeconds,
+    });
+    expect(bundle.version).toBe(vector.expected.trustBundleVersion);
+    expect(bundle.trustedKeys[0]?.kid).toBe(vector.expected.issuerKeyId);
+    const options = {
+      trustedKeys: bundle.trustedKeys,
+      isCredentialRevoked: bundle.isCredentialRevoked,
+      nowSeconds: vector.nowSeconds,
+    };
+    const membership = await verifyAeoMembershipCredential(vector.membershipCredential, options);
+    expect(membership.platformId).toBe(vector.expected.membershipPlatformId);
+    expect(membership.platformName).toBe(vector.expected.membershipPlatformName);
+    const registration = await verifyAeoPeerRegistration(vector.registration, options);
+    expect(registration.platformId).toBe(vector.expected.membershipPlatformId);
   });
 });
