@@ -1,9 +1,9 @@
 {
-  "name": "MayoCut — Video Studio",
-  "short_name": "MayoCut",
-  "description": "Offline-first video editor: multi-track timeline, templates, filters, text and export. No account, no cloud database.",
-  "id": "/mayocut",
-  "start_url": "/mayocut",
+  "name": "Mayobuild Studio",
+  "short_name": "Mayobuild",
+  "description": "The full Mayobuild app: MayoCut offline video editor, website & native app builder, AI console. Your device is the database.",
+  "id": "/",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
@@ -12,6 +12,7 @@
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "/icons/icon-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "maskable" }
   ]
 }

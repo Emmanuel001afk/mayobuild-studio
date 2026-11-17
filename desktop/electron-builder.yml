@@ -1,5 +1,5 @@
-appId: com.mayobuild.mayocut
-productName: MayoCut
+appId: com.mayobuild.studio
+productName: Mayobuild Studio
 copyright: © 2026 Mayobuild
 directories:
   output: release
@@ -19,11 +19,11 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  artifactName: mayocut-setup-${version}.exe
+  artifactName: mayobuild-studio-setup-${version}.exe
 linux:
   target:
     - AppImage
   icon: icons/icon-512.png
-  category: Video
+  category: Multimedia
 mac:
   category: public.app-category.video

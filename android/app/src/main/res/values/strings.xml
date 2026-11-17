@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">MayoCut</string>
-    <string name="title_activity_main">MayoCut</string>
-    <string name="package_name">com.mayobuild.mayocut</string>
-    <string name="custom_url_scheme">com.mayobuild.mayocut</string>
+    <string name="app_name">Mayobuild Studio</string>
+    <string name="title_activity_main">Mayobuild Studio</string>
+    <string name="package_name">com.mayobuild.studio</string>
+    <string name="custom_url_scheme">com.mayobuild.studio</string>
 </resources>
