@@ -1,5 +1,6 @@
 {
   "name": "tanstack_start_ts",
+  "version": "0.1.0",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -9,7 +10,10 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "build:shell": "vite build --config shell/vite.config.mts",
+    "dist:win": "npm run build:shell && npm --prefix desktop ci --ignore-scripts && npm --prefix desktop exec electron-builder -- --win --x64",
+    "dist:android": "npm run build:shell && npx cap sync android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -72,6 +76,9 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
     "@eslint/js": "^9.32.0",
     "@lovable.dev/vite-tanstack-config": "2.13.1",
     "@types/node": "^22.16.5",
@@ -88,7 +95,7 @@
     "prettier": "^3.7.3",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
-    "vite": "^7.3.1"
+    "vite": "^8.3.8"
   },
   "overrides": {
     "@zxing/library": "0.22.0"

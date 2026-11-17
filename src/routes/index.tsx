@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import {
   Sparkles, Plus, LogOut, Globe, Smartphone, Users, Eye, FileText,
   Cpu, Mic, Zap, Loader2, ShieldAlert, ExternalLink, Trash2, Layers, Bot, RefreshCw,
+  Scissors, Download,
 } from "lucide-react";
 
 
@@ -58,6 +59,14 @@ function Landing() {
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-2">
           <Sparkles className="h-6 w-6 text-primary" />
           <span className="font-bold text-lg mb-gradient-text">Mayobuild Studio</span>
+          <div className="ml-auto flex items-center gap-2">
+            <Link to="/mayocut" className="mb-btn-ghost text-sm">
+              <Scissors className="h-4 w-4" /> MayoCut
+            </Link>
+            <Link to="/downloads" className="mb-btn-ghost text-sm">
+              <Download className="h-4 w-4" /> Downloads
+            </Link>
+          </div>
         </div>
       </header>
       <main className="max-w-6xl mx-auto px-4 py-10 grid lg:grid-cols-2 gap-10 items-center">
@@ -75,6 +84,10 @@ function Landing() {
             <span className="mb-chip"><FileText className="h-3 w-3" /> PDF reader</span>
             <span className="mb-chip"><Smartphone className="h-3 w-3" /> Native app generator</span>
             <span className="mb-chip"><Users className="h-3 w-3" /> Live presence</span>
+            <span className="mb-chip">
+              <Scissors className="h-3 w-3" />{" "}
+              <Link to="/mayocut" className="hover:text-foreground">MayoCut offline video editor</Link>
+            </span>
           </div>
         </section>
         <section className="mb-card p-8 w-full max-w-md justify-self-center">
@@ -130,6 +143,8 @@ function Dashboard({ user }: { user: { id: string; email?: string } }) {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground hidden sm:inline">{user.email}</span>
+            <Link to="/mayocut" className="mb-btn-ghost"><Scissors className="h-4 w-4" /> MayoCut</Link>
+            <Link to="/downloads" className="mb-btn-ghost hidden md:flex"><Download className="h-4 w-4" /> Downloads</Link>
             <Link to="/console" className="mb-btn-ghost"><Bot className="h-4 w-4" /> AI Console</Link>
             {isAdmin && (
               <Link to="/admin" className="mb-btn-ghost"><ShieldAlert className="h-4 w-4" /> Admin</Link>

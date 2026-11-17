@@ -12,4 +12,10 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    server: {
+      // Allow the Arena/Lovable sandbox preview host (dynamic *.e2b.app / *.lovable.app subdomains).
+      allowedHosts: true,
+    },
+  },
 });

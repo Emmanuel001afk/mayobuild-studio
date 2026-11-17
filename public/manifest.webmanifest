@@ -1,0 +1,17 @@
+{
+  "name": "MayoCut — Video Studio",
+  "short_name": "MayoCut",
+  "description": "Offline-first video editor: multi-track timeline, templates, filters, text and export. No account, no cloud database.",
+  "id": "/mayocut",
+  "start_url": "/mayocut",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d1220",
+  "theme_color": "#0d1220",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

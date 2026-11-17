@@ -1,0 +1,29 @@
+appId: com.mayobuild.mayocut
+productName: MayoCut
+copyright: © 2026 Mayobuild
+directories:
+  output: release
+  buildResources: ../public
+files:
+  - ../app-shell-dist/**/*
+  - main.cjs
+  - preload.cjs
+  - package.json
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: icons/icon-512.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: mayocut-setup-${version}.exe
+linux:
+  target:
+    - AppImage
+  icon: icons/icon-512.png
+  category: Video
+mac:
+  category: public.app-category.video
