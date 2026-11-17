@@ -77,10 +77,12 @@ jobs:
           git add .diag/windows.txt && git commit -m "diag: windows failure run ${GITHUB_RUN_ID}" --allow-empty
           git push origin "HEAD:refs/heads/diag-windows" --force 2>&1 || true
       - name: Upload to release
+        shell: bash # pwsh (windows-latest default) does not expand *.exe globs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.event.inputs.release || format('mayocut-v{0}', needs.shell.outputs.version) }}
         run: |
+          ls -la desktop/release
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "MayoCut $RELEASE_TAG" --notes "MayoCut video editor — $RELEASE_TAG" --target "$GITHUB_SHA"
           gh release upload "$RELEASE_TAG" desktop/release/*.exe --clobber
 
@@ -111,12 +113,13 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           echo "run: ${GITHUB_RUN_ID}" > /tmp/diag-android.txt
-          { echo "=== env ==="; node -v; npm -v; java -version 2>&1 | head -2; echo "=== android sdk ==="; ls "$ANDROID_HOME/platforms" 2>/dev/null; echo "=== gradle retry ==="; (cd android && ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tail -120); } >> /tmp/diag-android.txt 2>&1 || true
+          { echo "=== env ==="; node -v; npm -v; java -version 2>&1 | head -2; echo "=== android sdk ==="; ls "$ANDROID_HOME/platforms" 2>/dev/null; echo "=== gradle retry ==="; (cd android && ./gradlew assembleDebug --no-daemon 2>&1 | tail -300 > /tmp/g.log; grep -B3 -A60 "What went wrong" /tmp/g.log; echo "--- tail ---"; tail -30 /tmp/g.log); } >> /tmp/diag-android.txt 2>&1 || true
           mkdir -p .diag && cp /tmp/diag-android.txt .diag/android.txt
           git config user.email "ci@mayobuild" && git config user.name "MayoCut CI"
           git add .diag/android.txt && git commit -m "diag: android failure run ${GITHUB_RUN_ID}" --allow-empty
           git push origin "HEAD:refs/heads/diag-android" --force 2>&1 || true
       - name: Upload to release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.event.inputs.release || format('mayocut-v{0}', needs.shell.outputs.version) }}
