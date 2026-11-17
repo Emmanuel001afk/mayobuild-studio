@@ -62,6 +62,15 @@ jobs:
       # electron-builder uses the local dist and needs no extra downloads.
       - run: npm --prefix desktop ci
       - run: cd desktop && npx electron-builder --win --x64
+      - name: Diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          { echo "=== env ==="; node -v; npm -v; echo "=== desktop ls ==="; ls -la desktop; echo "=== electron dist ==="; ls desktop/node_modules/electron/dist 2>/dev/null | head; echo "=== retry (verbose) ==="; cd desktop && npx electron-builder --win --x64 2>&1 | tail -60; } > /tmp/diag-windows.txt 2>&1 || true
+          mkdir -p .diag && cp /tmp/diag-windows.txt .diag/windows.txt
+          git config user.email "ci@mayobuild" && git config user.name "MayoCut CI"
+          git add .diag/windows.txt && git commit -m "diag: windows failure" --allow-empty
+          git push origin "HEAD:refs/heads/diag-windows" --force 2>&1 || true
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,6 +99,15 @@ jobs:
       - run: npm ci
       - run: npx cap sync android
       - run: cd android && ./gradlew assembleDebug --no-daemon
+      - name: Diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          { echo "=== env ==="; node -v; npm -v; java -version 2>&1 | head -2; echo "=== cap ls ==="; npx cap ls 2>&1; echo "=== cap sync retry ==="; npx cap sync android 2>&1 | tail -40; } > /tmp/diag-android.txt 2>&1 || true
+          mkdir -p .diag && cp /tmp/diag-android.txt .diag/android.txt
+          git config user.email "ci@mayobuild" && git config user.name "MayoCut CI"
+          git add .diag/android.txt && git commit -m "diag: android failure" --allow-empty
+          git push origin "HEAD:refs/heads/diag-android" --force 2>&1 || true
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
