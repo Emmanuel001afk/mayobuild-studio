@@ -2,9 +2,11 @@
 # codebase and attaches them to a GitHub Release.
 #
 # Trigger manually (once the workflow exists on the default branch):
-#   Actions → distribute → Run workflow  (release tag input, e.g. mayocut-v0.1.0)
+#   Actions → distribute → Run workflow  (release tag input, e.g. v0.1.0)
 # Or push a tag:  mc-0.2.0  → binaries are attached to release
-#   mayocut-v<version> (version from package.json), created if missing.
+#   v<version> (version from package.json — a semver tag so GitHub marks it
+#   "Latest" and the /releases/latest/download links on /downloads work),
+#   created if missing.
 name: distribute
 
 on:
@@ -13,7 +15,7 @@ on:
       release:
         description: "GitHub release tag to attach the binaries to"
         required: true
-        default: "mayocut-v0.1.0"
+        default: "v0.1.0"
   push:
     tags:
       - "mc-*"
@@ -80,7 +82,7 @@ jobs:
         shell: bash # pwsh (windows-latest default) does not expand *.exe globs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event.inputs.release || format('mayocut-v{0}', needs.shell.outputs.version) }}
+          RELEASE_TAG: ${{ github.event.inputs.release || format('v{0}', needs.shell.outputs.version) }}
         run: |
           ls -la desktop/release
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "MayoCut $RELEASE_TAG" --notes "MayoCut video editor — $RELEASE_TAG" --target "$GITHUB_SHA"
@@ -123,7 +125,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event.inputs.release || format('mayocut-v{0}', needs.shell.outputs.version) }}
+          RELEASE_TAG: ${{ github.event.inputs.release || format('v{0}', needs.shell.outputs.version) }}
           APK_NAME: mayocut-android-${{ needs.shell.outputs.version }}.apk
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "MayoCut $RELEASE_TAG" --notes "MayoCut video editor — $RELEASE_TAG" --target "$GITHUB_SHA"
