@@ -58,9 +58,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: app-shell-dist
-      # --ignore-scripts: electron's postinstall binary download is handled by
-      # electron-builder itself during the build step below.
-      - run: npm --prefix desktop ci --ignore-scripts
+      # Full ci (with scripts): electron's postinstall fetches the binary, so
+      # electron-builder uses the local dist and needs no extra downloads.
+      - run: npm --prefix desktop ci
       - run: cd desktop && npx electron-builder --win --x64
       - name: Upload to release
         env:
