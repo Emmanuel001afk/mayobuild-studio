@@ -1,0 +1,156 @@
+{
+  "format": "mayocut-pack",
+  "version": 1,
+  "name": "Social Starter",
+  "desc": "Hooks, quote cards and title treatments for short-form video. Install once, use forever — all offline.",
+  "templates": [
+    {
+      "id": "tpl_ss_hook",
+      "name": "Hook Intro",
+      "desc": "A punchy 5-second hook layout: a big question up top, a soft line under it. Add your footage behind it.",
+      "aspect": "9:16",
+      "swatch": "linear-gradient(135deg,#06b6d4 0%,#3b82f6 60%,#8b5cf6 100%)",
+      "kind": "project",
+      "project": {
+        "id": "prj_ss_hook",
+        "name": "Hook Intro",
+        "aspect": "9:16",
+        "main": [],
+        "tracks": [
+          {
+            "id": "t_text",
+            "name": "Text",
+            "clips": [
+              {
+                "id": "tc_ss_hook1",
+                "kind": "text",
+                "start": 0.2,
+                "duration": 2.4,
+                "text": "STOP SCROLLING.",
+                "size": 120,
+                "color": "#ffffff",
+                "bg": "",
+                "bold": true,
+                "pos": "tc",
+                "anim": "slideup"
+              },
+              {
+                "id": "tc_ss_hook2",
+                "kind": "text",
+                "start": 2.5,
+                "duration": 2.3,
+                "text": "this changes how you edit",
+                "size": 56,
+                "color": "#e2e8f0",
+                "bg": "#000000aa",
+                "bold": false,
+                "pos": "mc",
+                "anim": "fade"
+              }
+            ]
+          },
+          { "id": "t_overlay", "name": "Overlay", "clips": [] },
+          { "id": "t_audio", "name": "Audio", "clips": [] }
+        ],
+        "createdAt": 0,
+        "updatedAt": 0,
+        "sourceTemplate": "Hook Intro"
+      }
+    },
+    {
+      "id": "tpl_ss_quote",
+      "name": "Quote Card",
+      "desc": "A centered quote with an attribution line — made for turning words into a shareable clip.",
+      "aspect": "1:1",
+      "swatch": "linear-gradient(135deg,#f59e0b 0%,#ec4899 55%,#8b5cf6 100%)",
+      "kind": "project",
+      "project": {
+        "id": "prj_ss_quote",
+        "name": "Quote Card",
+        "aspect": "1:1",
+        "main": [],
+        "tracks": [
+          {
+            "id": "t_text",
+            "name": "Text",
+            "clips": [
+              {
+                "id": "tc_ss_quote1",
+                "kind": "text",
+                "start": 0.4,
+                "duration": 4.5,
+                "text": "“The best time to edit\nwas yesterday.”",
+                "size": 72,
+                "color": "#ffffff",
+                "bg": "",
+                "bold": true,
+                "pos": "mc",
+                "anim": "fade"
+              },
+              {
+                "id": "tc_ss_quote2",
+                "kind": "text",
+                "start": 3.2,
+                "duration": 2.6,
+                "text": "— you, probably",
+                "size": 40,
+                "color": "#fbbf24",
+                "bg": "",
+                "bold": false,
+                "pos": "bc",
+                "anim": "fade"
+              }
+            ]
+          },
+          { "id": "t_overlay", "name": "Overlay", "clips": [] },
+          { "id": "t_audio", "name": "Audio", "clips": [] }
+        ],
+        "createdAt": 0,
+        "updatedAt": 0,
+        "sourceTemplate": "Quote Card"
+      }
+    },
+    {
+      "id": "tpl_ss_title",
+      "name": "Title + Lower Third",
+      "desc": "Treatment: adds a big title and a lower-third name strip to any of your projects.",
+      "aspect": "9:16",
+      "swatch": "linear-gradient(135deg,#22d3ee 0%,#6366f1 100%)",
+      "kind": "enhance",
+      "enhance": [
+        {
+          "op": "add-text",
+          "track": "t_text",
+          "clip": {
+            "kind": "text",
+            "start": 0.3,
+            "duration": 3,
+            "text": "MY STORY",
+            "size": 110,
+            "color": "#ffffff",
+            "bg": "",
+            "bold": true,
+            "pos": "tc",
+            "anim": "slideup"
+          }
+        },
+        {
+          "op": "add-text",
+          "track": "t_text",
+          "clip": {
+            "kind": "text",
+            "start": 0.8,
+            "duration": 3.5,
+            "text": "STARRING: YOU",
+            "size": 40,
+            "color": "#ffffff",
+            "bg": "#000000cc",
+            "bold": false,
+            "pos": "bl",
+            "anim": "fade"
+          }
+        }
+      ]
+    }
+  ]
+}

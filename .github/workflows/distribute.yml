@@ -1,0 +1,133 @@
+# Builds the MayoCut binaries (Windows .exe + Android .apk) from the single
+# codebase and attaches them to a GitHub Release.
+#
+# Trigger manually (once the workflow exists on the default branch):
+#   Actions → distribute → Run workflow  (release tag input, e.g. v0.1.0)
+# Or push a tag:  mc-0.2.0  → binaries are attached to release
+#   v<version> (version from package.json — a semver tag so GitHub marks it
+#   "Latest" and the /releases/latest/download links on /downloads work),
+#   created if missing.
+name: distribute
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "GitHub release tag to attach the binaries to"
+        required: true
+        default: "v0.1.0"
+  push:
+    tags:
+      - "mc-*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: distribute
+  cancel-in-progress: false
+
+jobs:
+  shell:
+    name: Build static shell
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - run: npm run build:shell
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-shell-dist
+          path: app-shell-dist
+
+  windows:
+    name: Windows .exe (NSIS)
+    # windows-latest: NSIS + rcedit run natively (no Wine needed for
+    # resource/icon editing, which is what Linux runners lack).
+    runs-on: windows-latest
+    needs: shell
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-shell-dist
+          path: app-shell-dist
+      # Full ci (with scripts): electron's postinstall fetches the binary, so
+      # electron-builder uses the local dist and needs no extra downloads.
+      - run: npm --prefix desktop ci
+      - run: cd desktop && npx electron-builder --win --x64
+      - name: Diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          echo "run: ${GITHUB_RUN_ID}" > /tmp/diag-windows.txt
+          { echo "=== env ==="; node -v; npm -v; echo "=== app-shell-dist ==="; ls app-shell-dist 2>/dev/null | head; echo "=== retry (verbose) ==="; (cd desktop && npx electron-builder --win --x64 2>&1 | tail -80); } >> /tmp/diag-windows.txt 2>&1 || true
+          mkdir -p .diag && cp /tmp/diag-windows.txt .diag/windows.txt
+          git config user.email "ci@mayobuild" && git config user.name "MayoCut CI"
+          git add .diag/windows.txt && git commit -m "diag: windows failure run ${GITHUB_RUN_ID}" --allow-empty
+          git push origin "HEAD:refs/heads/diag-windows" --force 2>&1 || true
+      - name: Upload to release
+        shell: bash # pwsh (windows-latest default) does not expand *.exe globs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.release || format('v{0}', needs.shell.outputs.version) }}
+        run: |
+          ls -la desktop/release
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "MayoCut $RELEASE_TAG" --notes "MayoCut video editor — $RELEASE_TAG" --target "$GITHUB_SHA"
+          gh release upload "$RELEASE_TAG" desktop/release/*.exe --clobber
+
+  android:
+    name: Android .apk
+    runs-on: ubuntu-latest
+    needs: shell
+    steps:
+      - uses: actions/checkout@v4
+      # Capacitor 8.x android modules compile with sourceRelease 21 → JDK 21
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-shell-dist
+          path: app-shell-dist
+      - run: npm ci
+      - run: npx cap sync android
+      - run: cd android && ./gradlew assembleDebug --no-daemon
+      - name: Diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          echo "run: ${GITHUB_RUN_ID}" > /tmp/diag-android.txt
+          { echo "=== env ==="; node -v; npm -v; java -version 2>&1 | head -2; echo "=== android sdk ==="; ls "$ANDROID_HOME/platforms" 2>/dev/null; echo "=== gradle retry ==="; (cd android && ./gradlew assembleDebug --no-daemon 2>&1 | tail -300 > /tmp/g.log; grep -B3 -A60 "What went wrong" /tmp/g.log; echo "--- tail ---"; tail -30 /tmp/g.log); } >> /tmp/diag-android.txt 2>&1 || true
+          mkdir -p .diag && cp /tmp/diag-android.txt .diag/android.txt
+          git config user.email "ci@mayobuild" && git config user.name "MayoCut CI"
+          git add .diag/android.txt && git commit -m "diag: android failure run ${GITHUB_RUN_ID}" --allow-empty
+          git push origin "HEAD:refs/heads/diag-android" --force 2>&1 || true
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.release || format('v{0}', needs.shell.outputs.version) }}
+          APK_NAME: mayocut-android-${{ needs.shell.outputs.version }}.apk
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "MayoCut $RELEASE_TAG" --notes "MayoCut video editor — $RELEASE_TAG" --target "$GITHUB_SHA"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "./$APK_NAME"
+          gh release upload "$RELEASE_TAG" "./$APK_NAME" --clobber

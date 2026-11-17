@@ -1,5 +1,6 @@
 {
   "name": "tanstack_start_ts",
+  "version": "0.5.0",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -9,7 +10,10 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "build:shell": "node scripts/onnx-assets.mjs && vite build --config shell/vite.config.mts",
+    "dist:win": "npm run build:shell && npm --prefix desktop ci --ignore-scripts && cd desktop && npx electron-builder --win --x64",
+    "dist:android": "npm run build:shell && npx cap sync android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -39,6 +43,7 @@
     "@radix-ui/react-toggle": "^1.1.10",
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "@shiguredo/rnnoise-wasm": "^2025.1.5",
     "@supabase/supabase-js": "^2.106.2",
     "@tailwindcss/vite": "^4.2.1",
     "@tanstack/react-query": "^5.83.0",
@@ -47,6 +52,7 @@
     "@tanstack/router-plugin": "^1.167.28",
     "@webcontainer/api": "^1.3.0",
     "@wllama/wllama": "^3.6.0",
+    "@xenova/transformers": "^2.17.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -55,6 +61,8 @@
     "input-otp": "^1.4.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.575.0",
+    "mp4-muxer": "^5.2.2",
+    "omggif": "^1.0.10",
     "pdfjs-dist": "^6.0.227",
     "react": "^19.2.0",
     "react-day-picker": "^9.14.0",
@@ -63,6 +71,7 @@
     "react-pdf": "^10.4.1",
     "react-resizable-panels": "^4.6.5",
     "recharts": "^2.15.4",
+    "sherpa-onnx": "^2.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.1",
@@ -72,6 +81,9 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
     "@eslint/js": "^9.32.0",
     "@lovable.dev/vite-tanstack-config": "2.13.1",
     "@types/node": "^22.16.5",
@@ -88,7 +100,7 @@
     "prettier": "^3.7.3",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
-    "vite": "^7.3.1"
+    "vite": "^8.3.8"
   },
   "overrides": {
     "@zxing/library": "0.22.0"

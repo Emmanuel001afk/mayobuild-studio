@@ -1,0 +1,86 @@
+{
+  "format": "mayocut-pack",
+  "version": 1,
+  "name": "Cinematic Looks",
+  "desc": "Grade + title treatments that turn raw clips into short films. Treatments restyle a copy of any project.",
+  "templates": [
+    {
+      "id": "tpl_cl_film",
+      "name": "Film Grade",
+      "desc": "Treatment: a contrasty filmic grade on every clip, dipped-to-black transitions between them.",
+      "aspect": "16:9",
+      "swatch": "linear-gradient(135deg,#f59e0b 0%,#dc2626 55%,#1e293b 100%)",
+      "kind": "enhance",
+      "enhance": [
+        { "op": "filter", "value": "cinema" },
+        { "op": "adjust", "value": { "contrast": 112, "saturation": 92, "brightness": 97, "hue": 0 } },
+        { "op": "transition", "value": "fadeblack", "dur": 0.6 }
+      ]
+    },
+    {
+      "id": "tpl_cl_golden",
+      "name": "Golden Hour",
+      "desc": "Treatment: warm, lifted tones with a little extra saturation — sunset on every clip.",
+      "aspect": "16:9",
+      "swatch": "linear-gradient(135deg,#f97316 0%,#facc15 55%,#fef3c7 100%)",
+      "kind": "enhance",
+      "enhance": [
+        { "op": "filter", "value": "warm" },
+        { "op": "adjust", "value": { "brightness": 105, "contrast": 104, "saturation": 112, "hue": 0 } }
+      ]
+    },
+    {
+      "id": "tpl_cl_titlecard",
+      "name": "Cinema Title Card",
+      "desc": "A clean 16:9 title card you can open a short film with. Add your footage after it.",
+      "aspect": "16:9",
+      "swatch": "linear-gradient(135deg,#0ea5e9 0%,#6366f1 55%,#0f172a 100%)",
+      "kind": "project",
+      "project": {
+        "id": "prj_cl_titlecard",
+        "name": "Cinema Title Card",
+        "aspect": "16:9",
+        "main": [],
+        "tracks": [
+          {
+            "id": "t_text",
+            "name": "Text",
+            "clips": [
+              {
+                "id": "tc_cl_title1",
+                "kind": "text",
+                "start": 0.5,
+                "duration": 3.5,
+                "text": "A SHORT FILM",
+                "size": 44,
+                "color": "#94a3b8",
+                "bg": "",
+                "bold": false,
+                "pos": "tc",
+                "anim": "fade"
+              },
+              {
+                "id": "tc_cl_title2",
+                "kind": "text",
+                "start": 1.0,
+                "duration": 3.0,
+                "text": "NIGHT SHIFT",
+                "size": 120,
+                "color": "#ffffff",
+                "bg": "",
+                "bold": true,
+                "pos": "mc",
+                "anim": "slideup"
+              }
+            ]
+          },
+          { "id": "t_overlay", "name": "Overlay", "clips": [] },
+          { "id": "t_audio", "name": "Audio", "clips": [] }
+        ],
+        "createdAt": 0,
+        "updatedAt": 0,
+        "sourceTemplate": "Cinema Title Card"
+      }
+    }
+  ]
+}

@@ -9,45 +9,28 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SetupRouteImport } from './routes/setup'
-import { Route as ResetPasswordRouteImport } from './routes/reset-password'
-import { Route as ConsoleRouteImport } from './routes/console'
-import { Route as AuthRouteImport } from './routes/auth'
-import { Route as AemRouteImport } from './routes/aem'
-import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as ProjectsNewRouteImport } from './routes/projects.new'
-import { Route as ProjectsBuildRouteImport } from './routes/projects.build'
-import { Route as ProjectsIdRouteImport } from './routes/projects.$id'
-import { Route as ApiTranscribeRouteImport } from './routes/api/transcribe'
+import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AemRouteImport } from './routes/aem'
+import { Route as AuthRouteImport } from './routes/auth'
+import { Route as ConsoleRouteImport } from './routes/console'
+import { Route as DownloadsRouteImport } from './routes/downloads'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as SetupRouteImport } from './routes/setup'
 import { Route as ApiAiTunnelRouteImport } from './routes/api/ai-tunnel'
-import { Route as ApiHubRelayRouteImport } from './routes/api/hub-relay'
 import { Route as ApiHubRouteImport } from './routes/api/hub'
+import { Route as ApiHubRelayRouteImport } from './routes/api/hub-relay'
+import { Route as ApiTranscribeRouteImport } from './routes/api/transcribe'
+import { Route as MayocutIndexRouteImport } from './routes/mayocut/index'
+import { Route as MayocutEditorRouteImport } from './routes/mayocut/editor'
+import { Route as ProjectsIdRouteImport } from './routes/projects.$id'
+import { Route as ProjectsBuildRouteImport } from './routes/projects.build'
+import { Route as ProjectsNewRouteImport } from './routes/projects.new'
 import { Route as ApiPublicSupabaseConfigRouteImport } from './routes/api/public/supabase-config'
 
-const SetupRoute = SetupRouteImport.update({
-  id: '/setup',
-  path: '/setup',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ResetPasswordRoute = ResetPasswordRouteImport.update({
-  id: '/reset-password',
-  path: '/reset-password',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ConsoleRoute = ConsoleRouteImport.update({
-  id: '/console',
-  path: '/console',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthRoute = AuthRouteImport.update({
-  id: '/auth',
-  path: '/auth',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AemRoute = AemRouteImport.update({
-  id: '/aem',
-  path: '/aem',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -55,29 +38,34 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const AemRoute = AemRouteImport.update({
+  id: '/aem',
+  path: '/aem',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsNewRoute = ProjectsNewRouteImport.update({
-  id: '/projects/new',
-  path: '/projects/new',
+const AuthRoute = AuthRouteImport.update({
+  id: '/auth',
+  path: '/auth',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsBuildRoute = ProjectsBuildRouteImport.update({
-  id: '/projects/build',
-  path: '/projects/build',
+const ConsoleRoute = ConsoleRouteImport.update({
+  id: '/console',
+  path: '/console',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsIdRoute = ProjectsIdRouteImport.update({
-  id: '/projects/$id',
-  path: '/projects/$id',
+const DownloadsRoute = DownloadsRouteImport.update({
+  id: '/downloads',
+  path: '/downloads',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiTranscribeRoute = ApiTranscribeRouteImport.update({
-  id: '/api/transcribe',
-  path: '/api/transcribe',
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupRoute = SetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAiTunnelRoute = ApiAiTunnelRouteImport.update({
@@ -85,14 +73,44 @@ const ApiAiTunnelRoute = ApiAiTunnelRouteImport.update({
   path: '/api/ai-tunnel',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiHubRoute = ApiHubRouteImport.update({
+  id: '/api/hub',
+  path: '/api/hub',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiHubRelayRoute = ApiHubRelayRouteImport.update({
   id: '/api/hub-relay',
   path: '/api/hub-relay',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiHubRoute = ApiHubRouteImport.update({
-  id: '/api/hub',
-  path: '/api/hub',
+const ApiTranscribeRoute = ApiTranscribeRouteImport.update({
+  id: '/api/transcribe',
+  path: '/api/transcribe',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MayocutIndexRoute = MayocutIndexRouteImport.update({
+  id: '/mayocut/',
+  path: '/mayocut/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MayocutEditorRoute = MayocutEditorRouteImport.update({
+  id: '/mayocut/editor',
+  path: '/mayocut/editor',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIdRoute = ProjectsIdRouteImport.update({
+  id: '/projects/$id',
+  path: '/projects/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsBuildRoute = ProjectsBuildRouteImport.update({
+  id: '/projects/build',
+  path: '/projects/build',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsNewRoute = ProjectsNewRouteImport.update({
+  id: '/projects/new',
+  path: '/projects/new',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicSupabaseConfigRoute = ApiPublicSupabaseConfigRouteImport.update({
@@ -107,15 +125,18 @@ export interface FileRoutesByFullPath {
   '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
+  '/downloads': typeof DownloadsRoute
   '/reset-password': typeof ResetPasswordRoute
   '/setup': typeof SetupRoute
   '/api/ai-tunnel': typeof ApiAiTunnelRoute
   '/api/hub': typeof ApiHubRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
+  '/mayocut/editor': typeof MayocutEditorRoute
   '/projects/$id': typeof ProjectsIdRoute
   '/projects/build': typeof ProjectsBuildRoute
   '/projects/new': typeof ProjectsNewRoute
+  '/mayocut/': typeof MayocutIndexRoute
   '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
 export interface FileRoutesByTo {
@@ -124,14 +145,18 @@ export interface FileRoutesByTo {
   '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
+  '/downloads': typeof DownloadsRoute
   '/reset-password': typeof ResetPasswordRoute
   '/setup': typeof SetupRoute
+  '/api/ai-tunnel': typeof ApiAiTunnelRoute
   '/api/hub': typeof ApiHubRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
+  '/mayocut/editor': typeof MayocutEditorRoute
   '/projects/$id': typeof ProjectsIdRoute
   '/projects/build': typeof ProjectsBuildRoute
   '/projects/new': typeof ProjectsNewRoute
+  '/mayocut': typeof MayocutIndexRoute
   '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
 export interface FileRoutesById {
@@ -141,14 +166,18 @@ export interface FileRoutesById {
   '/aem': typeof AemRoute
   '/auth': typeof AuthRoute
   '/console': typeof ConsoleRoute
+  '/downloads': typeof DownloadsRoute
   '/reset-password': typeof ResetPasswordRoute
   '/setup': typeof SetupRoute
+  '/api/ai-tunnel': typeof ApiAiTunnelRoute
   '/api/hub': typeof ApiHubRoute
   '/api/hub-relay': typeof ApiHubRelayRoute
   '/api/transcribe': typeof ApiTranscribeRoute
+  '/mayocut/editor': typeof MayocutEditorRoute
   '/projects/$id': typeof ProjectsIdRoute
   '/projects/build': typeof ProjectsBuildRoute
   '/projects/new': typeof ProjectsNewRoute
+  '/mayocut/': typeof MayocutIndexRoute
   '/api/public/supabase-config': typeof ApiPublicSupabaseConfigRoute
 }
 export interface FileRouteTypes {
@@ -159,15 +188,18 @@ export interface FileRouteTypes {
     | '/aem'
     | '/auth'
     | '/console'
+    | '/downloads'
     | '/reset-password'
     | '/setup'
     | '/api/ai-tunnel'
     | '/api/hub'
     | '/api/hub-relay'
     | '/api/transcribe'
+    | '/mayocut/editor'
     | '/projects/$id'
     | '/projects/build'
     | '/projects/new'
+    | '/mayocut/'
     | '/api/public/supabase-config'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -176,14 +208,18 @@ export interface FileRouteTypes {
     | '/aem'
     | '/auth'
     | '/console'
+    | '/downloads'
     | '/reset-password'
     | '/setup'
+    | '/api/ai-tunnel'
     | '/api/hub'
     | '/api/hub-relay'
     | '/api/transcribe'
+    | '/mayocut/editor'
     | '/projects/$id'
     | '/projects/build'
     | '/projects/new'
+    | '/mayocut'
     | '/api/public/supabase-config'
   id:
     | '__root__'
@@ -192,14 +228,18 @@ export interface FileRouteTypes {
     | '/aem'
     | '/auth'
     | '/console'
+    | '/downloads'
     | '/reset-password'
     | '/setup'
+    | '/api/ai-tunnel'
     | '/api/hub'
     | '/api/hub-relay'
     | '/api/transcribe'
+    | '/mayocut/editor'
     | '/projects/$id'
     | '/projects/build'
     | '/projects/new'
+    | '/mayocut/'
     | '/api/public/supabase-config'
   fileRoutesById: FileRoutesById
 }
@@ -209,53 +249,28 @@ export interface RootRouteChildren {
   AemRoute: typeof AemRoute
   AuthRoute: typeof AuthRoute
   ConsoleRoute: typeof ConsoleRoute
+  DownloadsRoute: typeof DownloadsRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   SetupRoute: typeof SetupRoute
   ApiAiTunnelRoute: typeof ApiAiTunnelRoute
   ApiHubRoute: typeof ApiHubRoute
   ApiHubRelayRoute: typeof ApiHubRelayRoute
   ApiTranscribeRoute: typeof ApiTranscribeRoute
+  MayocutEditorRoute: typeof MayocutEditorRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ProjectsBuildRoute: typeof ProjectsBuildRoute
   ProjectsNewRoute: typeof ProjectsNewRoute
+  MayocutIndexRoute: typeof MayocutIndexRoute
   ApiPublicSupabaseConfigRoute: typeof ApiPublicSupabaseConfigRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/setup': {
-      id: '/setup'
-      path: '/setup'
-      fullPath: '/setup'
-      preLoaderRoute: typeof SetupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/reset-password': {
-      id: '/reset-password'
-      path: '/reset-password'
-      fullPath: '/reset-password'
-      preLoaderRoute: typeof ResetPasswordRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/console': {
-      id: '/console'
-      path: '/console'
-      fullPath: '/console'
-      preLoaderRoute: typeof ConsoleRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth': {
-      id: '/auth'
-      path: '/auth'
-      fullPath: '/auth'
-      preLoaderRoute: typeof AuthRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/aem': {
-      id: '/aem'
-      path: '/aem'
-      fullPath: '/aem'
-      preLoaderRoute: typeof AemRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -265,46 +280,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/aem': {
+      id: '/aem'
+      path: '/aem'
+      fullPath: '/aem'
+      preLoaderRoute: typeof AemRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/new': {
-      id: '/projects/new'
-      path: '/projects/new'
-      fullPath: '/projects/new'
-      preLoaderRoute: typeof ProjectsNewRouteImport
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/build': {
-      id: '/projects/build'
-      path: '/projects/build'
-      fullPath: '/projects/build'
-      preLoaderRoute: typeof ProjectsBuildRouteImport
+    '/console': {
+      id: '/console'
+      path: '/console'
+      fullPath: '/console'
+      preLoaderRoute: typeof ConsoleRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$id': {
-      id: '/projects/$id'
-      path: '/projects/$id'
-      fullPath: '/projects/$id'
-      preLoaderRoute: typeof ProjectsIdRouteImport
+    '/downloads': {
+      id: '/downloads'
+      path: '/downloads'
+      fullPath: '/downloads'
+      preLoaderRoute: typeof DownloadsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/transcribe': {
-      id: '/api/transcribe'
-      path: '/api/transcribe'
-      fullPath: '/api/transcribe'
-      preLoaderRoute: typeof ApiTranscribeRouteImport
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/hub-relay': {
-      id: '/api/hub-relay'
-      path: '/api/hub-relay'
-      fullPath: '/api/hub-relay'
-      preLoaderRoute: typeof ApiHubRelayRouteImport
+    '/setup': {
+      id: '/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof SetupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/ai-tunnel': {
@@ -319,6 +334,55 @@ declare module '@tanstack/react-router' {
       path: '/api/hub'
       fullPath: '/api/hub'
       preLoaderRoute: typeof ApiHubRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/hub-relay': {
+      id: '/api/hub-relay'
+      path: '/api/hub-relay'
+      fullPath: '/api/hub-relay'
+      preLoaderRoute: typeof ApiHubRelayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/transcribe': {
+      id: '/api/transcribe'
+      path: '/api/transcribe'
+      fullPath: '/api/transcribe'
+      preLoaderRoute: typeof ApiTranscribeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mayocut/': {
+      id: '/mayocut/'
+      path: '/mayocut'
+      fullPath: '/mayocut/'
+      preLoaderRoute: typeof MayocutIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mayocut/editor': {
+      id: '/mayocut/editor'
+      path: '/mayocut/editor'
+      fullPath: '/mayocut/editor'
+      preLoaderRoute: typeof MayocutEditorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id': {
+      id: '/projects/$id'
+      path: '/projects/$id'
+      fullPath: '/projects/$id'
+      preLoaderRoute: typeof ProjectsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/build': {
+      id: '/projects/build'
+      path: '/projects/build'
+      fullPath: '/projects/build'
+      preLoaderRoute: typeof ProjectsBuildRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/new': {
+      id: '/projects/new'
+      path: '/projects/new'
+      fullPath: '/projects/new'
+      preLoaderRoute: typeof ProjectsNewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/supabase-config': {
@@ -337,15 +401,18 @@ const rootRouteChildren: RootRouteChildren = {
   AemRoute: AemRoute,
   AuthRoute: AuthRoute,
   ConsoleRoute: ConsoleRoute,
+  DownloadsRoute: DownloadsRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   SetupRoute: SetupRoute,
   ApiAiTunnelRoute: ApiAiTunnelRoute,
   ApiHubRoute: ApiHubRoute,
   ApiHubRelayRoute: ApiHubRelayRoute,
   ApiTranscribeRoute: ApiTranscribeRoute,
+  MayocutEditorRoute: MayocutEditorRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ProjectsBuildRoute: ProjectsBuildRoute,
   ProjectsNewRoute: ProjectsNewRoute,
+  MayocutIndexRoute: MayocutIndexRoute,
   ApiPublicSupabaseConfigRoute: ApiPublicSupabaseConfigRoute,
 }
 export const routeTree = rootRouteImport
