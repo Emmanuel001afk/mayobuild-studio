@@ -13,19 +13,19 @@ import {
 } from "lucide-react";
 
 const REPO = "Emmanuel001afk/mayobuild-studio";
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const LATEST = `https://github.com/${REPO}/releases/latest/download`;
-const EXE_URL = `${LATEST}/mayocut-setup-${VERSION}.exe`;
-const APK_URL = `${LATEST}/mayocut-android-${VERSION}.apk`;
+const EXE_URL = `${LATEST}/mayobuild-studio-setup-${VERSION}.exe`;
+const APK_URL = `${LATEST}/mayobuild-studio-android-${VERSION}.apk`;
 
 export const Route = createFileRoute("/downloads")({
   head: () => ({
     meta: [
-      { title: "Download MayoCut · Mayobuild Studio" },
+      { title: "Download Mayobuild Studio (with MayoCut) · v0.6.0" },
       {
         name: "description",
         content:
-          "Download the MayoCut video editor for Windows (.exe installer) and Android (.apk). 100% offline video editing — no account, no cloud database.",
+          "Download the full Mayobuild Studio app for Windows (.exe installer) and Android (.apk) — includes the 100% offline MayoCut video editor. No account, no cloud database.",
       },
     ],
   }),
@@ -39,9 +39,9 @@ function DownloadsPage() {
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-2">
           <Scissors className="h-6 w-6 text-primary" />
           <span className="font-bold text-lg bg-gradient-to-r from-cyan-300 to-fuchsia-400 bg-clip-text text-transparent">
-            MayoCut
+            Mayobuild Studio
           </span>
-          <span className="text-xs text-muted-foreground">by Mayobuild Studio</span>
+          <span className="mb-chip hidden sm:inline-flex">includes MayoCut</span>
           <div className="ml-auto">
             <Link to="/mayocut" className="mb-btn-ghost text-sm">
               <Globe className="h-4 w-4" /> Open in browser
@@ -56,11 +56,12 @@ function DownloadsPage() {
             <WifiOff className="h-3 w-3" /> works 100% offline · no account · your device is the database
           </div>
           <h1 className="text-3xl sm:text-4xl font-bold">
-            Get <span className="mb-gradient-text">MayoCut</span>
+            Get <span className="mb-gradient-text">Mayobuild Studio</span>
           </h1>
           <p className="text-muted-foreground mt-3">
-            A CapCut-style video editor built into the Mayobuild platform: multi-track timeline, templates, filters,
-            text &amp; captions, transitions, speed control and export — everything runs on your device.
+            The full platform on your device: websites &amp; apps, the AI console, downloads — and <b>MayoCut</b>, the
+            CapCut-style video editor: multi-track timeline, templates, filters, text &amp; captions, transitions,
+            speed control and export. Everything runs on your device, offline.
           </p>
         </div>
 
@@ -69,15 +70,15 @@ function DownloadsPage() {
             icon={<Monitor className="h-7 w-7" />}
             title="Windows"
             version={`v${VERSION} · NSIS installer (.exe)`}
-            desc="Full-featured desktop app: MP4 + WebM export, keyframes, green screen, template packs, on-device assist tools and optional local AI."
+            desc="The full platform on Windows, headlined by MayoCut: MP4 + WebM export, keyframes, green screen, template packs, on-device assist tools and optional local AI — all offline."
             url={EXE_URL}
-            badge="Recommended for long timelines"
+            badge="v0.6.0 · full platform + MayoCut"
           />
           <DownloadCard
             icon={<Smartphone className="h-7 w-7" />}
             title="Android"
             version={`v${VERSION} · APK (install directly)`}
-            desc="Native-feel wrapper around the same engine. Import from your gallery, edit offline, export straight to your phone."
+            desc="The complete Mayobuild app on Android, with MayoCut as its video section. Import from your gallery, edit 100% offline, export straight to your phone."
             url={APK_URL}
             badge="Side-load: enable “Install unknown apps”"
           />
@@ -118,8 +119,8 @@ function DownloadsPage() {
           </h2>
           <ul className="text-sm text-muted-foreground mt-3 space-y-2 list-disc pl-5">
             <li>
-              One codebase: the editor lives in the Mayobuild web app. The Windows build wraps it with Electron +
-              electron-builder (NSIS installer). The Android build wraps the same static bundle with Capacitor.
+              One codebase: the whole platform (with MayoCut inside) is the Mayobuild web app. The Windows build wraps it with Electron +
+              electron-builder (NSIS installer). The Android build wraps the same full static bundle with Capacitor (version 6, package com.mayobuild.studio).
             </li>
             <li>
               Releases are built by GitHub Actions (<code className="text-xs bg-slate-900 px-1 rounded">.github/workflows/distribute.yml</code>)
@@ -141,7 +142,7 @@ function DownloadsPage() {
           <div className="flex items-center justify-center gap-2">
             <Cpu className="h-3 w-3" />
             <Film className="h-3 w-3" />
-            <span>MayoCut · Mayobuild Studio · v{VERSION}</span>
+            <span>Mayobuild Studio · includes MayoCut · v{VERSION}</span>
           </div>
         </footer>
       </main>

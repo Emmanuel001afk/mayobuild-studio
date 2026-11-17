@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Editor } from "@/mayocut/components/Editor";
+import { isShellApp } from "@/lib/shell";
 
 export const Route = createFileRoute("/mayocut/editor")({
   validateSearch: (s: Record<string, unknown>) => ({ p: String(s.p ?? "") }),
@@ -20,5 +21,5 @@ function MayoCutEditorRoute() {
       </div>
     );
   }
-  return <Editor projectId={p} onExit={() => navigate({ to: "/mayocut" })} />;
+  return <Editor desktop={isShellApp() || undefined} projectId={p} onExit={() => navigate({ to: "/mayocut" })} />;
 }

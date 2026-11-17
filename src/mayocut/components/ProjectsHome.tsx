@@ -250,38 +250,39 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
   return (
     <div className={`${desktop ? "" : "min-h-screen"} bg-background text-foreground`}>
       <header className="border-b border-border sticky top-0 z-20 bg-background/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
-          <Scissors className="h-6 w-6 text-primary" />
-          <div className="flex items-baseline gap-2">
-            <span className="font-bold text-lg bg-gradient-to-r from-cyan-300 to-fuchsia-400 bg-clip-text text-transparent">
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex items-center gap-2 sm:gap-3">
+          <Scissors className="h-6 w-6 text-primary shrink-0" />
+          <div className="flex items-baseline gap-2 min-w-0">
+            <span className="font-bold text-base sm:text-lg bg-gradient-to-r from-cyan-300 to-fuchsia-400 bg-clip-text text-transparent truncate">
               MayoCut
             </span>
-            <span className="text-xs text-muted-foreground hidden sm:inline">Video Studio</span>
+            <span className="text-xs text-muted-foreground hidden md:inline">Video Studio</span>
           </div>
-          <span className="mb-chip ml-1">
+          <span className="mb-chip ml-1 hidden lg:inline-flex">
             <WifiOff className="h-3 w-3" /> 100% offline · no account
           </span>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
             {!desktop && (
               <>
                 {nav.onGetApp && (
-                  <button className="mb-btn-ghost text-sm" onClick={nav.onGetApp}>
+                  <button className="mb-btn-ghost text-xs px-2 hidden sm:inline-flex" onClick={nav.onGetApp}>
                     <Download className="h-4 w-4" /> Get the app
                   </button>
                 )}
                 {nav.onBackToPlatform && (
-                  <button className="mb-btn-ghost text-sm" onClick={nav.onBackToPlatform}>
+                  <button className="mb-btn-ghost text-xs px-2 hidden sm:inline-flex" onClick={nav.onBackToPlatform}>
                     ← Mayobuild
                   </button>
                 )}
               </>
             )}
-            <button className="mb-btn text-sm" onClick={() => fileRef.current?.click()} disabled={busyImport}>
+            <button className="mb-btn text-xs px-2.5 sm:text-sm sm:px-4" onClick={() => fileRef.current?.click()} disabled={busyImport}>
               {busyImport ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              Import media
+              <span>Import media</span>
             </button>
-            <button className="mb-btn text-sm bg-primary" onClick={() => setNewOpen(true)}>
-              <Plus className="h-4 w-4" /> New project
+            <button className="mb-btn text-xs px-2.5 sm:text-sm sm:px-4 bg-primary" onClick={() => setNewOpen(true)}>
+              <Plus className="h-4 w-4" />
+              <span>New project</span>
             </button>
           </div>
         </div>
@@ -486,7 +487,7 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
             title={`Media library (${media.length})`}
             sub={`This is your on-device media database. ${media.length ? fmtBytes(media.reduce((a, m) => a + m.size, 0)) + " stored locally." : "Import videos, photos and music from this device."}`}
           />
-          <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-7 gap-3 mt-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-7 gap-3 mt-4">
             {media.length === 0 && (
               <div className="col-span-full mb-card p-6 text-center text-muted-foreground text-sm">
                 Your library is empty. Use <b>Import media</b> — files are stored only on this device.

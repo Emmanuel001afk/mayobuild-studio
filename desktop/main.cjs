@@ -1,4 +1,4 @@
-// MayoCut desktop main process (Electron).
+// Mayobuild Studio desktop main process (Electron).
 // Loads the same static bundle the web app ships; everything else is local.
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("path");
@@ -11,7 +11,7 @@ function createWindow() {
     minWidth: 1080,
     minHeight: 680,
     backgroundColor: "#0d1220",
-    title: "MayoCut — Video Studio",
+    title: "Mayobuild Studio",
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -36,7 +36,7 @@ ipcMain.handle("mayocut:save-file", async (_event, payload) => {
   const { suggestedName, data } = payload;
   const win = BrowserWindow.getFocusedWindow();
   const { canceled, filePath } = await dialog.showSaveDialog(win, {
-    title: "Save exported video",
+    title: "Save exported video (Mayobuild Studio)",
     defaultPath: suggestedName,
   });
   if (canceled || !filePath) return { canceled: true };

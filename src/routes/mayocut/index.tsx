@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ProjectsHome } from "@/mayocut/components/ProjectsHome";
+import { isShellApp } from "@/lib/shell";
 
 export const Route = createFileRoute("/mayocut/")({
   head: () => ({
@@ -17,12 +18,15 @@ export const Route = createFileRoute("/mayocut/")({
 
 function MayoCutHome() {
   const navigate = useNavigate();
+  const shell = isShellApp();
   return (
     <ProjectsHome
+      desktop={shell || undefined}
       nav={{
         onOpenProject: (id) => navigate({ to: "/mayocut/editor", search: { p: id } }),
-        onGetApp: () => navigate({ to: "/downloads" }),
-        onBackToPlatform: () => navigate({ to: "/" }),
+        // web-only affordances are hidden in the native shell
+        onGetApp: shell ? undefined : () => navigate({ to: "/downloads" }),
+        onBackToPlatform: shell ? undefined : () => navigate({ to: "/" }),
       }}
     />
   );
