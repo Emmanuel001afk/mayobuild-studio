@@ -1,0 +1,80 @@
+run: 44165121445
+=== env ===
+v22.23.4
+10.9.9
+=== root ls ===
+total 632
+drwxr-xr-x 13 runner runner   4096 Nov 17 20:04 .
+drwxr-xr-x  3 runner runner   4096 Nov 17 20:04 ..
+drwxr-xr-x  7 runner runner   4096 Nov 17 20:04 .git
+drwxr-xr-x  3 runner runner   4096 Nov 17 20:04 .github
+-rw-r--r--  1 runner runner    525 Nov 17 20:04 .gitignore
+drwxr-xr-x  2 runner runner   4096 Nov 17 20:04 .lovable
+-rw-r--r--  1 runner runner     22 Nov 17 20:04 .npmrc
+-rw-r--r--  1 runner runner     92 Nov 17 20:04 .prettierignore
+-rw-r--r--  1 runner runner     90 Nov 17 20:04 .prettierrc
+-rw-r--r--  1 runner runner   6212 Nov 17 20:04 MAYOCUT.md
+drwxr-xr-x  4 runner runner   4096 Nov 17 20:04 android
+drwxr-xr-x  5 runner runner   4096 Nov 17 20:04 app-shell-dist
+-rw-r--r--  1 runner runner 191451 Nov 17 20:04 bun.lock
+-rw-r--r--  1 runner runner    280 Nov 17 20:04 bunfig.toml
+-rw-r--r--  1 runner runner    468 Nov 17 20:04 capacitor.config.ts
+-rw-r--r--  1 runner runner    443 Nov 17 20:04 components.json
+drwxr-xr-x  2 runner runner   4096 Nov 17 20:04 db
+drwxr-xr-x  4 runner runner   4096 Nov 17 20:05 desktop
+-rw-r--r--  1 runner runner   1250 Nov 17 20:04 eslint.config.js
+-rw-r--r--  1 runner runner 343823 Nov 17 20:04 package-lock.json
+-rw-r--r--  1 runner runner   3568 Nov 17 20:04 package.json
+drwxr-xr-x  4 runner runner   4096 Nov 17 20:04 public
+drwxr-xr-x  2 runner runner   4096 Nov 17 20:04 shell
+drwxr-xr-x  8 runner runner   4096 Nov 17 20:04 src
+drwxr-xr-x  3 runner runner   4096 Nov 17 20:04 supabase
+-rw-r--r--  1 runner runner    672 Nov 17 20:04 tsconfig.json
+-rw-r--r--  1 runner runner    336 Nov 17 20:04 vercel.json
+-rw-r--r--  1 runner runner    975 Nov 17 20:04 vite.config.ts
+=== app-shell-dist ===
+assets
+icons
+index.html
+manifest.webmanifest
+sw.js
+wllama
+=== electron dist ===
+LICENSE
+LICENSES.chromium.html
+chrome-sandbox
+chrome_100_percent.pak
+chrome_200_percent.pak
+chrome_crashpad_handler
+electron
+icudtl.dat
+libEGL.so
+libGLESv2.so
+=== retry (verbose) ===
+  • electron-builder  version=24.13.3 os=7.0.0-1019-azure
+  • artifacts will be published  reason=tag is defined tag=mc-0.1.3
+  • loaded configuration  file=/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/electron-builder.yml
+  • packaging       platform=win32 arch=x64 electron=31.7.7 appOutDir=release/win-unpacked
+  ⨯ wine is required, please see https://electron.build/multi-platform-build#linux  
+  ⨯ /home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/app-builder-bin/linux/x64/app-builder process failed ERR_ELECTRON_BUILDER_CANNOT_EXECUTE
+Exit code:
+1  failedTask=build stackTrace=Error: /home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/app-builder-bin/linux/x64/app-builder process failed ERR_ELECTRON_BUILDER_CANNOT_EXECUTE
+Exit code:
+1
+    at ChildProcess.<anonymous> (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/builder-util/src/util.ts:252:14)
+    at Object.onceWrapper (node:events:634:26)
+    at ChildProcess.emit (node:events:519:28)
+    at maybeClose (node:internal/child_process:1101:16)
+    at Process.ChildProcess._handle.onexit (node:internal/child_process:304:5)
+From previous event:
+    at processImmediate (node:internal/timers:484:21)
+From previous event:
+    at WinPackager.signApp (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/app-builder-lib/src/winPackager.ts:384:27)
+    at WinPackager.doSignAfterPack (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/app-builder-lib/src/platformPackager.ts:336:32)
+    at WinPackager.doPack (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/app-builder-lib/src/platformPackager.ts:321:7)
+    at WinPackager.pack (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/app-builder-lib/src/platformPackager.ts:140:5)
+    at Packager.doBuild (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/app-builder-lib/src/packager.ts:445:9)
+    at executeFinally (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/builder-util/src/promise.ts:12:14)
+    at Packager._build (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/app-builder-lib/src/packager.ts:379:31)
+    at Packager.build (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/app-builder-lib/src/packager.ts:340:12)
+    at executeFinally (/home/runner/work/mayobuild-studio/mayobuild-studio/desktop/node_modules/builder-util/src/promise.ts:12:14)
