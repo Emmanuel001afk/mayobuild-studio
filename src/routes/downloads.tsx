@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 
 const REPO = "Emmanuel001afk/mayobuild-studio";
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const LATEST = `https://github.com/${REPO}/releases/latest/download`;
 const EXE_URL = `${LATEST}/mayocut-setup-${VERSION}.exe`;
 const APK_URL = `${LATEST}/mayocut-android-${VERSION}.apk`;
@@ -69,7 +69,7 @@ function DownloadsPage() {
             icon={<Monitor className="h-7 w-7" />}
             title="Windows"
             version={`v${VERSION} · NSIS installer (.exe)`}
-            desc="Full-featured desktop app. Export WebM in the browser engine; MP4 export via the bundled pipeline ships in a later build."
+            desc="Full-featured desktop app: MP4 + WebM export, keyframes, green screen, template packs, on-device assist tools and optional local AI."
             url={EXE_URL}
             badge="Recommended for long timelines"
           />
@@ -96,12 +96,14 @@ function DownloadsPage() {
           </p>
           <div className="mt-4 flex flex-wrap gap-2 text-xs">
             <Feature ok label="Multi-track timeline (video / text / overlay / audio)" />
-            <Feature ok label="Trim, split, speed, filters, transitions" />
-            <Feature ok label="Built-in + user templates" />
+            <Feature ok label="Trim, split, speed, reverse, filters, transitions" />
+            <Feature ok label="Keyframes (motion & opacity over time)" />
+            <Feature ok label="Green screen (chroma key) overlays" />
+            <Feature ok label="Audio studio: waveforms, fades, mic recording" />
+            <Feature ok label="Built-in + downloadable packs + shareable .json templates" />
             <Feature ok label="Projects & media stored on-device (IndexedDB)" />
-            <Feature ok label="Export to WebM, saved locally" />
-            <Feature label="MP4 export (desktop/Android builds)" />
-            <Feature label="On-device AI tools (optional, Stage 5)" />
+            <Feature ok label="Export MP4 + WebM at 24/30/60 fps, saved locally" />
+            <Feature ok label="On-device assist tools + optional local AI (always private)" />
           </div>
         </div>
 
@@ -121,7 +123,7 @@ function DownloadsPage() {
             </li>
             <li>
               To build locally: <code className="text-xs bg-slate-900 px-1 rounded">npm run dist:win</code> (Windows) or{" "}
-              <code className="text-xs bg-slate-900 px-1 rounded">npm run dist:android</code> (needs Android SDK / JDK 17).
+              <code className="text-xs bg-slate-900 px-1 rounded">npm run dist:android</code> (needs Android SDK / JDK 21).
             </li>
             <li>
               If a button below 404s, the next release hasn't been published yet — trigger the <b>distribute</b> workflow

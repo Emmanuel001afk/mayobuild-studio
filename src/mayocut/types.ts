@@ -13,6 +13,8 @@ export interface MediaItem {
   width?: number;
   height?: number;
   thumb?: string; // dataURL, small
+  wave?: number[]; // ~128 normalized amplitude bins (audio display)
+  rms?: number; // overall root-mean-square level 0..1 (audio)
 }
 
 export interface FilterAdjust {
@@ -26,28 +28,51 @@ export const DEFAULT_ADJUST: FilterAdjust = { brightness: 100, contrast: 100, sa
 
 export type TransitionKind = "none" | "crossfade" | "fadeblack";
 
+/**
+ * Animation values that can be keyframed on a clip (all clips).
+ * x / y are fractions of the canvas (-1..1), scale 0.2..2 (1 = neutral),
+ * rotation in degrees, opacity 0..1.
+ */
+export interface AnimValues {
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  opacity: number;
+}
+
+export const DEFAULT_ANIM: AnimValues = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
+
+/** A keyframe: full animation snapshot at clip-local timeline seconds. */
+export interface Keyframe {
+  at: number; // seconds relative to the clip start
+  v: AnimValues;
+}
+
 export interface MainClip {
   id: string;
   mediaId: string;
   in: number; // source in-point (seconds)
   out: number; // source out-point (seconds)
   speed: number; // 0.25 .. 4
+  reverse: boolean; // play the source segment backwards (audio muted)
   filter: string; // preset id
   adjust: FilterAdjust;
   volume: number; // 0..1
   muted: boolean;
   transitionIn: TransitionKind;
   transitionDur: number; // seconds
+  keyframes?: Keyframe[];
 }
 
-export type OverlayKind = "text" | "image" | "audio";
+export type OverlayKind = "text" | "image" | "video" | "audio";
 export type TextPos = "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
 export type TextAnim = "none" | "fade" | "slideup";
 
 export interface OverlayClip {
   id: string;
   kind: OverlayKind;
-  mediaId?: string; // image / audio
+  mediaId?: string; // image / video / audio
   start: number; // timeline seconds
   duration: number;
   // text
@@ -58,14 +83,19 @@ export interface OverlayClip {
   bold?: boolean;
   pos?: TextPos;
   anim?: TextAnim;
-  // image overlay
-  scale?: number; // fraction of canvas width (0.1..1)
+  // image / video overlay
+  scale?: number; // fraction of canvas width (0.05..1.2)
   x?: number; // -1..1 fraction of center
   y?: number;
   rot?: number; // degrees
+  chroma?: boolean; // green-screen keying (video/image overlays)
+  chromaTol?: number; // key tolerance 10..255 (default 90)
   // audio
   volume?: number; // 0..1
+  fadeIn?: number; // seconds (default 0.15)
+  fadeOut?: number; // seconds (default 0.15)
   filter?: string;
+  keyframes?: Keyframe[];
 }
 
 export interface OverlayTrack {
@@ -102,17 +132,44 @@ export interface UserTemplate {
   desc: string;
   aspect: AspectId;
   createdAt: number;
-  project: Project; // serialized project; media remapped by file name on open
-  thumb?: string;
+  project?: Project; // serialized project (kind "project"); media remapped by file name on open
+  thumb?: string; // dataURL
+  // --- pack extension (v0.2) ---
+  kind?: "project" | "enhance"; // default "project"
+  packName?: string; // originating template pack
+  swatch?: string; // css gradient for the gallery card
+  enhance?: EnhanceOp[]; // declarative ops applied to a chosen project (kind "enhance")
 }
 
-export interface BuiltInTemplate {
+// ---------------------------------------------------------------------------
+// Template packs (v0.2) — shareable JSON, no media blobs, fully offline.
+// ---------------------------------------------------------------------------
+
+export type EnhanceOp =
+  | { op: "aspect"; value: AspectId }
+  | { op: "filter"; value: string } // apply preset to every main clip
+  | { op: "adjust"; value: Partial<FilterAdjust> } // merge into every main clip
+  | { op: "transition"; value: TransitionKind; dur: number } // every clip after the first
+  | { op: "add-text"; track: "t_text"; clip: Omit<OverlayClip, "id"> }
+  | { op: "speed"; value: number }; // every main clip
+
+export interface PackTemplate {
   id: string;
   name: string;
   desc: string;
   aspect: AspectId;
-  needs: MediaKind[]; // media kinds required to build it
-  swatch: string; // css gradient for the gallery card
+  swatch?: string;
+  kind: "project" | "enhance";
+  project?: Project; // for kind "project" (media matched by file name on open)
+  enhance?: EnhanceOp[]; // for kind "enhance"
+}
+
+export interface TemplatePack {
+  format: "mayocut-pack";
+  version: 1;
+  name: string;
+  desc: string;
+  templates: PackTemplate[];
 }
 
 export interface ExportItem {

@@ -38,4 +38,6 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- "Record audio" in the editor (voiceover / music capture) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 </manifest>

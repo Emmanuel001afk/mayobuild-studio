@@ -155,8 +155,53 @@ export async function importFiles(
       height,
       thumb,
     };
+    if (kind === "audio") {
+      // waveform + true loudness, computed locally at import time
+      const audio = await analyzeAudioFile(f);
+      if (audio) {
+        item.wave = audio.wave;
+        item.rms = audio.rms;
+      }
+    }
     out.push(item);
     onProgress?.(i + 1, list.length);
   }
   return out;
+}
+
+/** Decode a file to ~128 amplitude bins + RMS. Best-effort (undefined on failure). */
+async function analyzeAudioFile(f: File): Promise<{ wave: number[]; rms: number } | undefined> {
+  try {
+    const Ctor =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new Ctor();
+    try {
+      const audio = await ctx.decodeAudioData(await f.arrayBuffer());
+      const data = audio.getChannelData(0);
+      const bins = 128;
+      const per = Math.max(1, Math.floor(data.length / bins));
+      const wave: number[] = [];
+      let sq = 0;
+      let n = 0;
+      let peak = 0;
+      for (let b = 0; b < bins; b++) {
+        let p = 0;
+        const s0 = b * per;
+        for (let i = s0; i < Math.min(data.length, s0 + per); i += 8) {
+          const v = Math.abs(data[i]);
+          if (v > p) p = v;
+          sq += data[i] * data[i];
+          n++;
+        }
+        wave.push(p);
+        if (p > peak) peak = p;
+      }
+      const norm = peak > 0 ? 1 / peak : 1;
+      return { wave: wave.map((v) => v * norm), rms: Math.sqrt(sq / Math.max(1, n)) };
+    } finally {
+      void ctx.close();
+    }
+  } catch {
+    return undefined;
+  }
 }

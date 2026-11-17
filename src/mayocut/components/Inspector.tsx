@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { Copy, Scissors, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Copy, Diamond, Scissors, SlidersHorizontal, Trash2 } from "lucide-react";
 import type {
+  AnimValues,
   AspectId,
+  Keyframe,
   MainClip,
   MediaItem,
   OverlayClip,
@@ -19,13 +21,22 @@ interface Props {
   clip: MainClip | OverlayClip | null;
   project: Project;
   media: MediaItem[];
+  /** playhead time (timeline seconds) and where the selected clip starts */
+  t: number;
+  clipStart: number;
+  playheadLocal: number | null; // playhead relative to clip start (null if outside)
+  anim: AnimValues; // interpolated display values for the selected clip
   onPatchMain: (patch: Partial<MainClip>) => void;
   onPatchOverlay: (trackId: string, patch: Partial<OverlayClip>) => void;
+  onAnimChange: (clipId: string, localT: number, patch: Partial<AnimValues>) => void;
+  onKeyframeAdd: (clipId: string) => void;
+  onKeyframeDelete: (clipId: string, at: number) => void;
   onSetAspect: (a: AspectId) => void;
   onReplaceMedia: (clipId: string, item: MediaItem) => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onSplit: () => void;
+  onSeek: (v: number) => void;
   filters: { id: string; name: string; css: string }[];
 }
 
@@ -40,7 +51,7 @@ export function Inspector(p: Props) {
           <SlidersHorizontal className="h-4 w-4 text-primary" /> Inspector
         </h3>
         <p className="text-xs text-muted-foreground">
-          Select a clip on the timeline to edit its filters, speed, text, position and audio.
+          Select a clip on the timeline to edit its filters, motion, keyframes, text, position and audio.
         </p>
         <div className="border-t border-border pt-3 space-y-2">
           <div className="text-xs font-medium">Canvas format</div>
@@ -73,16 +84,23 @@ export function Inspector(p: Props) {
     );
   }
 
+  const trackId = p.selection.lane === "overlay" ? p.selection.trackId : "";
   const isMain = p.selection.lane === "main";
   const main = isMain ? (p.clip as MainClip) : null;
   const over = !isMain && p.selection.lane === "overlay" ? (p.clip as OverlayClip) : null;
+  const clipId = p.clip.id;
+  const localT = p.playheadLocal ?? 0;
+  const setAnim = (patch: Partial<AnimValues>) => p.onAnimChange(clipId, localT, patch);
 
   return (
     <div className="p-3 space-y-4">
       <div className="flex items-center gap-2">
         <h3 className="font-semibold text-sm">
-          {main ? "Clip" : over?.kind === "text" ? "Text" : over?.kind === "image" ? "Image overlay" : "Audio"}
+          {main ? "Clip" : over?.kind === "text" ? "Text" : over?.kind === "image" ? "Image overlay" : over?.kind === "video" ? "Video overlay" : "Audio"}
         </h3>
+        {main?.reverse && (
+          <span className="text-[10px] text-fuchsia-300 border border-fuchsia-400/40 rounded px-1">reverse</span>
+        )}
         <div className="ml-auto flex gap-1">
           <button className="mb-btn-ghost h-7 px-2" title="Duplicate" onClick={p.onDuplicate}>
             <Copy className="h-3.5 w-3.5" />
@@ -105,23 +123,60 @@ export function Inspector(p: Props) {
             {p.media.find((m) => m.id === main.mediaId)?.name ?? "media"}
           </div>
 
-          <Section label="Speed">
-            <input
-              type="range"
+          <Section label="Speed & direction">
+            <Slider
+              label="Speed"
               min={0.25}
               max={4}
               step={0.05}
               value={main.speed}
-              onChange={(e) => p.onPatchMain({ speed: Number(e.target.value) })}
-              className="w-full accent-cyan-400"
+              onChange={(v) => p.onPatchMain({ speed: v })}
             />
-            <div className="flex justify-between text-[10px] text-muted-foreground">
+            <div className="flex justify-between text-[10px] text-muted-foreground -mt-1">
               {[0.5, 1, 1.5, 2, 3, 4].map((s) => (
                 <button key={s} className={main.speed === s ? "text-cyan-300" : ""} onClick={() => p.onPatchMain({ speed: s })}>
                   {s}×
                 </button>
               ))}
             </div>
+            <label className="flex items-center gap-2 text-xs mt-2">
+              <input
+                type="checkbox"
+                className="accent-fuchsia-400"
+                checked={main.reverse}
+                onChange={(e) => p.onPatchMain({ reverse: e.target.checked })}
+              />
+              <span>
+                Play backwards <span className="text-muted-foreground text-[10px]">(audio muted, frame-stepped)</span>
+              </span>
+            </label>
+          </Section>
+
+          <Section label="Motion & keyframes">
+            <p className="text-[10px] text-muted-foreground mb-2 leading-snug">
+              Move the playhead, then drag a value — a keyframe is written where a ◆ already sits nearby, otherwise the
+              clip starts a new animation from here.
+            </p>
+            <Slider label="X position" min={-1} max={1} step={0.01} value={p.anim.x} onChange={(v) => setAnim({ x: v })} />
+            <Slider label="Y position" min={-1} max={1} step={0.01} value={p.anim.y} onChange={(v) => setAnim({ y: v })} />
+            <Slider label="Scale (zoom)" min={0.4} max={2.2} step={0.01} value={p.anim.scale} onChange={(v) => setAnim({ scale: v })} />
+            <Slider label="Rotation" min={-180} max={180} step={1} value={p.anim.rotation} onChange={(v) => setAnim({ rotation: v })} />
+            <Slider
+              label="Opacity"
+              min={0}
+              max={1}
+              step={0.01}
+              value={p.anim.opacity}
+              onChange={(v) => setAnim({ opacity: v })}
+            />
+            <KeyframeSection
+              clip={main}
+              clipStart={p.clipStart}
+              playheadLocal={p.playheadLocal}
+              onAdd={() => p.onKeyframeAdd(clipId)}
+              onDelete={(at) => p.onKeyframeDelete(clipId, at)}
+              onSeek={p.onSeek}
+            />
           </Section>
 
           <Section label="Filter">
@@ -203,22 +258,22 @@ export function Inspector(p: Props) {
             <textarea
               className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs h-16 resize-none"
               value={over.text ?? ""}
-              onChange={(e) => p.onPatchOverlay(p.selection!.trackId, { text: e.target.value })}
+              onChange={(e) => p.onPatchOverlay(trackId, { text: e.target.value })}
             />
           </Section>
           <Section label="Style">
-            <Slider label="Size" min={24} max={220} value={over.size ?? 72} onChange={(v) => p.onPatchOverlay(p.selection!.trackId, { size: v })} />
+            <Slider label="Size" min={24} max={220} value={over.size ?? 72} onChange={(v) => p.onPatchOverlay(trackId, { size: v })} />
             <div className="flex items-center gap-2 mt-2">
               <label className="text-xs flex items-center gap-1">
                 Color
-                <input type="color" value={over.color ?? "#ffffff"} onChange={(e) => p.onPatchOverlay(p.selection!.trackId, { color: e.target.value })} />
+                <input type="color" value={over.color ?? "#ffffff"} onChange={(e) => p.onPatchOverlay(trackId, { color: e.target.value })} />
               </label>
               <label className="text-xs flex items-center gap-1">
                 Background
                 <select
                   className="bg-slate-900 border border-border rounded px-1 text-xs"
                   value={over.bg ?? ""}
-                  onChange={(e) => p.onPatchOverlay(p.selection!.trackId, { bg: e.target.value })}
+                  onChange={(e) => p.onPatchOverlay(trackId, { bg: e.target.value })}
                 >
                   <option value="">none</option>
                   <option value="#000000aa">black</option>
@@ -228,7 +283,7 @@ export function Inspector(p: Props) {
                 </select>
               </label>
               <label className="text-xs flex items-center gap-1 ml-auto">
-                <input type="checkbox" className="accent-cyan-400" checked={over.bold ?? false} onChange={(e) => p.onPatchOverlay(p.selection!.trackId, { bold: e.target.checked })} />
+                <input type="checkbox" className="accent-cyan-400" checked={over.bold ?? false} onChange={(e) => p.onPatchOverlay(trackId, { bold: e.target.checked })} />
                 B
               </label>
             </div>
@@ -240,7 +295,7 @@ export function Inspector(p: Props) {
                   className={`h-6 border text-[10px] ${
                     (over.pos ?? "mc") === pos ? "border-cyan-400 bg-cyan-400/20" : "border-border hover:border-white/40"
                   }`}
-                  onClick={() => p.onPatchOverlay(p.selection!.trackId, { pos })}
+                  onClick={() => p.onPatchOverlay(trackId, { pos })}
                   title={pos}
                 >
                   {pos}
@@ -252,27 +307,64 @@ export function Inspector(p: Props) {
             <select
               className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
               value={over.anim ?? "none"}
-              onChange={(e) => p.onPatchOverlay(p.selection!.trackId, { anim: e.target.value as TextAnim })}
+              onChange={(e) => p.onPatchOverlay(trackId, { anim: e.target.value as TextAnim })}
             >
               <option value="none">None</option>
-              <option value="fade">Fade in</option>
-              <option value="slideup">Slide up</option>
+              <option value="fade">Fade in + out</option>
+              <option value="slideup">Slide up + fade</option>
             </select>
+            <Slider label="Opacity (keyframable)" min={0} max={1} step={0.01} value={p.anim.opacity} onChange={(v) => setAnim({ opacity: v })} />
+            <KeyframeSection
+              clip={over}
+              clipStart={p.clipStart}
+              playheadLocal={p.playheadLocal}
+              onAdd={() => p.onKeyframeAdd(clipId)}
+              onDelete={(at) => p.onKeyframeDelete(clipId, at)}
+              onSeek={p.onSeek}
+            />
           </Section>
-          <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(p.selection!.trackId, patch)} />
+          <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />
         </>
       )}
 
-      {/* ---------------- image overlay ---------------- */}
-      {over?.kind === "image" && (
+      {/* ---------------- image / video overlay ---------------- */}
+      {(over?.kind === "image" || over?.kind === "video") && (
         <>
-          <Section label="Transform">
-            <Slider label="Scale" min={0.05} max={1.2} step={0.01} value={over.scale ?? 0.5} onChange={(v) => p.onPatchOverlay(p.selection!.trackId, { scale: v })} />
-            <Slider label="X" min={-1} max={1} step={0.01} value={over.x ?? 0} onChange={(v) => p.onPatchOverlay(p.selection!.trackId, { x: v })} />
-            <Slider label="Y" min={-1} max={1} step={0.01} value={over.y ?? 0} onChange={(v) => p.onPatchOverlay(p.selection!.trackId, { y: v })} />
-            <Slider label="Rotation" min={-180} max={180} step={1} value={over.rot ?? 0} onChange={(v) => p.onPatchOverlay(p.selection!.trackId, { rot: v })} />
+          <Section label="Transform & keyframes">
+            <Slider label="Scale" min={0.05} max={1.2} step={0.01} value={p.anim.scale} onChange={(v) => setAnim({ scale: v })} />
+            <Slider label="X" min={-1} max={1} step={0.01} value={p.anim.x} onChange={(v) => setAnim({ x: v })} />
+            <Slider label="Y" min={-1} max={1} step={0.01} value={p.anim.y} onChange={(v) => setAnim({ y: v })} />
+            <Slider label="Rotation" min={-180} max={180} step={1} value={p.anim.rotation} onChange={(v) => setAnim({ rotation: v })} />
+            <Slider label="Opacity (keyframable)" min={0} max={1} step={0.01} value={p.anim.opacity} onChange={(v) => setAnim({ opacity: v })} />
+            <KeyframeSection
+              clip={over}
+              clipStart={p.clipStart}
+              playheadLocal={p.playheadLocal}
+              onAdd={() => p.onKeyframeAdd(clipId)}
+              onDelete={(at) => p.onKeyframeDelete(clipId, at)}
+              onSeek={p.onSeek}
+            />
           </Section>
-          <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(p.selection!.trackId, patch)} />
+          <Section label="Green screen">
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="accent-emerald-400"
+                checked={!!over.chroma}
+                onChange={(e) => p.onPatchOverlay(trackId, { chroma: e.target.checked })}
+              />
+              <span>Key out the background color (chroma)</span>
+            </label>
+            {over.chroma && (
+              <div className="mt-2">
+                <Slider label="Tolerance" min={10} max={200} step={5} value={over.chromaTol ?? 90} onChange={(v) => p.onPatchOverlay(trackId, { chromaTol: v })} />
+                <p className="text-[10px] text-muted-foreground leading-snug">
+                  The key color is sampled from the corners of the footage. Works on green, blue or any solid backdrop.
+                </p>
+              </div>
+            )}
+          </Section>
+          <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />
         </>
       )}
 
@@ -280,10 +372,71 @@ export function Inspector(p: Props) {
       {over?.kind === "audio" && (
         <>
           <Section label="Audio">
-            <Slider label="Volume" min={0} max={1} step={0.05} value={over.volume ?? 1} onChange={(v) => p.onPatchOverlay(p.selection!.trackId, { volume: v })} />
+            <Slider label="Volume" min={0} max={1} step={0.05} value={over.volume ?? 1} onChange={(v) => p.onPatchOverlay(trackId, { volume: v })} />
+            <Slider label="Fade in" min={0} max={3} step={0.05} value={over.fadeIn ?? 0.15} onChange={(v) => p.onPatchOverlay(trackId, { fadeIn: v })} />
+            <Slider label="Fade out" min={0} max={3} step={0.05} value={over.fadeOut ?? 0.15} onChange={(v) => p.onPatchOverlay(trackId, { fadeOut: v })} />
           </Section>
-          <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(p.selection!.trackId, patch)} />
+          <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />
         </>
+      )}
+    </div>
+  );
+}
+
+function KeyframeSection({
+  clip,
+  clipStart,
+  playheadLocal,
+  onAdd,
+  onDelete,
+  onSeek,
+}: {
+  clip: { keyframes?: Keyframe[] };
+  clipStart: number;
+  playheadLocal: number | null;
+  onAdd: () => void;
+  onDelete: (at: number) => void;
+  onSeek: (v: number) => void;
+}) {
+  const kfs = clip.keyframes ?? [];
+  return (
+    <div className="mt-2">
+      <button
+        className="mb-btn-ghost w-full h-7 text-[11px] text-fuchsia-300 border border-fuchsia-400/40"
+        onClick={onAdd}
+        disabled={playheadLocal == null}
+        title={playheadLocal == null ? "Put the playhead inside this clip first" : "Write all motion values at the playhead"}
+      >
+        <Diamond className="h-3 w-3 inline -mt-0.5" /> Add keyframe at playhead
+        {playheadLocal != null && <span className="text-muted-foreground">({playheadLocal.toFixed(2)}s in)</span>}
+      </button>
+      {kfs.length > 0 ? (
+        <div className="mt-1.5 space-y-1">
+          {kfs.map((k) => (
+            <div key={k.at} className="flex items-center gap-1.5 text-[10px] bg-slate-900/70 border border-border rounded px-1.5 py-1">
+              <button
+                className="text-fuchsia-300 hover:scale-125 transition-transform"
+                title="Jump playhead here"
+                onClick={() => onSeek(clipStart + k.at)}
+              >
+                ◆
+              </button>
+              <span className="tabular-nums text-muted-foreground">{k.at.toFixed(2)}s</span>
+              <span className="text-muted-foreground truncate flex-1">
+                ×{k.v.scale.toFixed(2)} · {Math.round(k.v.opacity * 100)}%
+                {(k.v.x !== 0 || k.v.y !== 0 || k.v.rotation !== 0) &&
+                  ` · ${k.v.x.toFixed(2)},${k.v.y.toFixed(2)} ${Math.round(k.v.rotation)}°`}
+              </span>
+              <button className="text-muted-foreground hover:text-destructive" title="Delete keyframe" onClick={() => onDelete(k.at)}>
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[10px] text-muted-foreground mt-1.5 leading-snug">
+          No keyframes yet — motion holds its current values. Add one, then keep adjusting to shape the animation.
+        </p>
       )}
     </div>
   );
@@ -322,11 +475,12 @@ function Slider({
   value: number;
   onChange: (v: number) => void;
 }) {
+  const shown = step < 1 ? (value >= 10 && step >= 0.5 ? Math.round(value).toString() : value.toFixed(2)) : Math.round(value).toString();
   return (
     <div className="mb-2">
       <div className="flex justify-between text-[11px] mb-0.5">
         <span className="text-muted-foreground">{label}</span>
-        <span className="tabular-nums">{step < 1 ? value.toFixed(2) : Math.round(value)}</span>
+        <span className="tabular-nums">{shown}</span>
       </div>
       <input
         type="range"
@@ -344,4 +498,3 @@ function Slider({
 function Kbd({ children }: { children: React.ReactNode }) {
   return <kbd className="px-1 border border-border rounded bg-slate-900 text-[10px]">{children}</kbd>;
 }
-

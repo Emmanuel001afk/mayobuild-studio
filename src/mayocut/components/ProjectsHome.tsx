@@ -3,10 +3,12 @@ import { toast } from "sonner";
 import {
   Clapperboard,
   Download,
+  FileJson,
   Film,
   Image as ImageIcon,
   Loader2,
   Music,
+  PackageOpen,
   Pencil,
   Plus,
   RotateCcw,
@@ -15,7 +17,16 @@ import {
   Trash2,
   Upload,
   WifiOff,
+  Wand2,
+  X,
 } from "lucide-react";
+import {
+  applyEnhanceOps,
+  BUNDLED_PACKS,
+  loadBundledPack,
+  packToTemplates,
+  validatePack,
+} from "../assist";
 import { db } from "../idb";
 import {
   ASPECTS,
@@ -25,6 +36,7 @@ import {
   type AspectId,
   type MediaItem,
   type Project,
+  type TemplatePack,
   type UserTemplate,
 } from "../types";
 import { BUILT_IN_TEMPLATES } from "../templates";
@@ -44,7 +56,11 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
   const [busyImport, setBusyImport] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const packFileRef = useRef<HTMLInputElement>(null);
   const [loaded, setLoaded] = useState(false);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [enhanceFor, setEnhanceFor] = useState<UserTemplate | null>(null);
+  const [installedPacks, setInstalledPacks] = useState<Set<string>>(new Set());
 
   async function refresh() {
     const [m, p, t, e] = await Promise.all([db.listMedia(), db.listProjects(), db.listTemplates(), db.listExports()]);
@@ -52,11 +68,13 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
     setProjects(p.sort((a, b) => b.updatedAt - a.updatedAt));
     setUserTpls(t.sort((a, b) => b.createdAt - a.createdAt));
     setExports(e.sort((a, b) => b.createdAt - a.createdAt));
+    setInstalledPacks(new Set(userTemplatePackNames(t)));
     setLoaded(true);
   }
 
   useEffect(() => {
     void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function onFiles(files: FileList | null) {
@@ -89,6 +107,60 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
     nav.onOpenProject(p.id);
   }
 
+  // ------------------------------------------------------------- packs
+
+  async function installPackFile(pack: TemplatePack) {
+    const rows = packToTemplates(pack);
+    const existing = new Set(userTpls.map((t) => t.id));
+    let added = 0;
+    for (const r of rows) {
+      if (existing.has(r.id)) continue;
+      await db.saveTemplate(r);
+      added++;
+    }
+    if (added === 0) toast.info(`“${pack.name}” is already installed`);
+    else toast.success(`Installed ${added} template${added > 1 ? "s" : ""} from “${pack.name}”`);
+    await refresh();
+  }
+
+  async function installBundled(file: string) {
+    setInstalling(file);
+    try {
+      const pack = await loadBundledPack(file);
+      await installPackFile(pack);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not install the pack");
+    } finally {
+      setInstalling(null);
+    }
+  }
+
+  async function onImportPackFile(files: FileList | null) {
+    const f = files?.[0];
+    if (!f) return;
+    try {
+      const pack = validatePack(JSON.parse(await f.text()));
+      await installPackFile(pack);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not read that pack file");
+    } finally {
+      if (packFileRef.current) packFileRef.current.value = "";
+    }
+  }
+
+  async function openEnhanceFrom(tpl: UserTemplate, projectId: string) {
+    const src = await db.getProject(projectId);
+    if (!src || !tpl.enhance) {
+      toast.error("Project not found");
+      return;
+    }
+    const p = applyEnhanceOps(src, tpl.enhance, tpl.name);
+    await db.saveProject(p);
+    setEnhanceFor(null);
+    nav.onOpenProject(p.id);
+    toast.success(`“${tpl.name}” applied — you can keep editing`);
+  }
+
   async function openTemplate(kind: "builtin" | "user", id: string) {
     try {
       if (kind === "builtin") {
@@ -96,8 +168,8 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
         if (!tpl) return;
         const project = tpl.build(media);
         if (!project) {
-          const need = tpl.needs.map((k) => `${k}s`).join(" and ");
-          toast.error(`Import at least 2 ${need} into your library to use “${tpl.name}”`);
+          const need = tpl.needs.map((k) => k).join(" and ");
+          toast.error(`Import ${need} into your library to use “${tpl.name}”`);
           return;
         }
         await db.saveProject(project);
@@ -105,6 +177,14 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
       } else {
         const tpl = userTpls.find((t) => t.id === id);
         if (!tpl) return;
+        if (tpl.kind === "enhance") {
+          if (projects.length === 0) {
+            toast.info("Create a project first, then this treatment can be applied to it");
+            return;
+          }
+          setEnhanceFor(tpl);
+          return;
+        }
         const project = remapTemplate(tpl, media);
         await db.saveProject(project);
         nav.onOpenProject(project.id);
@@ -214,6 +294,65 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
       />
 
       <main className="max-w-6xl mx-auto px-4 py-8 space-y-10">
+        {/* Template packs */}
+        <section>
+          <SectionTitle
+            icon={<PackageOpen className="h-4 w-4" />}
+            title="Template packs"
+            sub="Downloadable layout & look packs, and .json packs shared by other users. Everything installs straight into your local gallery."
+          />
+          <div className="grid md:grid-cols-3 gap-4 mt-4">
+            {BUNDLED_PACKS.map((bp) => {
+              const installed = installedPacks.has(bp.name);
+              return (
+                <div key={bp.file} className="mb-card p-0 overflow-hidden">
+                  <div className="h-14 w-full" style={{ background: bp.swatch }} />
+                  <div className="p-3">
+                    <div className="font-semibold text-sm flex items-center gap-1.5">
+                      {bp.name}
+                      {installed && <span className="text-[10px] text-emerald-300 border border-emerald-400/40 rounded px-1">installed</span>}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{bp.desc}</p>
+                    <button
+                      className="mb-btn-ghost w-full h-7 mt-2 text-[11px]"
+                      disabled={installing === bp.file || installed}
+                      onClick={() => void installBundled(bp.file)}
+                    >
+                      {installing === bp.file ? <Loader2 className="h-3.5 w-3.5 animate-spin inline" /> : <Download className="h-3.5 w-3.5 inline" />}
+                      {installed ? "Installed" : installing === bp.file ? "Installing…" : "Install pack (on-device)"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="mb-card p-0 overflow-hidden flex flex-col">
+              <div className="h-14 w-full bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center">
+                <FileJson className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <div className="p-3 flex-1 flex flex-col">
+                <div className="font-semibold text-sm">Shared .json packs</div>
+                <p className="text-xs text-muted-foreground mt-1 line-clamp-2 flex-1">
+                  Import a pack someone shared with you — or export your own project as one from the editor (“Export
+                  pack”).
+                </p>
+                <button
+                  className="mb-btn-ghost w-full h-7 mt-2 text-[11px]"
+                  onClick={() => packFileRef.current?.click()}
+                >
+                  <Upload className="h-3.5 w-3.5 inline" /> Import pack file…
+                </button>
+                <input
+                  ref={packFileRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => void onImportPackFile(e.target.files)}
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* Templates */}
         <section>
           <SectionTitle icon={<Sparkles className="h-4 w-4" />} title="Start from a template" sub="Built from your own media — nothing is downloaded, nothing leaves this device." />
@@ -237,17 +376,32 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
             {userTpls.map((t) => (
               <div key={t.id} className="mb-card p-0 overflow-hidden text-left group">
                 <button className="w-full" onClick={() => openTemplate("user", t.id)}>
-                  <div className="h-24 w-full bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center">
-                    {t.thumb ? (
-                      <img src={t.thumb} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <Clapperboard className="h-8 w-8 text-muted-foreground" />
-                    )}
+                  <div
+                    className="h-24 w-full flex items-center justify-center"
+                    style={t.swatch ? { background: t.swatch } : undefined}
+                  >
+                    <div className="w-full h-full bg-black/30">
+                      {t.thumb ? (
+                        <img src={t.thumb} alt="" className="h-full w-full object-cover" />
+                      ) : t.kind === "enhance" ? (
+                        <Wand2 className="h-8 w-8 text-white/80" />
+                      ) : (
+                        <Clapperboard className="h-8 w-8 text-muted-foreground" />
+                      )}
+                    </div>
                   </div>
                   <div className="p-3">
                     <div className="font-semibold text-sm flex items-center gap-1.5">
                       {t.name}
-                      <span className="text-[10px] text-fuchsia-300">yours</span>
+                      {t.kind === "enhance" ? (
+                        <span className="text-[10px] text-amber-300 border border-amber-400/40 rounded px-1">treatment</span>
+                      ) : t.packName ? (
+                        <span className="text-[10px] text-cyan-300 border border-cyan-400/40 rounded px-1" title={`from pack ${t.packName}`}>
+                          pack
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-fuchsia-300">yours</span>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{t.desc || "Your own template"}</p>
                   </div>
@@ -394,8 +548,51 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
           onCreate={(aspect, name) => void createProject(aspect, name)}
         />
       )}
+
+      {enhanceFor && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setEnhanceFor(null)}>
+          <div className="mb-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2">
+              <Wand2 className="h-5 w-5 text-amber-300" />
+              <h3 className="font-bold text-lg">{enhanceFor.name}</h3>
+              <button className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => setEnhanceFor(null)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="text-sm text-muted-foreground mt-2">
+              This treatment restyles a copy of one of your projects (your original stays untouched). Which project?
+            </p>
+            <div className="mt-3 space-y-1.5 max-h-64 overflow-y-auto">
+              {projects.map((p) => (
+                <button
+                  key={p.id}
+                  className="w-full flex items-center gap-2 border border-border rounded-lg p-2 hover:border-cyan-400 text-left"
+                  onClick={() => void openEnhanceFrom(enhanceFor, p.id)}
+                >
+                  <div className="w-14 h-9 bg-slate-900 rounded overflow-hidden shrink-0 flex items-center justify-center">
+                    {p.thumb ? <img src={p.thumb} alt="" className="w-full h-full object-cover" /> : <Film className="h-4 w-4 text-muted-foreground" />}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm truncate">{p.name}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {fmtTime(projectDuration(p))} · {p.main.length} clip{p.main.length === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                </button>
+              ))}
+              {projects.length === 0 && (
+                <div className="text-sm text-muted-foreground py-4 text-center">No projects yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function userTemplatePackNames(tpls: UserTemplate[]): string[] {
+  return tpls.filter((t) => t.packName).map((t) => t.packName!);
 }
 
 function SectionTitle({ icon, title, sub }: { icon: React.ReactNode; title: string; sub: string }) {
@@ -509,7 +706,8 @@ export function remapTemplate(tpl: UserTemplate, media: MediaItem[]): Project {
     if (!media.some((m) => m.id === id) && !missing.includes(id)) missing.push(id);
   };
   for (const c of p.main) {
-    c.mediaId = remap(c.mediaId);
+    const rid = remap(c.mediaId);
+    if (rid) c.mediaId = rid;
     check(c.mediaId);
   }
   for (const tr of p.tracks)

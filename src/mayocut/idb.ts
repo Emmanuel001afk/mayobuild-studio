@@ -1,7 +1,7 @@
 // MayoCut local storage layer — IndexedDB.
 // The user's device IS the database. Nothing is sent to any server.
 
-import type { ExportItem, MediaItem, Project, UserTemplate } from "../types";
+import type { ExportItem, MediaItem, Project, UserTemplate } from "./types";
 
 const DB_NAME = "mayocut-db";
 const DB_VERSION = 1;

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { MediaItem, OverlayClip, Project } from "../types";
+import { useEffect, useRef, useState } from "react";
+import type { Keyframe, MediaItem, OverlayClip, Project } from "../types";
 import { mainClipDuration } from "../types";
 import { fmtTime } from "../utils";
 
@@ -157,11 +157,31 @@ export function Timeline(p: Props) {
                     <span className="text-[10px] leading-tight truncate w-full drop-shadow">
                       {m?.name ?? "…"}
                       {s.clip.speed !== 1 && <span className="ml-1 text-cyan-300">{s.clip.speed}×</span>}
+                      {s.clip.reverse && <span className="ml-1 text-fuchsia-300">⇄ rev</span>}
                       {s.clip.transitionIn !== "none" && i > 0 && (
                         <span className="ml-1 text-fuchsia-300">✂{s.clip.transitionIn}</span>
                       )}
                     </span>
                   </div>
+                  {m?.kind === "audio" && m.wave && (
+                    <div className="absolute inset-x-1 bottom-0.5 top-6 pointer-events-none">
+                      <Waveform wave={m.wave} />
+                    </div>
+                  )}
+                  {selected && (s.clip.keyframes?.length ?? 0) > 0 && (
+                    <div className="absolute top-0 bottom-0 pointer-events-none">
+                      {s.clip.keyframes!.map((k) => (
+                        <div
+                          key={k.at}
+                          className="absolute top-0.5 text-fuchsia-300 text-[8px] leading-none drop-shadow"
+                          style={{ left: k.at * pps }}
+                          title={`keyframe ${k.at.toFixed(2)}s in clip`}
+                        >
+                          ◆
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {/* trim handles */}
                   <div
                     className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-white/0 hover:bg-cyan-400/50"
@@ -228,6 +248,7 @@ export function Timeline(p: Props) {
                   total={total}
                   selected={p.selection?.lane === "overlay" && p.selection.id === c.id}
                   thumb={c.mediaId ? mediaById(c.mediaId)?.thumb : undefined}
+                  wave={c.kind === "audio" && c.mediaId ? mediaById(c.mediaId)?.wave : undefined}
                   onSelect={() => p.onSelect({ lane: "overlay", trackId: tr.id, id: c.id })}
                   onPatch={(patch) => p.onOverlayPatch(tr.id, c.id, patch)}
                 />
@@ -284,6 +305,7 @@ function OverlayClipBox({
   total,
   selected,
   thumb,
+  wave,
   onSelect,
   onPatch,
 }: {
@@ -292,6 +314,7 @@ function OverlayClipBox({
   total: number;
   selected: boolean;
   thumb?: string;
+  wave?: number[];
   onSelect: () => void;
   onPatch: (patch: Partial<OverlayClip>) => void;
 }) {
@@ -300,7 +323,9 @@ function OverlayClipBox({
       ? "bg-cyan-500/25 border-cyan-400/50"
       : clip.kind === "image"
         ? "bg-fuchsia-500/25 border-fuchsia-400/50"
-        : "bg-emerald-500/25 border-emerald-400/50";
+        : clip.kind === "video"
+          ? "bg-amber-500/25 border-amber-400/50"
+          : "bg-emerald-500/25 border-emerald-400/50";
 
   const begin = (e: React.PointerEvent, mode: "move" | "in" | "out") => {
     e.preventDefault();
@@ -334,7 +359,7 @@ function OverlayClipBox({
 
   return (
     <div
-      className={`absolute top-1.5 bottom-1.5 rounded border flex items-center px-1.5 cursor-grab active:cursor-grabbing ${kindColor} ${
+      className={`absolute top-1.5 bottom-1.5 rounded border flex items-center px-1.5 cursor-grab active:cursor-grabbing overflow-hidden ${kindColor} ${
         selected ? "ring-2 ring-cyan-400 z-10" : "hover:border-white/40"
       }`}
       style={{ left: clip.start * pps, width: Math.max(14, clip.duration * pps) }}
@@ -344,18 +369,77 @@ function OverlayClipBox({
       {thumb ? (
         <img src={thumb} alt="" className="w-6 h-6 rounded object-cover mr-1 pointer-events-none" draggable={false} />
       ) : (
-        <span className="text-[10px] truncate pointer-events-none">
-          {clip.kind === "text" ? clip.text?.split("\n")[0] ?? "text" : clip.kind === "audio" ? "♪ audio" : "image"}
+        <span className="text-[10px] truncate pointer-events-none relative z-10 bg-slate-950/40 rounded px-0.5">
+          {clip.kind === "text"
+            ? clip.text?.split("\n")[0] ?? "text"
+            : clip.kind === "audio"
+              ? "♪ audio"
+              : clip.kind === "video"
+                ? "▸ video"
+                : "image"}
+          {clip.chroma && " · chroma"}
         </span>
       )}
+      {wave && (
+        <div className="absolute inset-0.5 pointer-events-none">
+          <Waveform wave={wave} color="rgba(110,231,183,0.75)" />
+        </div>
+      )}
+      {selected && (clip.keyframes?.length ?? 0) > 0 && (
+        <div className="absolute top-0 bottom-0 pointer-events-none">
+          {clip.keyframes!.map((k) => (
+            <div
+              key={k.at}
+              className="absolute top-0 text-fuchsia-300 text-[8px] leading-none drop-shadow"
+              style={{ left: k.at * pps }}
+              title={`keyframe ${k.at.toFixed(2)}s in clip`}
+            >
+              ◆
+            </div>
+          ))}
+        </div>
+      )}
       <div
-        className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/10 hover:bg-cyan-300/60"
+        className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/10 hover:bg-cyan-300/60 z-20"
         onPointerDown={(e) => begin(e, "in")}
       />
       <div
-        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/10 hover:bg-cyan-300/60"
+        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize bg-white/10 hover:bg-cyan-300/60 z-20"
         onPointerDown={(e) => begin(e, "out")}
       />
     </div>
   );
+}
+
+/** Tiny amplitude bars drawn once per size — audio clips get a real waveform. */
+function Waveform({ wave, color = "rgba(125,211,252,0.8)" }: { wave: number[]; color?: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const draw = () => {
+      const w = c.clientWidth;
+      const h = c.clientHeight;
+      if (w < 4 || h < 4) return;
+      const dpr = window.devicePixelRatio || 1;
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = color;
+      const bars = Math.max(8, Math.floor(w / 3));
+      for (let i = 0; i < bars; i++) {
+        const v = wave[Math.floor((i / bars) * wave.length)] ?? 0;
+        const bh = Math.max(1, v * (h - 2));
+        ctx.fillRect(i * (w / bars), (h - bh) / 2, Math.max(1, w / bars - 1), bh);
+      }
+    };
+    draw();
+    const ro = new ResizeObserver(draw);
+    ro.observe(c);
+    return () => ro.disconnect();
+  }, [wave, color]);
+  return <canvas ref={ref} className="w-full h-full block" />;
 }

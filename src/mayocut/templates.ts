@@ -35,6 +35,7 @@ function clip(
     in: 0,
     out: media.kind === "image" ? 3 : Math.min(dur, Math.max(1.5, dur)),
     speed: 1,
+    reverse: false,
     filter: "none",
     adjust: { ...DEFAULT_ADJUST },
     volume: 1,

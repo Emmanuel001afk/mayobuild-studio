@@ -1,41 +1,65 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   ArrowLeft,
   Clapperboard,
   Download,
+  FileJson,
   Film,
   Image as ImageIcon,
   Loader2,
+  Mic,
   Music,
   Plus,
+  RotateCcw,
   Scissors,
   Sparkles,
+  Square,
   Upload,
   WifiOff,
   X,
 } from "lucide-react";
+import { downloadJson, startMicRecording, templateToPackFile } from "../assist";
 import { db } from "../idb";
-import { Engine, FILTER_PRESETS, pickMime } from "../engine";
+import { Engine, FILTER_PRESETS, mp4Supported, pickMime } from "../engine";
 import {
   ASPECTS,
   mainSpans,
   projectDuration,
   uid,
+  type AnimValues,
   type AspectId,
   type MainClip,
   type MediaItem,
   type OverlayClip,
   type Project,
+  type UserTemplate,
 } from "../types";
 import { fmtBytes, fmtTime, importFiles, kindFromMime } from "../utils";
 import { Timeline } from "./Timeline";
 import { Inspector } from "./Inspector";
+import { Assist } from "./Assist";
 
 export type Selection =
   | { lane: "main"; id: string }
   | { lane: "overlay"; trackId: string; id: string }
   | null;
+
+type ExportFmt = "auto" | "mp4" | "webm";
+
+const EMPTY_PROJECT: Project = {
+  id: "",
+  name: "",
+  aspect: "9:16",
+  main: [],
+  tracks: [
+    { id: "t_text", name: "Text", clips: [] },
+    { id: "t_overlay", name: "Overlay", clips: [] },
+    { id: "t_audio", name: "Audio", clips: [] },
+  ],
+  createdAt: 0,
+  updatedAt: 0,
+};
 
 export function Editor({
   projectId,
@@ -59,8 +83,14 @@ export function Editor({
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [showExport, setShowExport] = useState(false);
+  const [exportFmt, setExportFmt] = useState<ExportFmt>("auto");
+  const [exportFps, setExportFps] = useState(30);
+  const [exportKbps, setExportKbps] = useState(8000);
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
   const [savingTemplate, setSavingTemplate] = useState(false);
+  const [assistOpen, setAssistOpen] = useState(false);
+  const [recState, setRecState] = useState<{ active: boolean; secs: number; error?: string }>({ active: false, secs: 0 });
+  const recRef = useRef<{ stop: () => void } | null>(null);
   const undoStack = useRef<string[]>([]);
   const [undoCount, setUndoCount] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -107,7 +137,10 @@ export function Editor({
     };
     // resolve object URLs for referenced media
     (async () => {
-      const refs = new Set<string>([...project.main.map((c) => c.mediaId), ...project.tracks.flatMap((tr) => tr.clips.map((c) => c.mediaId ?? ""))]);
+      const refs = new Set<string>([
+        ...project.main.map((c) => c.mediaId),
+        ...project.tracks.flatMap((tr) => tr.clips.map((c) => c.mediaId ?? "")),
+      ]);
       for (const id of refs) {
         const item = media.find((m) => m.id === id);
         if (!item) continue;
@@ -216,8 +249,9 @@ export function Editor({
     eng.restore(snap);
   }, []);
 
-  const mutate = useCallback(
-    (fn: (eng: Engine) => boolean | void) => {
+  /** Undoable mutation; returns whether it happened. */
+  const mutateVoid = useCallback(
+    (fn: (eng: Engine) => boolean | void): boolean => {
       const eng = engineRef.current;
       if (!eng) return false;
       pushUndo();
@@ -229,24 +263,118 @@ export function Editor({
     [pushUndo],
   );
 
+  /** Undoable mutation that returns the created/changed object (null if it didn't happen). */
+  const mutateRet = useCallback(
+    <T,>(fn: (eng: Engine) => T | false | void): T | null => {
+      const eng = engineRef.current;
+      if (!eng) return null;
+      pushUndo();
+      const r = fn(eng);
+      if (r === false || r === undefined) undoStack.current.pop();
+      eng.draw();
+      return r === false || r === undefined ? null : (r as T);
+    },
+    [pushUndo],
+  );
+
+  /** Undoable mutation from the Assist drawer. */
+  const undoable = useCallback(
+    (fn: (eng: Engine) => void) => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      pushUndo();
+      fn(eng);
+      eng.draw();
+    },
+    [pushUndo],
+  );
+
   const doSplit = useCallback(() => {
     const eng = engineRef.current;
     if (!eng || eng.duration() === 0) {
       toast.info("Import media first — there is nothing to split");
       return false;
     }
-    const ok = mutate((e) => e.splitAt(e.t));
-    return ok;
-  }, [mutate]);
+    return mutateVoid((e) => e.splitAt(e.t));
+  }, [mutateVoid]);
 
   const deleteSelection = useCallback(() => {
     if (!selection) return;
-    const ok = mutate((eng) => {
+    const ok = mutateVoid((eng) => {
       if (selection.lane === "main") eng.deleteMainClip(selection.id);
       else eng.deleteOverlay(selection.id);
     });
     if (ok) setSelection(null);
-  }, [selection, mutate]);
+  }, [selection, mutateVoid]);
+
+  // ------------------------------------------------------------- keyframes / motion
+
+  const onAnimChange = useCallback(
+    (clipId: string, localT: number, patch: Partial<AnimValues>) => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      pushUndo();
+      const clip = eng.getClip(clipId);
+      if (!clip) {
+        undoStack.current.pop();
+        return;
+      }
+      const over = "kind" in clip ? clip : null;
+      if (over && (over.kind === "text" || over.kind === "image" || over.kind === "video")) {
+        const near = eng.keyframeNear(clipId, localT);
+        if (near) {
+          eng.updateKeyframeAt(clipId, localT, patch);
+        } else {
+          const base: Partial<OverlayClip> = {};
+          if (patch.x != null) base.x = patch.x;
+          if (patch.y != null) base.y = patch.y;
+          if (patch.scale != null) base.scale = patch.scale;
+          if (patch.rotation != null) base.rot = patch.rotation;
+          if (Object.keys(base).length) eng.updateOverlay(clipId, base);
+          if (patch.opacity != null) {
+            eng.addKeyframe(clipId, localT);
+            eng.updateKeyframeAt(clipId, localT, { opacity: patch.opacity });
+          }
+        }
+      } else {
+        // main clips have no base motion — a value change is a keyframe
+        eng.addKeyframe(clipId, localT);
+        eng.updateKeyframeAt(clipId, localT, patch);
+      }
+      eng.draw();
+    },
+    [pushUndo],
+  );
+
+  const onKeyframeAdd = useCallback(
+    (clipId: string) => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      const clip = eng.getClip(clipId);
+      if (!clip) return;
+      const { clipStart: cs, local: localT } = clipLocal(eng, clipId);
+      if (localT == null) {
+        toast.info("Put the playhead inside this clip first");
+        return;
+      }
+      pushUndo();
+      eng.addKeyframe(clipId, localT);
+      eng.draw();
+      void cs;
+    },
+    [pushUndo],
+  );
+
+  const onKeyframeDelete = useCallback(
+    (clipId: string, at: number) => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      pushUndo();
+      eng.deleteKeyframe(clipId, at);
+      eng.draw();
+    },
+    [pushUndo],
+  );
 
   // ------------------------------------------------------------- media import (in editor)
 
@@ -270,35 +398,68 @@ export function Editor({
     toast.success(`${items.length} item(s) added`);
   }
 
+  function startRecording() {
+    if (recRef.current) {
+      recRef.current.stop();
+      recRef.current = null;
+      setRecState({ active: false, secs: 0 });
+      return;
+    }
+    const handle = startMicRecording(
+      (secs) => setRecState({ active: true, secs }),
+      async (file, err) => {
+        recRef.current = null;
+        setRecState({ active: false, secs: 0, error: err });
+        if (err) {
+          toast.error(err);
+          return;
+        }
+        if (!file) return;
+        const items = await importFiles([file]);
+        for (let i = 0; i < items.length; i++) await db.putMedia(items[i], file);
+        const all = await db.listMedia();
+        setMedia(all);
+        engineRef.current?.setMedia(all);
+        const blob = await db.getBlob(items[0].id);
+        if (blob) engineRef.current?.attachUrl(items[0].id, URL.createObjectURL(blob));
+        toast.success("Recording added to your library");
+      },
+    );
+    recRef.current = handle;
+    setRecState({ active: true, secs: 0 });
+  }
+
   function addMediaToTimeline(item: MediaItem) {
     const eng = engineRef.current;
     if (!eng) return;
     if (item.kind === "audio") {
-      const clip = mutate((e) => e.addAudioClip("t_audio", item, Math.max(0, e.t)));
+      const clip = mutateRet((e) => e.addAudioClip("t_audio", item, Math.max(0, e.t)));
       if (clip) setSelection({ lane: "overlay", trackId: "t_audio", id: clip.id });
       return;
     }
     if (addMode === "overlay") {
-      if (item.kind !== "image") {
-        toast.info("Videos go on the main timeline; pick Timeline mode");
+      if (item.kind === "image" || item.kind === "video") {
+        const clip = mutateRet((e) => e.addImageOverlay("t_overlay", item, Math.max(0, e.t)));
+        if (clip) setSelection({ lane: "overlay", trackId: "t_overlay", id: clip.id });
         return;
       }
-      const clip = mutate((e) => e.addImageOverlay("t_overlay", item, Math.max(0, e.t)));
-      if (clip) setSelection({ lane: "overlay", trackId: "t_overlay", id: clip.id });
+      toast.info("Only images and videos go on the overlay track");
       return;
     }
-    const clip = mutate((e) => e.addMainClip(item));
+    const clip = mutateRet((e) => e.addMainClip(item));
     if (clip) setSelection({ lane: "main", id: clip.id });
   }
 
   function addText() {
     const eng = engineRef.current;
     if (!eng) return;
-    const clip = mutate((e) => e.addTextClip("t_text", Math.max(0, e.t)));
+    const clip = mutateRet((e) => e.addTextClip("t_text", Math.max(0, e.t)));
     if (clip) setSelection({ lane: "overlay", trackId: "t_text", id: clip.id });
   }
 
   // ------------------------------------------------------------- export
+
+  const canMp4 = mp4Supported();
 
   async function runExport() {
     const eng = engineRef.current;
@@ -307,19 +468,35 @@ export function Editor({
       toast.error("The timeline is empty — add media first");
       return;
     }
-    if (!pickMime()) {
+    if (!pickMime() && !canMp4) {
       toast.error("This browser can't record video. Use Chrome or Edge, or the desktop app.");
       return;
     }
+    const wantMp4 = exportFmt === "mp4" || (exportFmt === "auto" && canMp4);
+    const opts = {
+      fps: exportFps,
+      videoBitsPerSecond: exportKbps * 1000,
+      audioBitsPerSecond: 192_000,
+    };
     setExporting(true);
     setExportProgress(0);
-    const name = `${eng.project.name.replace(/[^\w\- ]+/g, "").trim() || "mayocut"}.webm`;
     try {
       toast.info("Export runs in real time — keep this window open");
-      const blob = await eng.exportMedia(
-        { fps: 30, videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 },
-        (p) => setExportProgress(p),
-      );
+      let blob: Blob;
+      if (wantMp4 && canMp4) {
+        try {
+          blob = await eng.exportMP4(opts, (p) => setExportProgress(p));
+        } catch (e) {
+          console.warn("MP4 failed, falling back to WebM", e);
+          toast.warning("MP4 encoder unavailable at this size — exported WebM instead");
+          blob = await eng.exportMedia(opts, (p) => setExportProgress(p));
+        }
+      } else {
+        if (exportFmt === "mp4" && !canMp4) toast.warning("MP4 needs Chrome/Edge — exported WebM");
+        blob = await eng.exportMedia(opts, (p) => setExportProgress(p));
+      }
+      const ext = blob.type.includes("mp4") ? "mp4" : "webm";
+      const name = `${eng.project.name.replace(/[^\w\- ]+/g, "").trim() || "mayocut"}.${ext}`;
       // download
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -328,13 +505,13 @@ export function Editor({
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 8000);
       // keep a copy in the local export library
-      const ext = { id: uid("exp"), name, size: blob.size, createdAt: Date.now(), mime: blob.type };
+      const extItem = { id: uid("exp"), name, size: blob.size, createdAt: Date.now(), mime: blob.type };
       try {
-        await db.saveExport(ext, blob);
+        await db.saveExport(extItem, blob);
       } catch {
         /* storage full — the download already succeeded */
       }
-      toast.success(`Exported ${fmtBytes(blob.size)} — saved to this device`);
+      toast.success(`Exported ${fmtBytes(blob.size)} (${ext.toUpperCase()}) — saved to this device`);
     } catch (e: unknown) {
       console.error(e);
       toast.error(e instanceof Error ? e.message : "Export failed");
@@ -351,13 +528,15 @@ export function Editor({
     if (!name) return;
     setSavingTemplate(true);
     (async () => {
+      const proj = JSON.parse(JSON.stringify(eng.project));
       const tpl = {
         id: uid("tpl"),
         name,
         desc: "Your own template",
         aspect: eng.project.aspect,
         createdAt: Date.now(),
-        project: JSON.parse(JSON.stringify(eng.project)),
+        kind: "project" as const,
+        project: proj,
         thumb: eng.project.thumb,
       };
       // remember original file names so other devices can re-match media
@@ -368,6 +547,58 @@ export function Editor({
       toast.success("Template saved — find it in the template gallery");
     })().finally(() => setSavingTemplate(false));
   }
+
+  function exportTemplateJson() {
+    const eng = engineRef.current;
+    if (!eng) return;
+    const proj = JSON.parse(JSON.stringify(eng.project));
+    const names: Record<string, string> = {};
+    for (const m of media) names[m.id] = m.name;
+    (proj as any).__mediaNames = names;
+    const tpl: UserTemplate = {
+      id: eng.project.id,
+      name: eng.project.name,
+      desc: "Shared from MayoCut",
+      aspect: eng.project.aspect,
+      createdAt: Date.now(),
+      kind: "project" as const,
+      project: proj,
+    };
+    const pack = templateToPackFile(tpl);
+    downloadJson(`${(eng.project.name || "template").replace(/[^\w\- ]+/g, "_")}.mayocut-pack.json`, pack);
+    toast.success("Template pack exported — share the .json file");
+  }
+
+  // ------------------------------------------------------------- selection-derived
+
+  const spans = mainSpans(project ?? EMPTY_PROJECT);
+  const dur = project ? projectDuration(project) : 0;
+  const selClip: (MainClip | OverlayClip | null) = (() => {
+    const eng = engineRef.current;
+    if (!eng || !selection) return null;
+    if (selection.lane === "main") return eng.project.main.find((c) => c.id === selection.id) ?? null;
+    for (const tr of eng.project.tracks) {
+      const c = tr.clips.find((x) => x.id === selection.id);
+      if (c) return c;
+    }
+    return null;
+  })();
+
+  const { clipStart, local: playheadLocal } = selClip ? clipLocal(engineRef.current!, selClip.id) : { clipStart: 0, local: null };
+  const anim: AnimValues =
+    selClip && engineRef.current
+      ? engineRef.current.animAtPlayhead(selClip, clipStart)
+      : { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
+
+  const assistClip = (() => {
+    if (!selection || !selClip) return null;
+    const oc = "kind" in selClip ? selClip : null;
+    return {
+      id: selClip.id,
+      kind: oc ? oc.kind : "main",
+      mediaId: "mediaId" in selClip ? selClip.mediaId : undefined,
+    };
+  })();
 
   // ------------------------------------------------------------- render
 
@@ -392,19 +623,6 @@ export function Editor({
     );
   }
 
-  const spans = mainSpans(project);
-  const dur = projectDuration(project);
-  const selClip: (MainClip | OverlayClip | null) = (() => {
-    const eng = engineRef.current;
-    if (!eng || !selection) return null;
-    if (selection.lane === "main") return eng.project.main.find((c) => c.id === selection.id) ?? null;
-    for (const tr of eng.project.tracks) {
-      const c = tr.clips.find((x) => x.id === selection.id);
-      if (c) return c;
-    }
-    return null;
-  })();
-
   return (
     <div className="h-screen flex flex-col bg-background text-foreground overflow-hidden">
       {/* top bar */}
@@ -428,12 +646,19 @@ export function Editor({
         <span className="mb-chip hidden md:flex items-center gap-1">
           <WifiOff className="h-3 w-3" /> offline
         </span>
-        <span className="mb-chip hidden lg:flex items-center gap-1" title="AI features are optional, off by default, and never block editing">
-          <Sparkles className="h-3 w-3" /> AI: optional · off
-        </span>
+        <button
+          className="mb-chip hidden lg:flex items-center gap-1 hover:border-primary"
+          onClick={() => setAssistOpen(true)}
+          title="Assist: on-device tools (beats, loudness, color) + optional local AI"
+        >
+          <Sparkles className="h-3 w-3" /> Assist
+        </button>
         <div className="ml-auto flex items-center gap-2">
           <button className="mb-btn-ghost h-8 px-2 text-xs" onClick={() => void saveAsTemplate()} disabled={savingTemplate}>
             <Clapperboard className="h-3.5 w-3.5" /> {savingTemplate ? "Saving…" : "Save as template"}
+          </button>
+          <button className="mb-btn-ghost h-8 px-2 text-xs" onClick={exportTemplateJson} title="Export this project as a shareable .json template pack">
+            <FileJson className="h-3.5 w-3.5" /> Export pack
           </button>
           <button className="mb-btn h-8 px-3 text-sm bg-primary" onClick={() => setShowExport(true)}>
             <Download className="h-4 w-4" /> Export
@@ -460,6 +685,21 @@ export function Editor({
                 e.target.value = "";
               }}
             />
+            <button
+              className={`mb-btn-ghost w-full h-7 mt-1 text-[11px] ${recState.active ? "text-red-400 border-red-400/50" : ""}`}
+              onClick={startRecording}
+              title="Record voiceover or music from the microphone"
+            >
+              {recState.active ? (
+                <span className="flex items-center justify-center gap-1">
+                  <Square className="h-3 w-3" /> Stop · {recState.secs}s
+                </span>
+              ) : (
+                <span className="flex items-center justify-center gap-1">
+                  <Mic className="h-3 w-3" /> Record audio
+                </span>
+              )}
+            </button>
             <div className="flex gap-1 mt-2">
               <button
                 className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "main" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
@@ -524,7 +764,7 @@ export function Editor({
             >
               <EditorCanvas engine={engineRef} project={project} onReady={(c) => engineRef.current?.bind(c)} />
             </div>
-            {spans.length === 0 && (
+            {spans.length === 0 && project.tracks.every((tr) => tr.clips.length === 0) && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="text-center text-muted-foreground text-sm bg-black/50 rounded-lg px-6 py-4">
                   <Film className="h-8 w-8 mx-auto mb-2 opacity-60" />
@@ -550,6 +790,9 @@ export function Editor({
               title="Loop"
             >
               ⟳
+            </button>
+            <button className="mb-btn-ghost h-7 px-2" onClick={doUndo} title="Undo (Ctrl+Z)">
+              <RotateCcw className="h-3.5 w-3.5" /> {undoCount > 0 && <span className="text-[10px] text-muted-foreground">{undoCount}</span>}
             </button>
             <span className="font-mono tabular-nums">
               {fmtTime(t)} <span className="text-muted-foreground">/ {fmtTime(dur)}</span>
@@ -585,7 +828,7 @@ export function Editor({
               onSeek={(v) => engineRef.current?.seek(v)}
               onSelect={setSelection}
               onMainTrim={(id, edge, srcTime) =>
-                mutate((eng) => {
+                mutateVoid((eng) => {
                   const c = eng.project.main.find((x) => x.id === id);
                   if (!c) return false;
                   if (edge === "in") c.in = Math.max(0, Math.min(srcTime, c.out - 0.1));
@@ -593,14 +836,14 @@ export function Editor({
                 })
               }
               onMainSpeed={(id, speed) =>
-                mutate((eng) => {
+                mutateVoid((eng) => {
                   const c = eng.project.main.find((x) => x.id === id);
                   if (c) c.speed = speed;
                 })
               }
-              onMainMove={(id, dir) => mutate((eng) => eng.moveMainClip(id, dir))}
+              onMainMove={(id, dir) => mutateVoid((eng) => eng.moveMainClip(id, dir))}
               onOverlayPatch={(trackId, clipId, patch) =>
-                mutate((eng) => {
+                mutateVoid((eng) => {
                   const tr = eng.project.tracks.find((x) => x.id === trackId);
                   const c = tr?.clips.find((x) => x.id === clipId);
                   if (!c) return false;
@@ -622,9 +865,13 @@ export function Editor({
             clip={selClip}
             project={project}
             media={media}
+            t={t}
+            clipStart={clipStart}
+            playheadLocal={playheadLocal}
+            anim={anim}
             onPatchMain={(patch) => {
               if (!selection || selection.lane !== "main") return;
-              mutate((eng) => {
+              mutateVoid((eng) => {
                 const c = eng.project.main.find((x) => x.id === selection.id);
                 if (!c) return false;
                 Object.assign(c, patch);
@@ -633,13 +880,16 @@ export function Editor({
             }}
             onPatchOverlay={(trackId, patch) => {
               if (!selection || selection.lane !== "overlay") return;
-              mutate((eng) => {
+              mutateVoid((eng) => {
                 const tr = eng.project.tracks.find((x) => x.id === trackId);
                 const c = tr?.clips.find((x) => x.id === selection.id);
                 if (!c) return false;
                 Object.assign(c, patch);
               });
             }}
+            onAnimChange={onAnimChange}
+            onKeyframeAdd={onKeyframeAdd}
+            onKeyframeDelete={onKeyframeDelete}
             onSetAspect={(a) => {
               const eng = engineRef.current;
               if (eng) {
@@ -648,14 +898,14 @@ export function Editor({
               }
             }}
             onReplaceMedia={(clipId, item) =>
-              mutate((eng) => {
+              mutateVoid((eng) => {
                 eng.replaceMainClipMedia(clipId, item);
               })
             }
             onSplit={doSplit}
             onDuplicate={() => {
               if (!selection) return;
-              mutate((eng) => {
+              mutateVoid((eng) => {
                 if (selection.lane === "main") {
                   eng.duplicateMainClip(selection.id);
                 } else {
@@ -666,10 +916,24 @@ export function Editor({
               });
             }}
             onDelete={deleteSelection}
+            onSeek={(v) => engineRef.current?.seek(v)}
             filters={FILTER_PRESETS}
           />
         </div>
       </div>
+
+      {/* assist drawer */}
+      {assistOpen && engineRef.current && (
+        <Assist
+          engine={engineRef.current}
+          project={engineRef.current.project}
+          media={media}
+          onUndoable={undoable}
+          onCanvas={() => canvasWrapRef.current?.querySelector("canvas") ?? null}
+          onClose={() => setAssistOpen(false)}
+          selectedClip={assistClip}
+        />
+      )}
 
       {/* export dialog */}
       {showExport && (
@@ -684,8 +948,63 @@ export function Editor({
                 </button>
               )}
             </div>
-            <div className="mt-4 space-y-2 text-sm">
-              <Row k="Format" v="WebM (VP9/Opus) — plays everywhere, built 100% on this device" />
+            <div className="mt-4 space-y-3 text-sm">
+              <div>
+                <div className="text-muted-foreground text-xs mb-1">Format</div>
+                <div className="flex gap-1.5">
+                  {(
+                    [
+                      ["auto", canMp4 ? "Auto (MP4 here)" : "Auto (WebM here)"],
+                      ["mp4", canMp4 ? "MP4 · H.264" : "MP4 · needs Chrome/Edge"],
+                      ["webm", "WebM · VP9"],
+                    ] as [ExportFmt, string][]
+                  ).map(([v, label]) => (
+                    <button
+                      key={v}
+                      className={`text-xs border rounded px-2 py-1 ${exportFmt === v ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
+                      onClick={() => setExportFmt(v)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <div className="text-muted-foreground text-xs mb-1">Frame rate</div>
+                  <div className="flex gap-1.5">
+                    {[24, 30, 60].map((f) => (
+                      <button
+                        key={f}
+                        className={`text-xs border rounded px-2 py-1 ${exportFps === f ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
+                        onClick={() => setExportFps(f)}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex-1">
+                  <div className="text-muted-foreground text-xs mb-1">Quality</div>
+                  <div className="flex gap-1.5">
+                    {(
+                      [
+                        [4000, "4"],
+                        [8000, "8"],
+                        [16000, "16"],
+                      ] as [number, string][]
+                    ).map(([k, label]) => (
+                      <button
+                        key={k}
+                        className={`text-xs border rounded px-2 py-1 ${exportKbps === k ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
+                        onClick={() => setExportKbps(k)}
+                      >
+                        {label}M
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
               <Row k="Resolution" v={`${ASPECTS[project.aspect].w}×${ASPECTS[project.aspect].h} (${project.aspect})`} />
               <Row k="Length" v={fmtTime(dur)} />
               <Row k="Speed" v="Real-time render — keep this window open" />
@@ -708,14 +1027,32 @@ export function Editor({
               </button>
             )}
             <p className="text-[11px] text-muted-foreground mt-3">
-              The finished video is saved to this device (downloads + MayoCut export library). MP4 export ships with the
-              desktop & Android builds.
+              MP4 (H.264 + Opus) is encoded by the WebCodecs engine — Chrome, Edge and the desktop/Android builds. The
+              finished video is saved on this device (downloads + export library).
             </p>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+/** Where does the playhead sit relative to a clip? */
+function clipLocal(eng: Engine, clipId: string): { clipStart: number; local: number | null } {
+  const spans = mainSpans(eng.project);
+  const s = spans.find((x) => x.clip.id === clipId);
+  if (s) {
+    const local = eng.t - s.start;
+    return { clipStart: s.start, local: local >= 0 && local <= s.end - s.start ? local : null };
+  }
+  for (const tr of eng.project.tracks) {
+    const c = tr.clips.find((x) => x.id === clipId);
+    if (c) {
+      const local = eng.t - c.start;
+      return { clipStart: c.start, local: local >= 0 && local <= c.duration ? local : null };
+    }
+  }
+  return { clipStart: 0, local: null };
 }
 
 function Row({ k, v }: { k: string; v: string }) {

@@ -1,6 +1,6 @@
 {
   "name": "tanstack_start_ts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -59,6 +59,7 @@
     "input-otp": "^1.4.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.575.0",
+    "mp4-muxer": "^5.2.2",
     "pdfjs-dist": "^6.0.227",
     "react": "^19.2.0",
     "react-day-picker": "^9.14.0",

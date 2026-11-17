@@ -1,8 +1,8 @@
 {
   "name": "mayocut-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "MayoCut — offline video editor (Windows desktop build)",
+  "description": "MayoCut \u2014 offline video editor (Windows desktop build)",
   "main": "main.cjs",
   "author": "Mayobuild",
   "license": "UNLICENSED",
