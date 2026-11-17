@@ -52,51 +52,58 @@ function shellStartStubs(): Plugin {
 }
 
 function shellServerOnly(): Plugin {
+  // One virtual module PER (importer, server-module) pair, carrying the
+  // importer path in its id. Names are parsed at load() time from that single
+  // importer, so there is no shared state and no cross-importer race when
+  // Rolldown resolves in parallel.
   const VIRTUAL = "\0shell-server-only:";
-  // importer → Set of named imports taken from a given .server. module
-  const namesById = new Map<string, Set<string>>();
+  const SEP = "??";
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const namedImportsFrom = (src: string, base: string): string[] => {
+    const re = new RegExp(
+      `import\\s*([^;'"]+?)\\s*from\\s*["'][^"']*${escape(base)}["']`,
+      "g",
+    );
+    const names = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src))) {
+      const brace = m[1].match(/\{([^}]*)\}/);
+      if (!brace) continue;
+      for (const part of brace[1].split(",")) {
+        const p = part.trim();
+        if (!p || /^\s*type\b/.test(p)) continue; // type-only imports are erased
+        const orig = p.split(/\s+as\s+/)[0].trim();
+        if (/^[\w$]+$/.test(orig)) names.add(orig);
+      }
+    }
+    return [...names];
+  };
   return {
     name: "shell-server-only",
     enforce: "pre",
     resolveId(id, importer) {
       if (!importer || importer.includes("node_modules")) return null;
       if (!/\.server(\.[cm]?[jt]s?)?$/.test(id)) return null;
-      const key = VIRTUAL + id;
-      const set = namesById.get(key) ?? new Set<string>();
-      try {
-        const src = readFileSync(importer, "utf8");
-        // The import statement may use an alias/relative form, so match on the
-        // module's basename (unique in this repo).
-        const base = id.split("/").pop() ?? id;
-        const re = new RegExp(
-          `import\\s*([^;'"]+?)\\s*from\\s*["'][^"']*${escape(base)}["']`,
-          "g",
-        );
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(src))) {
-          const brace = m[1].match(/\{([^}]*)\}/);
-          if (brace) {
-            for (const part of brace[1].split(",")) {
-              const p = part.trim();
-              if (!p || /^\s*type\b/.test(p)) continue; // type-only imports are erased
-              const orig = p.split(/\s+as\s+/)[0].trim();
-              if (/^[\w$]+$/.test(orig)) set.add(orig);
-            }
-          }
-        }
-      } catch {
-        /* importer unreadable — stub with just a default export */
-      }
-      namesById.set(key, set);
-      return key;
+      const cleanImporter = importer.split("?")[0];
+      return VIRTUAL + cleanImporter + SEP + id;
     },
     load(id) {
       if (!id.startsWith(VIRTUAL)) return null;
-      const set = namesById.get(id) ?? new Set<string>();
+      const sep = id.indexOf(SEP);
+      const importer = id.slice(VIRTUAL.length, sep);
+      const modId = id.slice(sep + SEP.length);
+      let names: string[] = [];
+      try {
+        // The import statement may use an alias/relative form, so match on the
+        // module's basename (unique in this repo).
+        const base = modId.split("/").pop() ?? modId;
+        names = namedImportsFrom(readFileSync(importer, "utf8"), base);
+      } catch {
+        /* importer unreadable — default export only */
+      }
       const stub =
         'const __serverOnly = () => { throw new Error("Server-only module: not available in the offline shell build"); };';
-      const named = [...set].map((n) => `export const ${n} = __serverOnly;`).join("\n");
+      const named = names.map((n) => `export const ${n} = __serverOnly;`).join("\n");
       return `${stub}\n${named}\nexport default __serverOnly;\n`;
     },
   };
