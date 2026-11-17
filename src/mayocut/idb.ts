@@ -2,10 +2,11 @@
 // The user's device IS the database. Nothing is sent to any server.
 
 import type { ExportItem, MediaItem, Project, UserTemplate } from "./types";
+import type { LutRecord } from "./luts";
 
 const DB_NAME = "mayocut-db";
-const DB_VERSION = 1;
-const STORES = ["media", "blobs", "projects", "templates", "exports"] as const;
+const DB_VERSION = 2;
+const STORES = ["media", "blobs", "projects", "templates", "exports", "luts"] as const;
 type StoreName = (typeof STORES)[number];
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -78,6 +79,11 @@ export const db = {
   listTemplates: (): Promise<UserTemplate[]> => tx("templates", "readonly", (s) => s.getAll() as IDBRequest),
   saveTemplate: (t: UserTemplate): Promise<unknown> => tx("templates", "readwrite", (s) => s.put(t)),
   deleteTemplate: (id: string): Promise<unknown> => tx("templates", "readwrite", (s) => s.delete(id)),
+
+  // --- imported LUTs (.cube) ---
+  listLuts: (): Promise<LutRecord[]> => tx("luts", "readonly", (s) => s.getAll() as IDBRequest),
+  saveLut: (r: LutRecord): Promise<unknown> => tx("luts", "readwrite", (s) => s.put(r)),
+  deleteLut: (id: string): Promise<unknown> => tx("luts", "readwrite", (s) => s.delete(id)),
 
   // --- exports ---
   listExports: (): Promise<ExportItem[]> => tx("exports", "readonly", (s) => s.getAll() as IDBRequest),

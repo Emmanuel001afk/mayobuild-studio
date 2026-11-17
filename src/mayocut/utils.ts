@@ -1,5 +1,6 @@
 // MayoCut client helpers: media import, thumbnails, formatting.
 
+import { GifReader } from "omggif";
 import type { MediaItem, MediaKind } from "./types";
 import { uid } from "./types";
 
@@ -163,10 +164,116 @@ export async function importFiles(
         item.rms = audio.rms;
       }
     }
+    if (kind === "image" && isGifFile(f)) {
+      const g = await probeGif(f);
+      if (g) {
+        item.isGif = true;
+        item.gifFrames = g.count;
+        item.duration = Math.max(0.5, g.count / g.fps);
+      }
+    }
     out.push(item);
     onProgress?.(i + 1, list.length);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Audio decode (16 kHz mono) — input for the local Whisper captions engine.
+// Pure WebAudio, fully offline.
+// ---------------------------------------------------------------------------
+
+export function decodeAudioToMono16(blob: Blob): Promise<Float32Array | null> {
+  return new Promise((resolve) => {
+    const Ctor =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) return resolve(null);
+    const ctx = new Ctor();
+    blob
+      .arrayBuffer()
+      .then((ab) => ctx.decodeAudioData(ab))
+      .then((buf) => {
+        // downmix to mono
+        let mono: Float32Array;
+        if (buf.numberOfChannels === 1) {
+          mono = buf.getChannelData(0);
+        } else {
+          mono = new Float32Array(buf.length);
+          for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+            const d = buf.getChannelData(ch);
+            const g = 1 / buf.numberOfChannels;
+            for (let i = 0; i < d.length; i++) mono[i] += d[i] * g;
+          }
+        }
+        // resample to 16 kHz (linear)
+        const target = 16000;
+        if (Math.abs(buf.sampleRate - target) < 1) resolve(mono);
+        else {
+          const outLen = Math.max(1, Math.round(mono.length * (target / buf.sampleRate)));
+          const out = new Float32Array(outLen);
+          const ratio = mono.length / outLen;
+          for (let i = 0; i < outLen; i++) {
+            const x = i * ratio;
+            const i0 = x | 0;
+            const i1 = Math.min(mono.length - 1, i0 + 1);
+            out[i] = mono[i0] + (mono[i1] - mono[i0]) * (x - i0);
+          }
+          resolve(out);
+        }
+      })
+      .catch(() => resolve(null))
+      .finally(() => void ctx.close());
+  });
+}
+
+/** Generate a decaying-noise impulse response (offline reverb). */
+export function makeImpulse(ctx: BaseAudioContext, seconds = 1.8, decay = 3): AudioBuffer {
+  const rate = ctx.sampleRate;
+  const len = Math.max(1, Math.round(seconds * rate));
+  const buf = ctx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return buf;
+}
+
+// ---------------------------------------------------------------------------
+// GIF stickers (omggif — Google's tiny public decoder).
+// Decoded once at import to a frame-count probe; full frames are decoded on
+// demand by the engine from the stored blob (capped to stay in memory).
+// ---------------------------------------------------------------------------
+
+export const GIF_MAX_FRAMES = 48;
+export const GIF_MAX_SIDE = 400;
+
+export function probeGif(
+  blob: Blob,
+): Promise<{ fps: number; count: number; width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    if (blob.size > 8 * 1024 * 1024) return resolve(null);
+    blob
+      .arrayBuffer()
+      .then((ab) => {
+        const reader = new GifReader(new Uint8Array(ab));
+        if (reader.numFrames() === 0) return resolve(null);
+        const info = reader.frameInfo(0);
+        if (!info || info.width > GIF_MAX_SIDE || info.height > GIF_MAX_SIDE) return resolve(null);
+        const count = Math.min(GIF_MAX_FRAMES, reader.numFrames());
+        let ms = 0;
+        for (let k = 0; k < count; k++) {
+          const f = reader.frameInfo(k);
+          ms += f?.delay ?? 0.1;
+        }
+        const fps = ms > 0 ? Math.min(60, Math.max(2, count / (ms / 1000))) : 12;
+        resolve({ fps, count, width: info.width, height: info.height });
+      })
+      .catch(() => resolve(null));
+  });
+}
+
+export function isGifFile(f: File): boolean {
+  return f.type === "image/gif" || /\.gif$/i.test(f.name);
 }
 
 /** Decode a file to ~128 amplitude bins + RMS. Best-effort (undefined on failure). */

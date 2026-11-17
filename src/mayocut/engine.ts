@@ -9,10 +9,13 @@ import {
   DEFAULT_ADJUST,
   DEFAULT_ANIM,
   mainClipDuration,
+  mainRateAt,
   mainSpans,
+  mainSrcAt,
   projectDuration,
   uid,
   type AnimValues,
+  type EffectId,
   type FilterAdjust,
   type Keyframe,
   type MainClip,
@@ -23,6 +26,41 @@ import {
   type Project,
   type TextPos,
 } from "./types";
+import { applyLut, type LutTable } from "./luts";
+import { makeImpulse, probeGif } from "./utils";
+import { GifReader } from "omggif";
+
+/** Decode every frame of a GIF into canvases (capped; null if too big). */
+function decodeGifFrames(blob: Blob): Promise<{ frames: CanvasImageSource[]; fps: number } | null> {
+  return new Promise((resolve) => {
+    if (blob.size > 8 * 1024 * 1024) return resolve(null);
+    blob
+      .arrayBuffer()
+      .then((ab) => {
+        const reader = new GifReader(new Uint8Array(ab));
+        const count = Math.min(48, reader.numFrames());
+        const info = reader.frameInfo(0);
+        if (!info || count === 0) return resolve(null);
+        if (info.width > 400 || info.height > 400) return resolve(null);
+        const frames: CanvasImageSource[] = [];
+        let ms = 0;
+        for (let k = 0; k < count; k++) {
+          const fi = reader.frameInfo(k);
+          ms += fi?.delay ?? 0.1;
+          const image = new ImageData(info.width, info.height);
+          reader.decodeAndBlitFrameRGBA(k, image.data);
+          const c = document.createElement("canvas");
+          c.width = info.width;
+          c.height = info.height;
+          c.getContext("2d")?.putImageData(image, 0, 0);
+          frames.push(c);
+        }
+        const fps = ms > 0 ? Math.min(60, Math.max(2, count / (ms / 1000))) : 12;
+        resolve({ frames, fps });
+      })
+      .catch(() => resolve(null));
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Filter presets (rendered via canvas ctx.filter)
@@ -62,6 +100,53 @@ export function buildFilterCss(clip: MainClip): string {
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
+function srcW(src: CanvasImageSource): number {
+  if (src instanceof HTMLVideoElement) return src.videoWidth;
+  if (src instanceof HTMLImageElement) return src.naturalWidth;
+  if (src instanceof HTMLCanvasElement) return src.width;
+  if (src instanceof ImageBitmap) return src.width;
+  return 0;
+}
+function srcH(src: CanvasImageSource): number {
+  if (src instanceof HTMLVideoElement) return src.videoHeight;
+  if (src instanceof HTMLImageElement) return src.naturalHeight;
+  if (src instanceof HTMLCanvasElement) return src.height;
+  if (src instanceof ImageBitmap) return src.height;
+  return 0;
+}
+/** Small stable numeric seed from a string id (deterministic effects). */
+function hashId(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(h) % 1000;
+}
+
+function easeOutBounce(t: number): number {
+  const n1 = 7.5625;
+  const d1 = 2.75;
+  if (t < 1 / d1) return n1 * t * t;
+  if (t < 2 / d1) return n1 * (t -= 1.5 / d1) * t + 0.75;
+  if (t < 2.5 / d1) return n1 * (t -= 2.25 / d1) * t + 0.9375;
+  return n1 * (t -= 2.625 / d1) * t + 0.984375;
+}
+
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+): void {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
 /**
  * Interpolated animation values at clip-local time `t`.
  * Before the first keyframe the base value holds; between keyframes values
@@ -95,16 +180,32 @@ export function animAt(kfs: Keyframe[] | undefined, base: AnimValues, t: number)
 type MediaEl = HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
 type AudioEl = HTMLVideoElement | HTMLAudioElement;
 
+interface FxChain {
+  in: GainNode; // dry input
+  out: GainNode; // → master
+  delay: DelayNode;
+  feedback: GainNode;
+  conv: ConvolverNode;
+  convWet: GainNode;
+}
+
 interface ElRecord {
   el: MediaEl;
   url: string;
   sourceNode?: MediaElementAudioSourceNode;
+  fx?: FxChain;
+  gif?: { frames: CanvasImageSource[]; fps: number };
+  audioBuffer?: AudioBuffer;
+  bufSrc?: AudioBufferSourceNode;
+  bufClip?: { clipId: string; start: number };
+  bufStartWall?: number;
 }
 
 export interface ExportOptions {
   fps: number;
   videoBitsPerSecond: number;
   audioBitsPerSecond: number;
+  scale?: 1 | 2; // 2 = 4K render (canvas buffer doubled)
 }
 
 const MIME_CANDIDATES = [
@@ -172,6 +273,41 @@ export class Engine {
 
   private chromaCache = new Map<string, HTMLCanvasElement>();
   private keyColorCache = new Map<string, [number, number, number]>();
+  private lutCache = new Map<string, LutTable>();
+  private lutOff: HTMLCanvasElement | null = null;
+  private vhsPattern: HTMLCanvasElement | null = null;
+  private impulse: AudioBuffer | null = null;
+
+  /** 1 = canvas native, 2 = 4K (export only; draw() resizes the buffer). */
+  exportScale = 1;
+
+  setLuts(map: Map<string, LutTable>) {
+    this.lutCache = map;
+  }
+
+  /** Decode a media blob to an AudioBuffer (cached) — used by pitch FX + captions. */
+  async audioBuffer(mediaId: string): Promise<AudioBuffer | null> {
+    const rec = this.els.get(mediaId);
+    if (rec?.audioBuffer) return rec.audioBuffer;
+    if (!rec?.url || !this.audioCtx) return null;
+    try {
+      const blob = await fetch(rec.url).then((r) => r.blob());
+      const buf = await this.audioCtx.decodeAudioData(await blob.arrayBuffer());
+      rec.audioBuffer = buf;
+      return buf;
+    } catch {
+      return null;
+    }
+  }
+
+  getMedia(mediaId: string): MediaItem | undefined {
+    return this.media.get(mediaId);
+  }
+
+  /** Public span view (used by the captions module). */
+  mainSpansPublic() {
+    return mainSpans(this.project);
+  }
 
   /** bump whenever the document mutates, so React can autosave/refresh */
   version = 0;
@@ -238,6 +374,20 @@ export class Engine {
         }
       });
     }
+    if (media.isGif && !rec.gif) {
+      // decode all frames once (capped size) so stickers animate on the canvas
+      void fetch(url)
+        .then((r) => r.blob())
+        .then((blob) => decodeGifFrames(blob))
+        .then((frames) => {
+          const rec2 = this.els.get(mediaId);
+          if (frames && rec2 && frames.frames.length > 0) {
+            rec2.gif = frames;
+            this.bump();
+          }
+        })
+        .catch(() => undefined);
+    }
   }
 
   private clipUsingMedia(clipId: string, mediaId: string): boolean {
@@ -250,6 +400,123 @@ export class Engine {
     const media = this.media.get(mediaId);
     if (!media || media.kind === "image") return undefined;
     return this.ensureEl(media).el as AudioEl;
+  }
+
+  // ------------------------------------------------- audio FX (reverb/echo)
+  // Every media element's source node flows through a per-media FX chain
+  // (dry + delay/feedback echo + convolution reverb) before the master gain,
+  // so effects apply to live preview *and* export alike.
+
+  private ensureFx(mediaId: string): FxChain | null {
+    const ctx = this.audioCtx;
+    if (!ctx) return null;
+    const rec = this.els.get(mediaId);
+    if (rec?.fx) return rec.fx;
+    const inNode = ctx.createGain();
+    const out = ctx.createGain();
+    const delay = ctx.createDelay(1.5);
+    delay.delayTime.value = 0.3;
+    const feedback = ctx.createGain();
+    feedback.gain.value = 0;
+    const conv = ctx.createConvolver();
+    if (!this.impulse) this.impulse = makeImpulse(ctx);
+    conv.buffer = this.impulse;
+    const convWet = ctx.createGain();
+    convWet.gain.value = 0;
+    inNode.connect(out); // dry
+    inNode.connect(delay);
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(out);
+    inNode.connect(conv);
+    conv.connect(convWet);
+    convWet.connect(out);
+    out.connect(this.master!);
+    const chain: FxChain = { in: inNode, out, delay, feedback, conv, convWet };
+    if (rec) {
+      if (rec.sourceNode) {
+        try {
+          rec.sourceNode.disconnect();
+          rec.sourceNode.connect(inNode);
+        } catch {
+          /* node may be unconnected */
+        }
+      }
+      rec.fx = chain;
+    }
+    return chain;
+  }
+
+  /** Apply the active clip's FX to its media chain (no-op when nothing is active). */
+  private syncFx() {
+    const t = this.t;
+    const active = new Map<string, { reverb: number; echo: number }>();
+    for (const tr of this.project.tracks)
+      for (const c of tr.clips) {
+        if (c.kind !== "audio" || !c.mediaId) continue;
+        if (t >= c.start && t < c.start + c.duration) {
+          active.set(c.mediaId, {
+            reverb: clamp01(c.fx?.reverb ?? 0),
+            echo: clamp01(c.fx?.echo ?? 0),
+          });
+        }
+      }
+    for (const [id, rec] of this.els) {
+      if (!rec.el || rec.el instanceof HTMLImageElement) continue;
+      const fx = this.ensureFx(id);
+      if (!fx) continue;
+      const a = active.get(id);
+      const reverb = a?.reverb ?? 0;
+      const echo = a?.echo ?? 0;
+      fx.delay.delayTime.value = 0.22 + 0.18 * echo;
+      fx.feedback.gain.value = echo > 0 ? 0.45 * echo : 0;
+      fx.convWet.gain.value = reverb;
+      // pull dry down slightly when wet is hot to avoid clipping
+      fx.in.gain.value = 1 - 0.35 * Math.max(reverb, echo);
+    }
+  }
+
+  /** Pitch-shifted playback of a short overlay audio clip via buffer source. */
+  private async startBufferSource(c: OverlayClip, local: number) {
+    if (!this.audioCtx) return;
+    const mediaId = c.mediaId!;
+    const rec = this.els.get(mediaId);
+    if (!rec) return;
+    if (
+      rec.bufSrc &&
+      rec.bufClip?.clipId === c.id &&
+      Math.abs((rec.bufClip.start + (this.audioCtx.currentTime - (rec.bufStartWall ?? 0))) - local) < 0.4
+    )
+      return; // still the same clip, close enough — keep playing
+    this.stopBufSource(mediaId);
+    const buf = rec.audioBuffer ?? (await this.audioBuffer(mediaId));
+    if (!buf || !rec.fx) return;
+    const src = this.audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.detune.value = Math.max(-1200, Math.min(1200, (c.fx?.pitch ?? 0) * 100));
+    src.connect(rec.fx.in);
+    rec.bufSrc = src;
+    rec.bufClip = { clipId: c.id, start: c.start };
+    rec.bufStartWall = this.audioCtx.currentTime;
+    try {
+      src.start(0, Math.min(local, buf.duration));
+    } catch {
+      /* overlapping start — ignore */
+    }
+  }
+
+  private stopBufSource(mediaId: string) {
+    const rec = this.els.get(mediaId);
+    if (rec?.bufSrc) {
+      try {
+        rec.bufSrc.onended = null;
+        rec.bufSrc.stop();
+      } catch {
+        /* already stopped */
+      }
+      rec.bufSrc = undefined;
+      rec.bufClip = undefined;
+    }
   }
 
   // ------------------------------------------------------------- timebase
@@ -346,9 +613,7 @@ export class Engine {
       const el = this.audioEl(s.clip.mediaId);
       if (!el) continue;
       if (el instanceof HTMLVideoElement) {
-        const local = s.clip.reverse
-          ? s.clip.out - (t - s.start) * s.clip.speed
-          : s.clip.in + (t - s.start) * s.clip.speed;
+        const local = mainSrcAt(s.clip, t - s.start);
         if (Math.abs(el.currentTime - local) > (hard ? 0.1 : 0.35)) {
           try {
             el.currentTime = Math.max(0, local);
@@ -356,7 +621,7 @@ export class Engine {
             /* not seekable yet */
           }
         }
-        el.playbackRate = s.clip.speed;
+        el.playbackRate = mainRateAt(s.clip, t - s.start);
         el.volume = this.effectiveVolume(s.clip, t, s);
         if (s.clip.reverse) {
           if (!el.paused) el.pause();
@@ -375,8 +640,21 @@ export class Engine {
           if (t >= c.start && t < c.start + c.duration) {
             activeIds.add(c.mediaId);
             const el = this.audioEl(c.mediaId);
-            if (el) {
-              const local = t - c.start;
+            if (!el) continue;
+            const local = t - c.start;
+            const pitch = c.fx?.pitch ?? 0;
+            const media = this.media.get(c.mediaId);
+            const md = media?.duration ?? 0;
+            const canPitch =
+              pitch !== 0 && this.playing && !!media && md > 0 && md <= 120 && !!this.audioCtx;
+            if (canPitch) {
+              // duration-preserving pitch via AudioBufferSourceNode.detune —
+              // the element itself goes silent while this is running
+              el.volume = 0;
+              if (!el.paused) el.pause();
+              void this.startBufferSource(c, local);
+            } else {
+              this.stopBufSource(c.mediaId);
               if (Math.abs(el.currentTime - local) > (hard ? 0.1 : 0.35)) {
                 try {
                   el.currentTime = Math.max(0, local);
@@ -410,6 +688,7 @@ export class Engine {
         }
       }
     }
+    this.syncFx();
     // pause everything else
     for (const [id, rec] of this.els) {
       if (activeIds.has(id)) continue;
@@ -488,12 +767,12 @@ export class Engine {
       this.master.connect(this.audioCtx.destination);
       this.exportDest = this.audioCtx.createMediaStreamDestination();
       this.master.connect(this.exportDest);
-      for (const rec of this.els.values()) {
+      for (const [id, rec] of this.els) {
         if (rec.el instanceof HTMLImageElement) continue;
         if (rec.sourceNode) continue;
         try {
           rec.sourceNode = this.audioCtx.createMediaElementSource(rec.el as AudioEl);
-          rec.sourceNode.connect(this.master);
+          rec.sourceNode.connect(this.ensureFx(id)!.in);
         } catch {
           /* element already routed elsewhere — ignore */
         }
@@ -542,7 +821,13 @@ export class Engine {
   draw() {
     const ctx = this.ctx;
     if (!ctx || !this.canvas) return;
-    const { w: W, h: H } = ASPECTS[this.project.aspect];
+    const base = ASPECTS[this.project.aspect];
+    const W = base.w * this.exportScale;
+    const H = base.h * this.exportScale;
+    if (this.canvas.width !== W || this.canvas.height !== H) {
+      this.canvas.width = W;
+      this.canvas.height = H;
+    }
     const t = this.t;
     ctx.save();
     ctx.globalAlpha = 1;
@@ -578,33 +863,7 @@ export class Engine {
       }
     }
     for (const { s, alpha } of items) {
-      const c = s.clip;
-      const rec = this.els.get(c.mediaId);
-      const anim = animAt(c.keyframes, DEFAULT_ANIM, t - s.start);
-      const a = clamp01(alpha * anim.opacity);
-      if (!rec || !rec.url) {
-        this.drawPlaceholder(ctx, W, H, c.mediaId, a);
-        continue;
-      }
-      ctx.save();
-      ctx.globalAlpha = a;
-      ctx.filter = buildFilterCss(c);
-      if (anim.x !== 0 || anim.y !== 0 || anim.scale !== 1 || anim.rotation !== 0) {
-        ctx.translate(W / 2 + anim.x * (W / 2), H / 2 + anim.y * (H / 2));
-        ctx.rotate((anim.rotation * Math.PI) / 180);
-        ctx.scale(anim.scale, anim.scale);
-        ctx.translate(-W / 2, -H / 2);
-      }
-      if (rec.el instanceof HTMLImageElement) {
-        this.drawImageCover(ctx, rec.el as HTMLImageElement, W, H);
-      } else if (rec.el instanceof HTMLVideoElement) {
-        if (rec.el.readyState >= 2 && rec.el.videoWidth > 0) {
-          this.drawImageCover(ctx, rec.el, W, H);
-        } else {
-          this.drawPlaceholder(ctx, W, H, c.mediaId, a);
-        }
-      }
-      ctx.restore();
+      this.drawMainItem(ctx, s, alpha, W, H, t);
     }
 
     // --- overlay tracks ---
@@ -616,19 +875,18 @@ export class Engine {
         const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
         const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
         const anim = animAt(c.keyframes, this.animBase(c), localT);
-        if (c.kind === "text") this.drawText(ctx, c, W, H, fadeAlpha * clamp01(anim.opacity), rampIn, anim);
+        if (c.kind === "text")
+          this.drawText(ctx, c, W, H, fadeAlpha * clamp01(anim.opacity), localT, c.duration, anim);
         if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
           const rec = this.els.get(c.mediaId);
           if (!rec || !rec.url) continue;
-          let sw = 0;
-          let sh = 0;
-          if (rec.el instanceof HTMLImageElement) {
-            sw = rec.el.naturalWidth;
-            sh = rec.el.naturalHeight;
-          } else if (rec.el instanceof HTMLVideoElement) {
-            sw = rec.el.videoWidth;
-            sh = rec.el.videoHeight;
+          // GIF stickers: step through decoded frames at their native fps
+          let src = rec.el as CanvasImageSource;
+          if (rec.gif && rec.gif.frames.length > 0) {
+            src = rec.gif.frames[Math.floor(localT * rec.gif.fps) % rec.gif.frames.length];
           }
+          const sw = srcW(src);
+          const sh = srcH(src);
           if (!sw || !sh) continue;
           const size = Math.max(1, anim.scale * W);
           const ar = sw / sh;
@@ -636,14 +894,29 @@ export class Engine {
           const cy = H / 2 + anim.y * (H / 2);
           const rot = (anim.rotation * Math.PI) / 180;
           const alpha = clamp01(fadeAlpha * anim.opacity);
+          const blend: GlobalCompositeOperation | null =
+            c.blend && c.blend !== "normal" ? (c.blend as GlobalCompositeOperation) : null;
           if (c.chroma && sw * sh > 4) {
-            this.drawChroma(ctx, rec.el as HTMLVideoElement | HTMLImageElement, c, size, ar, alpha, cx, cy, rot);
+            this.drawChroma(
+              ctx,
+              rec.el as HTMLVideoElement | HTMLImageElement,
+              c,
+              size,
+              ar,
+              alpha,
+              cx,
+              cy,
+              rot,
+              blend,
+            );
           } else {
             ctx.save();
             ctx.globalAlpha = alpha;
+            if (blend) ctx.globalCompositeOperation = blend;
             ctx.translate(cx, cy);
             ctx.rotate(rot);
-            ctx.drawImage(rec.el as HTMLImageElement | HTMLVideoElement, -size / 2, -size / (2 * ar), size, size / ar);
+            if (c.mask && c.mask !== "none") this.applyMask(ctx, c.mask, size, ar);
+            ctx.drawImage(src, -size / 2, -size / (2 * ar), size, size / ar);
             ctx.restore();
           }
         }
@@ -651,6 +924,241 @@ export class Engine {
     }
 
     ctx.restore();
+  }
+
+  // ------------------------------------------------------------ main render
+
+  private drawMainItem(
+    ctx: CanvasRenderingContext2D,
+    s: { clip: MainClip; start: number; end: number },
+    alpha: number,
+    W: number,
+    H: number,
+    t: number,
+  ) {
+    const c = s.clip;
+    const rec = this.els.get(c.mediaId);
+    const localT = t - s.start;
+    const anim = animAt(c.keyframes, DEFAULT_ANIM, localT);
+    const a = clamp01(alpha * anim.opacity);
+    if (!rec || !rec.url) {
+      this.drawPlaceholder(ctx, W, H, c.mediaId, a);
+      return;
+    }
+    const el = rec.el;
+    if (el instanceof HTMLImageElement || el instanceof HTMLVideoElement) {
+      const ready = el instanceof HTMLImageElement || (el.readyState >= 2 && el.videoWidth > 0);
+      if (!ready) {
+        this.drawPlaceholder(ctx, W, H, c.mediaId, a);
+        return;
+      }
+    } else {
+      this.drawPlaceholder(ctx, W, H, c.mediaId, a);
+      return;
+    }
+    const eff: EffectId = c.effect ?? "none";
+    const ef = this.effectTransform(c, localT, W, H, mainClipDuration(c));
+
+    ctx.save();
+    ctx.globalAlpha = a;
+    let filterCss = buildFilterCss(c);
+    if (eff === "blur-in") {
+      const ramp = clamp01(localT / 0.45);
+      const px = Math.round((1 - ramp) * H * 0.018 * 10) / 10;
+      if (px > 0.05) filterCss = (filterCss + ` blur(${px}px)`).trim();
+    }
+    ctx.filter = filterCss;
+    if (anim.x !== 0 || anim.y !== 0 || anim.scale !== 1 || anim.rotation !== 0) {
+      ctx.translate(W / 2 + anim.x * (W / 2), H / 2 + anim.y * (H / 2));
+      ctx.rotate((anim.rotation * Math.PI) / 180);
+      ctx.scale(anim.scale, anim.scale);
+      ctx.translate(-W / 2, -H / 2);
+    }
+    if (ef.scale !== 1 || ef.rot !== 0 || ef.tx !== 0 || ef.ty !== 0) {
+      ctx.translate(W / 2 + ef.tx, H / 2 + ef.ty);
+      ctx.rotate(ef.rot);
+      ctx.scale(ef.scale, ef.scale);
+      ctx.translate(-W / 2, -H / 2);
+    }
+
+    const lut = c.lut ? this.lutCache.get(c.lut) : null;
+    const glitching = eff === "glitch" && this.glitchWindow(localT);
+    if (lut) {
+      this.drawMainLut(ctx, el, W, H, lut);
+    } else if (glitching || eff === "vhs") {
+      this.drawMainSliced(ctx, el, W, H, glitching, localT);
+    } else {
+      this.drawImageCover(ctx, el, W, H);
+    }
+
+    if (eff === "flash-in") {
+      const k = 1 - clamp01(localT / 0.18);
+      if (k > 0.01) {
+        ctx.globalAlpha = a * k * 0.85;
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(-W, -H, W * 3, H * 3);
+        ctx.globalAlpha = a;
+      }
+    }
+    if (eff === "vhs") {
+      ctx.globalAlpha = a * 0.5;
+      const pat = this.vhsPatternLazy;
+      if (pat) {
+        try {
+          ctx.globalCompositeOperation = "source-over";
+          const p = ctx.createPattern(pat, "repeat");
+          if (p) {
+            ctx.globalAlpha = a * 0.35;
+            ctx.fillStyle = p;
+            ctx.fillRect(0, 0, W, H);
+          }
+        } catch {
+          /* pattern failed */
+        }
+      }
+      ctx.globalAlpha = a * (0.05 + 0.02 * Math.sin(localT * 30));
+      ctx.fillStyle = "rgba(80,200,255,0.25)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = a;
+    }
+    ctx.restore();
+  }
+
+  /** Deterministic per-clip motion-effect transform (seeded by clip id). */
+  private effectTransform(
+    c: MainClip,
+    localT: number,
+    W: number,
+    H: number,
+    dur: number,
+  ): { tx: number; ty: number; scale: number; rot: number } {
+    const r = { tx: 0, ty: 0, scale: 1, rot: 0 };
+    switch (c.effect ?? "none") {
+      case "zoom-pulse":
+        r.scale = 1.04 + 0.05 * Math.sin((localT / 0.6) * Math.PI * 2);
+        break;
+      case "heartbeat": {
+        const t0 = localT % 0.95;
+        const bump =
+          Math.pow(Math.max(0, Math.sin((t0 / 0.32) * Math.PI)), 3) +
+          0.55 * Math.pow(Math.max(0, Math.sin(((t0 - 0.18) / 0.3) * Math.PI)), 3);
+        r.scale = 1 + 0.045 * bump;
+        break;
+      }
+      case "shake": {
+        const seed = hashId(c.id);
+        const m = H * 0.006;
+        r.tx = Math.sin(localT * 31 + seed) * m;
+        r.ty = Math.cos(localT * 27 + seed * 2) * m;
+        r.rot = Math.sin(localT * 19 + seed) * 0.008;
+        break;
+      }
+      case "spin":
+        r.rot = (localT / Math.max(0.001, dur)) * Math.PI * 2;
+        break;
+      default:
+        break;
+    }
+    return r;
+  }
+
+  /** Glitch bursts: ~70 ms window every ~500 ms, deterministic per clip. */
+  private glitchWindow(localT: number): boolean {
+    const seed = (hashId("g") + (localT * 10) | 0);
+    void seed;
+    const p = localT % 0.5;
+    return p < 0.07 || (p > 0.31 && p < 0.36);
+  }
+
+  /** Horizontal-slice draw (glitch bursts / VHS wobble) with cover geometry. */
+  private drawMainSliced(
+    ctx: CanvasRenderingContext2D,
+    el: HTMLVideoElement | HTMLImageElement,
+    W: number,
+    H: number,
+    hard: boolean,
+    localT: number,
+  ) {
+    const sw = el instanceof HTMLVideoElement ? el.videoWidth : el.naturalWidth;
+    const sh = el instanceof HTMLVideoElement ? el.videoHeight : el.naturalHeight;
+    if (!sw || !sh) return;
+    const seed = hashId(el instanceof HTMLVideoElement ? "v" : "i");
+    const scale = Math.max(W / sw, H / sh);
+    const dw = sw * scale;
+    const dh = sh * scale;
+    const dx = (W - dw) / 2;
+    const dy = (H - dh) / 2;
+    const slices = hard ? 7 : 4;
+    const amp = hard ? W * 0.03 : W * 0.004;
+    for (let i = 0; i < slices; i++) {
+      const sy = (dh / slices) * i;
+      const shh = dh / slices + 1;
+      const jitter = Math.sin(localT * (60 + i * 7) + seed * (i + 1)) * amp * (hard ? 1 : 0.4);
+      ctx.drawImage(el, 0, (sy / dh) * sh, sw, (shh / dh) * sh, dx + jitter, dy + sy, dw, shh);
+    }
+  }
+
+  /** LUT pass: render the clip to a reduced offscreen canvas, map, upscale. */
+  private drawMainLut(
+    ctx: CanvasRenderingContext2D,
+    el: HTMLVideoElement | HTMLImageElement,
+    W: number,
+    H: number,
+    lut: LutTable,
+  ) {
+    const s = Math.min(1, 1280 / Math.max(W, H));
+    const W2 = Math.max(4, Math.round(W * s));
+    const H2 = Math.max(4, Math.round(H * s));
+    if (!this.lutOff) this.lutOff = document.createElement("canvas");
+    if (this.lutOff.width !== W2 || this.lutOff.height !== H2) {
+      this.lutOff.width = W2;
+      this.lutOff.height = H2;
+    }
+    const octx = this.lutOff.getContext("2d", { willReadFrequently: true });
+    if (!octx) {
+      this.drawImageCover(ctx, el, W, H);
+      return;
+    }
+    octx.filter = "none";
+    octx.globalAlpha = 1;
+    octx.drawImage(el, 0, 0, W2, H2);
+    const img = octx.getImageData(0, 0, W2, H2);
+    applyLut(lut, img.data);
+    octx.putImageData(img, 0, 0);
+    ctx.drawImage(this.lutOff, 0, 0, W, H);
+  }
+
+  /** Shape mask in the overlay's local (rotated/scaled) frame. */
+  private applyMask(ctx: CanvasRenderingContext2D, mask: string, size: number, ar: number) {
+    const w = size;
+    const h = size / ar;
+    ctx.beginPath();
+    if (mask === "spotlight") {
+      ctx.arc(0, 0, Math.min(w, h) * 0.5, 0, Math.PI * 2);
+    } else if (mask === "bar") {
+      ctx.rect(-w / 2, -h * 0.3, w, h * 0.6);
+    } else if (mask === "line") {
+      // half-plane: bottom half (rotate the overlay to aim it)
+      ctx.rect(-w, 0, w * 2, h);
+    } else {
+      return;
+    }
+    ctx.clip();
+  }
+
+  private get vhsPatternLazy(): HTMLCanvasElement {
+    if (!this.vhsPattern) {
+      const c = document.createElement("canvas");
+      c.width = 4;
+      c.height = 4;
+      const x = c.getContext("2d");
+      if (x) {
+        x.fillStyle = "rgba(0,0,0,0.28)";
+        x.fillRect(0, 0, 4, 1);
+      }
+      this.vhsPattern = c;
+    }
+    return this.vhsPattern;
   }
 
   /**
@@ -668,6 +1176,7 @@ export class Engine {
     cx: number,
     cy: number,
     rot: number,
+    blend: GlobalCompositeOperation | null = null,
   ) {
     const maxW = 480;
     const s = Math.min(1, maxW / ar);
@@ -723,6 +1232,7 @@ export class Engine {
     octx.putImageData(img, 0, 0);
     ctx.save();
     ctx.globalAlpha = alpha;
+    if (blend) ctx.globalCompositeOperation = blend;
     ctx.translate(cx, cy);
     ctx.rotate(rot);
     ctx.imageSmoothingEnabled = true;
@@ -781,21 +1291,55 @@ export class Engine {
     W: number,
     H: number,
     alpha: number,
-    ramp: number,
+    localT: number,
+    dur: number,
     anim: AnimValues,
   ) {
     const text = c.text ?? "";
     if (!text) return;
     const px = Math.max(4, (c.size ?? 64) * (H / 1080) * anim.scale);
     const weight = c.bold ? 700 : 500;
+    const anim2 = c.anim ?? "none";
     ctx.save();
     ctx.globalAlpha = alpha;
+
+    // Ken Burns: slow zoom + pan across the clip
+    let kbScale = 1;
+    let kbX = 0;
+    if (anim2 === "kenburns" && dur > 0.01) {
+      const k = clamp01(localT / dur);
+      kbScale = 1 + 0.09 * k;
+      kbX = (k - 0.5) * W * 0.03;
+    }
+    // entrance offsets
+    let yOff = 0;
+    if (anim2 === "bounce") yOff = -px * 0.9 * (1 - easeOutBounce(clamp01(localT / 0.55)));
+    if (anim2 === "slideup") yOff = (1 - clamp01(localT / 0.4)) * H * 0.03;
+
     ctx.font = `${weight} ${Math.round(px)}px "Inter", "Segoe UI", system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    const lines = text.split("\n");
+
+    if (anim2 === "karaoke" && (c.words?.length ?? 0) > 0) {
+      this.drawTextKaraoke(ctx, c, W, H, px, localT);
+      ctx.restore();
+      return;
+    }
+
+    // typewriter reveal (across newlines)
+    let reveal = Infinity;
+    if (anim2 === "typewriter") reveal = Math.floor(Math.max(0, localT - 0.05) / 0.05) + 1;
+    const rawLines = text.split("\n");
+    let prefix = 0;
+    const lines = rawLines.map((l) => {
+      const n = Math.max(0, Math.min(l.length, reveal - prefix));
+      prefix += l.length + 1;
+      return l.slice(0, n);
+    });
+    const totalChars = text.length;
+    const doneTyping = reveal >= totalChars;
     const lineH = px * 1.18;
-    const maxW = Math.max(...lines.map((l) => ctx.measureText(l).width), 0);
+    const maxW = Math.max(...rawLines.map((l) => ctx.measureText(l).width), 0);
     const totalH = lines.length * lineH;
     const pos: TextPos = c.pos ?? "mc";
     const mx = W * 0.08;
@@ -808,34 +1352,132 @@ export class Engine {
     const row = pos[0] as "t" | "m" | "b";
     if (row === "t") y = my + totalH / 2;
     if (row === "b") y = H - my - totalH / 2;
-    const dy = c.anim === "slideup" ? (1 - ramp) * H * 0.03 : 0;
-    ctx.translate(x + anim.x * (W / 2), y + anim.y * (H / 2) + dy);
+    ctx.translate(x + anim.x * (W / 2) + kbX, y + anim.y * (H / 2) + yOff);
     if (anim.rotation !== 0) ctx.rotate((anim.rotation * Math.PI) / 180);
-    if (c.bg) {
+    if (kbScale !== 1) ctx.scale(kbScale, kbScale);
+    if (c.bg && (anim2 !== "typewriter" || doneTyping)) {
       ctx.fillStyle = c.bg;
       const padX = px * 0.5;
       const padY = px * 0.28;
       const bw = maxW + padX * 2;
       const bh = totalH + padY * 2;
-      const bx = -bw / 2;
-      const by = -bh / 2;
-      const r = Math.min(bh / 2, px * 0.4);
-      ctx.beginPath();
-      ctx.moveTo(bx + r, by);
-      ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
-      ctx.arcTo(bx + bw, by + bh, bx + bw, by + bh - r, r);
-      ctx.arcTo(bx + bw, by + bh, bx, by + bh, r);
-      ctx.arcTo(bx, by + bh, bx, by, r);
+      roundRectPath(ctx, -bw / 2, -bh / 2, bw, bh, Math.min(bh / 2, px * 0.4));
       ctx.fill();
     }
-    ctx.fillStyle = c.color ?? "#ffffff";
-    ctx.shadowColor = "rgba(0,0,0,0.55)";
-    ctx.shadowBlur = px * 0.12;
-    ctx.shadowOffsetY = px * 0.04;
-    lines.forEach((l, i) => {
-      ctx.fillText(l, 0, -totalH / 2 + lineH / 2 + i * lineH);
-    });
+    const color = c.color ?? "#ffffff";
+    if (anim2 === "neon") {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = px * (0.3 + 0.14 * Math.sin(localT * 5));
+      ctx.shadowOffsetY = 0;
+      ctx.fillStyle = color;
+      lines.forEach((l, i) => {
+        const yy = -totalH / 2 + lineH / 2 + i * lineH;
+        ctx.fillText(l, 0, yy);
+        ctx.fillText(l, 0, yy); // second pass for glow intensity
+      });
+    } else {
+      ctx.fillStyle = color;
+      ctx.shadowColor = "rgba(0,0,0,0.55)";
+      ctx.shadowBlur = px * 0.12;
+      ctx.shadowOffsetY = px * 0.04;
+      lines.forEach((l, i) => {
+        ctx.fillText(l, 0, -totalH / 2 + lineH / 2 + i * lineH);
+      });
+      // typewriter caret
+      if (anim2 === "typewriter" && !doneTyping && localT < dur - 0.1) {
+        let count = 0;
+        let caretLine = 0;
+        let caretX = 0;
+        for (let i = 0; i < lines.length; i++) {
+          if (reveal <= count) break;
+          caretLine = i;
+          caretX = ctx.measureText(lines[i]).width / 2;
+          count += lines[i].length + 1;
+        }
+        const blink = Math.floor(localT * 3) % 2 === 0;
+        if (blink) {
+          ctx.fillStyle = color;
+          ctx.shadowBlur = 0;
+          ctx.fillRect(caretX + 2, -totalH / 2 + lineH / 2 + caretLine * lineH - px * 0.4, px * 0.12, px * 0.8);
+        }
+      }
+    }
     ctx.restore();
+  }
+
+  /** Karaoke: per-word highlight using c.words timing (clip-local seconds). */
+  private drawTextKaraoke(
+    ctx: CanvasRenderingContext2D,
+    c: OverlayClip,
+    W: number,
+    H: number,
+    px: number,
+    localT: number,
+  ) {
+    const words = (c.words ?? []).map((w) => ({ t: w.t, w: w.text, ws: ctx.measureText(w.text).width }));
+    const gap = px * 0.32;
+    const maxLineW = W * 0.84;
+    type Line = { items: { t: number; w: string; ws: number }[]; width: number };
+    const lines: Line[] = [];
+    let cur: Line = { items: [], width: 0 };
+    for (const it of words) {
+      const add = it.ws + (cur.items.length ? gap : 0);
+      if (cur.items.length && cur.width + add > maxLineW) {
+        lines.push(cur);
+        cur = { items: [], width: 0 };
+      }
+      cur.items.push(it);
+      cur.width += add;
+    }
+    if (cur.items.length) lines.push(cur);
+    const lineH = px * 1.4;
+    const totalW = Math.max(...lines.map((l) => l.width), 0);
+    const totalH = lines.length * lineH;
+    const pos: TextPos = c.pos ?? "bc";
+    let x = W / 2;
+    let y = H / 2;
+    const mx = W * 0.08;
+    const my = H * 0.08;
+    const col = pos[1] as "l" | "c" | "r";
+    if (col === "l") x = mx + totalW / 2 + px * 0.3;
+    if (col === "r") x = W - mx - totalW / 2 - px * 0.3;
+    const row = pos[0] as "t" | "m" | "b";
+    if (row === "t") y = my + totalH / 2;
+    if (row === "b") y = H - my - totalH / 2;
+    ctx.translate(x, y);
+    // background plate
+    ctx.fillStyle = c.bg || "rgba(0,0,0,0.35)";
+    roundRectPath(ctx, -totalW / 2 - px * 0.4, -totalH / 2 - px * 0.18, totalW + px * 0.8, totalH + px * 0.36, px * 0.3);
+    ctx.fill();
+    // words
+    let activeIndex = -1;
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li];
+      let cx = -line.width / 2;
+      for (let wi = 0; wi < line.items.length; wi++) {
+        const it = line.items[wi];
+        const on = localT >= it.t;
+        if (on) activeIndex = li * 1000 + wi;
+        ctx.fillStyle = on ? c.color ?? "#ffffff" : "rgba(255,255,255,0.38)";
+        ctx.shadowColor = on ? "rgba(0,0,0,0.6)" : "transparent";
+        ctx.shadowBlur = on ? px * 0.1 : 0;
+        ctx.fillText(it.w, cx + it.ws / 2, -totalH / 2 + lineH / 2 + li * lineH);
+        cx += it.ws + gap;
+      }
+    }
+    // underline the active word
+    if (activeIndex >= 0) {
+      const li = Math.floor(activeIndex / 1000);
+      const wi = activeIndex % 1000;
+      const line = lines[li];
+      if (line) {
+        let cx = -line.width / 2;
+        for (let i = 0; i < wi; i++) cx += line.items[i].ws + gap;
+        const it = line.items[wi];
+        ctx.fillStyle = c.color ?? "#ffffff";
+        ctx.fillRect(cx, -totalH / 2 + lineH / 2 + li * lineH + px * 0.62, it.ws, Math.max(2, px * 0.07));
+      }
+    }
   }
 
   // ------------------------------------------------------------- mutations
@@ -882,7 +1524,7 @@ export class Engine {
       const s = spans[i];
       if (t <= s.start || t >= s.end) continue;
       const c = s.clip;
-      const srcAt = c.in + (t - s.start) * c.speed;
+      const srcAt = mainSrcAt(c, t - s.start);
       if (srcAt - c.in < 0.08 || c.out - srcAt < 0.08) return false;
       const local = t - s.start;
       const kfsA = c.keyframes?.filter((k) => k.at < local);
@@ -954,7 +1596,7 @@ export class Engine {
     this.bump();
   }
 
-  addTextClip(trackId: string, start: number): OverlayClip {
+  addTextClip(trackId: string, start: number, overrides?: Partial<OverlayClip>): OverlayClip {
     const track = this.project.tracks.find((t) => t.id === trackId) ?? this.project.tracks[0];
     const clip: OverlayClip = {
       id: uid("tc"),
@@ -968,7 +1610,10 @@ export class Engine {
       bold: true,
       pos: "bc",
       anim: "fade",
+      ...overrides,
     };
+    clip.id = uid("tc");
+    clip.kind = "text";
     track.clips.push(clip);
     this.bump();
     return clip;
@@ -1146,15 +1791,17 @@ export class Engine {
 
   async exportMedia(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
     if (!this.canvas) throw new Error("Canvas not ready");
+    const prevScale = this.exportScale;
+    this.exportScale = opts.scale ?? 1;
     const picked = pickMime();
     if (!picked) throw new Error("This browser does not support video recording. Use Chrome/Edge.");
     await this.ensureAudio();
     if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
-    for (const rec of this.els.values()) {
+    for (const [id, rec] of this.els) {
       if (rec.el instanceof HTMLImageElement) continue;
       if (!rec.sourceNode) {
         rec.sourceNode = this.audioCtx.createMediaElementSource(rec.el as AudioEl);
-        rec.sourceNode.connect(this.master!);
+        rec.sourceNode.connect(this.ensureFx(id)!.in);
       }
     }
     const wasLoop = this.loop;
@@ -1196,8 +1843,12 @@ export class Engine {
     if (rec.state !== "inactive") rec.stop();
     const blob = await stopped;
     canvasStream.getTracks().forEach((t) => t.stop());
-    if (blob.size < 1000) throw new Error("Export produced no data — try again");
+    if (blob.size < 1000) {
+      this.exportScale = prevScale;
+      throw new Error("Export produced no data — try again");
+    }
     onProgress(1);
+    this.exportScale = prevScale;
     return blob;
   }
 
@@ -1206,18 +1857,19 @@ export class Engine {
   // (the timeline plays once while frames are captured), same as the WebM path.
 
   async exportMP4(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
-    if (!this.canvas) throw new Error("Canvas not ready");
+    const prevScale = this.exportScale;
+    this.exportScale = opts.scale ?? 1;    if (!this.canvas) throw new Error("Canvas not ready");
     if (!mp4Supported()) throw new Error("MP4 export needs WebCodecs — use Chrome or Edge (WebM also works).");
     const { w: W, h: H } = ASPECTS[this.project.aspect];
     const codec = await pickAvcCodec(W, H, opts.fps, opts.videoBitsPerSecond);
     if (!codec) throw new Error("H.264 encoding is not supported at this resolution here — use WebM.");
     await this.ensureAudio();
     if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
-    for (const rec of this.els.values()) {
+    for (const [id, rec] of this.els) {
       if (rec.el instanceof HTMLImageElement) continue;
       if (!rec.sourceNode) {
         rec.sourceNode = this.audioCtx.createMediaElementSource(rec.el as AudioEl);
-        rec.sourceNode.connect(this.master!);
+        rec.sourceNode.connect(this.ensureFx(id)!.in);
       }
     }
 
@@ -1378,6 +2030,7 @@ export class Engine {
       }
       if (!wasPlaying) this.pause();
       this.loop = wasLoop;
+      this.exportScale = prevScale;
     }
     if (encError) throw encError instanceof Error ? encError : new Error("Encoder failed: " + String(encError));
     muxer.finalize();
@@ -1389,7 +2042,8 @@ export class Engine {
 
   destroy() {
     this.pause();
-    for (const rec of this.els.values()) {
+    for (const [id, rec] of this.els) {
+      this.stopBufSource(id);
       const e = rec.el as Partial<AudioEl>;
       if (e) e.pause?.();
       if (rec.url) URL.revokeObjectURL(rec.url);

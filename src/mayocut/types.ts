@@ -15,6 +15,8 @@ export interface MediaItem {
   thumb?: string; // dataURL, small
   wave?: number[]; // ~128 normalized amplitude bins (audio display)
   rms?: number; // overall root-mean-square level 0..1 (audio)
+  isGif?: boolean; // animated sticker (frames decoded from the stored blob)
+  gifFrames?: number;
 }
 
 export interface FilterAdjust {
@@ -49,14 +51,41 @@ export interface Keyframe {
   v: AnimValues;
 }
 
+/** Built-in motion effects applied to a main clip (deterministic, offline). */
+export type EffectId =
+  | "none"
+  | "zoom-pulse"
+  | "heartbeat"
+  | "shake"
+  | "spin"
+  | "glitch"
+  | "flash-in"
+  | "blur-in"
+  | "vhs";
+
+export const EFFECTS: { id: EffectId; name: string }[] = [
+  { id: "none", name: "None" },
+  { id: "zoom-pulse", name: "Zoom pulse" },
+  { id: "heartbeat", name: "Heartbeat" },
+  { id: "shake", name: "Shake" },
+  { id: "spin", name: "Spin" },
+  { id: "glitch", name: "Glitch" },
+  { id: "flash-in", name: "Flash in" },
+  { id: "blur-in", name: "Blur in" },
+  { id: "vhs", name: "VHS" },
+];
+
 export interface MainClip {
   id: string;
   mediaId: string;
   in: number; // source in-point (seconds)
   out: number; // source out-point (seconds)
   speed: number; // 0.25 .. 4
+  rampTo?: number; // optional: linearly ramp speed → rampTo across the clip (speed ramp)
   reverse: boolean; // play the source segment backwards (audio muted)
   filter: string; // preset id
+  lut?: string; // LUT name (built-in or imported .cube)
+  effect?: EffectId; // motion effect
   adjust: FilterAdjust;
   volume: number; // 0..1
   muted: boolean;
@@ -67,7 +96,50 @@ export interface MainClip {
 
 export type OverlayKind = "text" | "image" | "video" | "audio";
 export type TextPos = "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
-export type TextAnim = "none" | "fade" | "slideup";
+export type TextAnim =
+  | "none"
+  | "fade"
+  | "slideup"
+  | "typewriter"
+  | "karaoke"
+  | "bounce"
+  | "kenburns"
+  | "neon";
+
+export const TEXT_ANIMS: { id: TextAnim; name: string }[] = [
+  { id: "none", name: "None" },
+  { id: "fade", name: "Fade" },
+  { id: "slideup", name: "Slide up" },
+  { id: "typewriter", name: "Typewriter" },
+  { id: "karaoke", name: "Karaoke" },
+  { id: "bounce", name: "Bounce in" },
+  { id: "kenburns", name: "Ken Burns" },
+  { id: "neon", name: "Neon pulse" },
+];
+
+export type BlendMode =
+  | "normal"
+  | "multiply"
+  | "screen"
+  | "overlay"
+  | "lighten"
+  | "darken"
+  | "difference";
+
+export type MaskShape = "none" | "spotlight" | "bar" | "line";
+
+/** Word-level timing for karaoke text (clip-local seconds). */
+export interface TextWord {
+  t: number; // start of the word (clip-local)
+  text: string;
+}
+
+/** Audio FX for an overlay audio clip (WebAudio, also applied in export). */
+export interface AudioFx {
+  reverb?: number; // 0..1 wet amount
+  echo?: number; // 0..1 wet amount
+  pitch?: number; // semitones, -12..+12 (clips ≤ 120 s)
+}
 
 export interface OverlayClip {
   id: string;
@@ -83,6 +155,7 @@ export interface OverlayClip {
   bold?: boolean;
   pos?: TextPos;
   anim?: TextAnim;
+  words?: TextWord[]; // per-word timing (karaoke)
   // image / video overlay
   scale?: number; // fraction of canvas width (0.05..1.2)
   x?: number; // -1..1 fraction of center
@@ -90,10 +163,13 @@ export interface OverlayClip {
   rot?: number; // degrees
   chroma?: boolean; // green-screen keying (video/image overlays)
   chromaTol?: number; // key tolerance 10..255 (default 90)
+  blend?: BlendMode; // compositing mode for image/video overlays
+  mask?: MaskShape; // shape mask (spotlight / bar / line)
   // audio
   volume?: number; // 0..1
   fadeIn?: number; // seconds (default 0.15)
   fadeOut?: number; // seconds (default 0.15)
+  fx?: AudioFx; // reverb / echo / pitch
   filter?: string;
   keyframes?: Keyframe[];
 }
@@ -206,7 +282,43 @@ export function newProject(name: string, aspect: AspectId): Project {
 }
 
 export function mainClipDuration(c: MainClip): number {
-  return Math.max(0, (c.out - c.in) / c.speed);
+  const L = Math.max(0, c.out - c.in);
+  const v0 = Math.max(0.05, c.speed);
+  const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+  if (Math.abs(v1 - v0) < 1e-6) return L / v0;
+  // ∫₀ᴸ ds / (v0 + k·s) with k = (v1−v0)/L  →  L·ln(v1/v0)/(v1−v0)
+  return (L / (v1 - v0)) * Math.log(v1 / v0);
+}
+
+const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+
+/**
+ * Source position for clip-local timeline time (handles reverse and speed
+ * ramp). Inverse of the duration integral — closed form.
+ */
+export function mainSrcAt(c: MainClip, localT: number): number {
+  const L = Math.max(1e-6, c.out - c.in);
+  const v0 = Math.max(0.05, c.speed);
+  const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+  const dur = mainClipDuration(c);
+  const tau = clamp(localT, 0, dur);
+  const k = (v1 - v0) / L;
+  let x: number; // forward source offset from `in`
+  if (Math.abs(k) < 1e-9) x = tau * v0;
+  else x = (v0 / k) * (Math.exp(k * tau) - 1);
+  x = clamp(x, 0, L);
+  return c.reverse ? c.out - x : c.in + x;
+}
+
+/** Playback rate to apply to the media element at clip-local time. */
+export function mainRateAt(c: MainClip, localT: number): number {
+  const L = Math.max(1e-6, c.out - c.in);
+  const v0 = Math.max(0.05, c.speed);
+  const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+  const k = (v1 - v0) / L;
+  const src = mainSrcAt(c, localT);
+  const x = c.reverse ? c.out - src : src - c.in;
+  return Math.max(0.05, v0 + k * x);
 }
 
 /** Sequential spans of main-track clips in timeline seconds. */

@@ -194,6 +194,12 @@ export const BUNDLED_PACKS: { file: string; name: string; desc: string; swatch: 
     desc: "Grade + title treatments that turn raw clips into short films.",
     swatch: "linear-gradient(135deg,#f59e0b 0%,#dc2626 55%,#1e293b 100%)",
   },
+  {
+    file: "creator-kit.json",
+    name: "Creator Kit",
+    desc: "Karaoke captions, punch-zoom motion effects and a film voice-over treatment.",
+    swatch: "linear-gradient(135deg,#f43f5e 0%,#8b5cf6 55%,#06b6d4 100%)",
+  },
 ];
 
 export function packFileCandidates(file: string): string[] {

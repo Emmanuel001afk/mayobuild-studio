@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 
 const REPO = "Emmanuel001afk/mayobuild-studio";
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const LATEST = `https://github.com/${REPO}/releases/latest/download`;
 const EXE_URL = `${LATEST}/mayocut-setup-${VERSION}.exe`;
 const APK_URL = `${LATEST}/mayocut-android-${VERSION}.apk`;
@@ -96,13 +96,16 @@ function DownloadsPage() {
           </p>
           <div className="mt-4 flex flex-wrap gap-2 text-xs">
             <Feature ok label="Multi-track timeline (video / text / overlay / audio)" />
-            <Feature ok label="Trim, split, speed, reverse, filters, transitions" />
+            <Feature ok label="Trim, split, speed ramp, reverse, filters, transitions" />
             <Feature ok label="Keyframes (motion & opacity over time)" />
-            <Feature ok label="Green screen (chroma key) overlays" />
-            <Feature ok label="Audio studio: waveforms, fades, mic recording" />
-            <Feature ok label="Built-in + downloadable packs + shareable .json templates" />
+            <Feature ok label="Green screen (chroma key) + blend modes + shape masks" />
+            <Feature ok label="Audio studio: waveforms, fades, reverb/echo/pitch, mic" />
+            <Feature ok label="8 motion effects + 5 color LUTs + import your own .cube" />
+            <Feature ok label="Text animations: typewriter, karaoke, bounce, Ken Burns, neon" />
+            <Feature ok label="Auto captions — local Whisper (offline after one download)" />
+            <Feature ok label="GIF + emoji stickers, 3 template packs, shareable .json" />
             <Feature ok label="Projects & media stored on-device (IndexedDB)" />
-            <Feature ok label="Export MP4 + WebM at 24/30/60 fps, saved locally" />
+            <Feature ok label="Export MP4 + WebM up to 4K, 24/30/60 fps, saved locally" />
             <Feature ok label="On-device assist tools + optional local AI (always private)" />
           </div>
         </div>

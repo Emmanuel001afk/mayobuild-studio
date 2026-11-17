@@ -3,6 +3,7 @@ import { Copy, Diamond, Scissors, SlidersHorizontal, Trash2 } from "lucide-react
 import type {
   AnimValues,
   AspectId,
+  EffectId,
   Keyframe,
   MainClip,
   MediaItem,
@@ -12,6 +13,7 @@ import type {
   TextPos,
   TransitionKind,
 } from "../types";
+import { EFFECTS, TEXT_ANIMS } from "../types";
 
 interface Props {
   selection:
@@ -38,6 +40,8 @@ interface Props {
   onSplit: () => void;
   onSeek: (v: number) => void;
   filters: { id: string; name: string; css: string }[];
+  luts: { id: string; name: string; builtin?: boolean }[];
+  onImportLut: (f: File) => void;
 }
 
 const POSITIONS: TextPos[] = ["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
@@ -149,6 +153,70 @@ export function Inspector(p: Props) {
               <span>
                 Play backwards <span className="text-muted-foreground text-[10px]">(audio muted, frame-stepped)</span>
               </span>
+            </label>
+            <label className="flex items-center gap-2 text-xs mt-2">
+              <input
+                type="checkbox"
+                className="accent-cyan-400"
+                checked={main.rampTo != null}
+                onChange={(e) => p.onPatchMain(e.target.checked ? { rampTo: main.speed } : { rampTo: undefined })}
+              />
+              <span>
+                Speed ramp <span className="text-muted-foreground text-[10px]">(ease the speed across the clip)</span>
+              </span>
+            </label>
+            {main.rampTo != null && (
+              <Slider
+                label="Ramp to (end speed)"
+                min={0.25}
+                max={4}
+                step={0.05}
+                value={main.rampTo}
+                onChange={(v) => p.onPatchMain({ rampTo: v })}
+              />
+            )}
+          </Section>
+
+          <Section label="Effect">
+            <select
+              className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
+              value={main.effect ?? "none"}
+              onChange={(e) => p.onPatchMain({ effect: e.target.value as EffectId })}
+            >
+              {EFFECTS.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </Section>
+
+          <Section label="Color LUT">
+            <select
+              className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
+              value={main.lut ?? ""}
+              onChange={(e) => p.onPatchMain({ lut: e.target.value || undefined })}
+            >
+              <option value="">None</option>
+              {p.luts.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                  {l.builtin ? "" : " (imported)"}
+                </option>
+              ))}
+            </select>
+            <label className="block text-[11px] text-muted-foreground mt-2">
+              Import a .cube LUT…
+              <input
+                type="file"
+                accept=".cube"
+                className="block mt-1 text-[10px] text-muted-foreground file:mb-btn-ghost file:mr-2 file:text-xs file:cursor-pointer"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) p.onImportLut(f);
+                  e.currentTarget.value = "";
+                }}
+              />
             </label>
           </Section>
 
@@ -309,10 +377,19 @@ export function Inspector(p: Props) {
               value={over.anim ?? "none"}
               onChange={(e) => p.onPatchOverlay(trackId, { anim: e.target.value as TextAnim })}
             >
-              <option value="none">None</option>
-              <option value="fade">Fade in + out</option>
-              <option value="slideup">Slide up + fade</option>
+              {TEXT_ANIMS.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
             </select>
+            {over.anim === "karaoke" && (
+              <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+                {over.words?.length
+                  ? `Highlighting ${over.words.length} words from captions.`
+                  : "Karaoke needs word timing — generate captions in Assist (it fills this automatically), or use another animation."}
+              </p>
+            )}
             <Slider label="Opacity (keyframable)" min={0} max={1} step={0.01} value={p.anim.opacity} onChange={(v) => setAnim({ opacity: v })} />
             <KeyframeSection
               clip={over}
@@ -364,6 +441,37 @@ export function Inspector(p: Props) {
               </div>
             )}
           </Section>
+          <Section label="Blend & mask">
+            <div className="text-xs mb-1">Blend mode</div>
+            <select
+              className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
+              value={over.blend ?? "normal"}
+              onChange={(e) => p.onPatchOverlay(trackId, { blend: e.target.value as OverlayClip["blend"] })}
+            >
+              {["normal", "multiply", "screen", "overlay", "lighten", "darken", "difference"].map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
+            <div className="text-xs mb-1 mt-2">Mask</div>
+            <div className="grid grid-cols-4 gap-1">
+              {(["none", "spotlight", "bar", "line"] as const).map((m) => (
+                <button
+                  key={m}
+                  className={`h-7 border text-[10px] capitalize ${
+                    (over.mask ?? "none") === m ? "border-cyan-400 bg-cyan-400/20" : "border-border hover:border-white/40"
+                  }`}
+                  onClick={() => p.onPatchOverlay(trackId, { mask: m })}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+              Spotlight = round window, bar = horizontal band, line = half-plane (rotate the clip to aim it).
+            </p>
+          </Section>
           <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />
         </>
       )}
@@ -375,6 +483,36 @@ export function Inspector(p: Props) {
             <Slider label="Volume" min={0} max={1} step={0.05} value={over.volume ?? 1} onChange={(v) => p.onPatchOverlay(trackId, { volume: v })} />
             <Slider label="Fade in" min={0} max={3} step={0.05} value={over.fadeIn ?? 0.15} onChange={(v) => p.onPatchOverlay(trackId, { fadeIn: v })} />
             <Slider label="Fade out" min={0} max={3} step={0.05} value={over.fadeOut ?? 0.15} onChange={(v) => p.onPatchOverlay(trackId, { fadeOut: v })} />
+          </Section>
+          <Section label="Audio FX">
+            <Slider
+              label="Reverb"
+              min={0}
+              max={1}
+              step={0.05}
+              value={over.fx?.reverb ?? 0}
+              onChange={(v) => p.onPatchOverlay(trackId, { fx: { ...over.fx, reverb: v } })}
+            />
+            <Slider
+              label="Echo"
+              min={0}
+              max={1}
+              step={0.05}
+              value={over.fx?.echo ?? 0}
+              onChange={(v) => p.onPatchOverlay(trackId, { fx: { ...over.fx, echo: v } })}
+            />
+            <Slider
+              label="Pitch (semitones)"
+              min={-12}
+              max={12}
+              step={1}
+              value={over.fx?.pitch ?? 0}
+              onChange={(v) => p.onPatchOverlay(trackId, { fx: { ...over.fx, pitch: v } })}
+            />
+            <p className="text-[10px] text-muted-foreground leading-snug">
+              Pitch-shifts clips up to 2 minutes (chipmuck / deep-voice). Reverb and echo apply to any length. All local
+              WebAudio — included in exports.
+            </p>
           </Section>
           <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />
         </>

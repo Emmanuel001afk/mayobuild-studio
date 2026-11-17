@@ -1,0 +1,171 @@
+{
+  "format": "mayocut-pack",
+  "version": 1,
+  "name": "Creator Kit",
+  "desc": "Karaoke captions, punchy motion effects and a film voice-over treatment.",
+  "templates": [
+    {
+      "id": "tpl_ck_karaoke",
+      "name": "Karaoke Hook",
+      "desc": "Word-by-word karaoke line over your clip — swap in any video and retime the words.",
+      "aspect": "9:16",
+      "swatch": "linear-gradient(135deg,#f43f5e 0%,#8b5cf6 60%,#06b6d4 100%)",
+      "kind": "project",
+      "project": {
+        "id": "prj_ck_karaoke",
+        "name": "Karaoke Hook",
+        "aspect": "9:16",
+        "main": [
+          {
+            "id": "mc_ck1",
+            "mediaId": "med_ck_karaoke",
+            "in": 0,
+            "out": 6,
+            "speed": 1,
+            "reverse": false,
+            "filter": "vivid",
+            "adjust": { "brightness": 100, "contrast": 104, "saturation": 110, "hue": 0 },
+            "volume": 1,
+            "muted": false,
+            "transitionIn": "none",
+            "transitionDur": 0
+          }
+        ],
+        "tracks": [
+          {
+            "id": "t_text",
+            "name": "Text",
+            "clips": [
+              {
+                "id": "tc_ck_title",
+                "kind": "text",
+                "start": 0.2,
+                "duration": 2.2,
+                "text": "TODAY",
+                "size": 130,
+                "color": "#facc15",
+                "bg": "",
+                "bold": true,
+                "pos": "tc",
+                "anim": "bounce"
+              },
+              {
+                "id": "tc_ck_kar",
+                "kind": "text",
+                "start": 0.4,
+                "duration": 4.6,
+                "text": "You are going to love this",
+                "words": [
+                  { "t": 0.2, "text": "You" },
+                  { "t": 0.7, "text": "are" },
+                  { "t": 1.1, "text": "going" },
+                  { "t": 1.7, "text": "to" },
+                  { "t": 2.0, "text": "love" },
+                  { "t": 2.6, "text": "this" }
+                ],
+                "size": 56,
+                "color": "#ffffff",
+                "bg": "rgba(0,0,0,0.4)",
+                "bold": true,
+                "pos": "bc",
+                "anim": "karaoke"
+              }
+            ]
+          },
+          { "id": "t_overlay", "name": "Overlay", "clips": [] },
+          { "id": "t_audio", "name": "Audio", "clips": [] }
+        ],
+        "createdAt": 1763000000000,
+        "updatedAt": 1763000000000,
+        "__mediaNames": { "med_ck_karaoke": "your-video.mp4" }
+      }
+    },
+    {
+      "id": "tpl_ck_punch",
+      "name": "Punch Zoom",
+      "desc": "Zoom-pulse + speed ramp into teal-orange grade with a neon title. High-energy intros.",
+      "aspect": "9:16",
+      "swatch": "linear-gradient(135deg,#22d3ee 0%,#0ea5e9 45%,#1e293b 100%)",
+      "kind": "project",
+      "project": {
+        "id": "prj_ck_punch",
+        "name": "Punch Zoom",
+        "aspect": "9:16",
+        "main": [
+          {
+            "id": "mc_ck2",
+            "mediaId": "med_ck_punch",
+            "in": 0,
+            "out": 4,
+            "speed": 1,
+            "rampTo": 1.6,
+            "reverse": false,
+            "filter": "none",
+            "lut": "teal-orange",
+            "effect": "zoom-pulse",
+            "adjust": { "brightness": 100, "contrast": 100, "saturation": 100, "hue": 0 },
+            "volume": 1,
+            "muted": false,
+            "transitionIn": "none",
+            "transitionDur": 0
+          }
+        ],
+        "tracks": [
+          {
+            "id": "t_text",
+            "name": "Text",
+            "clips": [
+              {
+                "id": "tc_ck_neon",
+                "kind": "text",
+                "start": 0.3,
+                "duration": 3.2,
+                "text": "LET'S GO",
+                "size": 120,
+                "color": "#22d3ee",
+                "bg": "",
+                "bold": true,
+                "pos": "mc",
+                "anim": "neon"
+              }
+            ]
+          },
+          { "id": "t_overlay", "name": "Overlay", "clips": [] },
+          { "id": "t_audio", "name": "Audio", "clips": [] }
+        ],
+        "createdAt": 1763000000000,
+        "updatedAt": 1763000000000,
+        "__mediaNames": { "med_ck_punch": "your-video.mp4" }
+      }
+    },
+    {
+      "id": "tpl_ck_film",
+      "name": "Film Voice-over",
+      "desc": "Apply a cinema grade, dip-to-black transitions and a clean caption line to any project.",
+      "aspect": "16:9",
+      "swatch": "linear-gradient(135deg,#334155 0%,#0f172a 60%,#78350f 100%)",
+      "kind": "enhance",
+      "enhance": [
+        { "op": "filter", "value": "cinema" },
+        { "op": "adjust", "value": { "contrast": 112, "saturation": 105 } },
+        { "op": "transition", "value": "fadeblack", "dur": 0.6 },
+        {
+          "op": "add-text",
+          "track": "t_text",
+          "clip": {
+            "kind": "text",
+            "start": 0.4,
+            "duration": 4,
+            "text": "A quiet moment",
+            "size": 48,
+            "color": "#ffffff",
+            "bg": "rgba(0,0,0,0.35)",
+            "bold": false,
+            "pos": "bc",
+            "anim": "fade"
+          }
+        }
+      ]
+    }
+  ]
+}

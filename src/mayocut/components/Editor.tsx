@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { downloadJson, startMicRecording, templateToPackFile } from "../assist";
+import { importLut, loadAllLuts } from "../luts";
 import { db } from "../idb";
 import { Engine, FILTER_PRESETS, mp4Supported, pickMime } from "../engine";
 import {
@@ -86,6 +87,7 @@ export function Editor({
   const [exportFmt, setExportFmt] = useState<ExportFmt>("auto");
   const [exportFps, setExportFps] = useState(30);
   const [exportKbps, setExportKbps] = useState(8000);
+  const [exportRes, setExportRes] = useState<1 | 2>(1);
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [assistOpen, setAssistOpen] = useState(false);
@@ -457,6 +459,51 @@ export function Editor({
     if (clip) setSelection({ lane: "overlay", trackId: "t_text", id: clip.id });
   }
 
+  function addEmoji(emoji: string) {
+    const clip = mutateRet((e) =>
+      e.addTextClip("t_text", Math.max(0, e.t), {
+        text: emoji,
+        size: 150,
+        pos: "mc",
+        bg: "",
+        anim: "bounce",
+      }),
+    );
+    if (clip) setSelection({ lane: "overlay", trackId: "t_text", id: clip.id });
+  }
+
+  // ------------------------------------------------------------- LUTs
+  const [lutList, setLutList] = useState<{ id: string; name: string; builtin?: boolean }[]>([]);
+  const refreshLuts = useCallback(async () => {
+    const map = await loadAllLuts();
+    engineRef.current?.setLuts(map);
+    setLutList(Array.from(map.values()).map((l) => ({ id: l.name, name: l.name, builtin: l.builtin })));
+  }, []);
+  useEffect(() => {
+    void refreshLuts();
+  }, [refreshLuts]);
+  async function onImportLut(f: File) {
+    try {
+      const name = f.name.replace(/\.cube$/i, "").replace(/[^\w\-]+/g, "-").toLowerCase() || "custom-lut";
+      const t = await importLut(name, f);
+      await refreshLuts();
+      toast.success(`LUT "${t.name}" imported — pick it in the clip's Color LUT section`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not parse that .cube file");
+    }
+  }
+
+  const EMOJI_STICKERS = useMemo(
+    () =>
+      [
+        "🔥", "❤️", "😂", "😮", "👀", "👏", "💯", "✨", "⚡", "🎉",
+        "🚀", "💰", "📈", "🏆", "🎯", "🍿", "🥶", "😍", "🤯", "👉",
+        "👆", "✅", "❌", "⭐", "🌊", "🌙", "☀️", "🎵", "🎬", "📱",
+        "💬", "🙌", "💪", "🧠", "👑", "🍕", "🏖️", "🎮", "🛹", "📸",
+      ],
+    [],
+  );
+
   // ------------------------------------------------------------- export
 
   const canMp4 = mp4Supported();
@@ -475,8 +522,9 @@ export function Editor({
     const wantMp4 = exportFmt === "mp4" || (exportFmt === "auto" && canMp4);
     const opts = {
       fps: exportFps,
-      videoBitsPerSecond: exportKbps * 1000,
+      videoBitsPerSecond: (exportKbps * 1000) * (exportRes === 2 ? 1.75 : 1),
       audioBitsPerSecond: 192_000,
+      scale: exportRes,
     };
     setExporting(true);
     setExportProgress(0);
@@ -717,6 +765,21 @@ export function Editor({
             <button className="mb-btn-ghost w-full h-7 mt-1 text-[11px]" onClick={addText}>
               <Plus className="h-3 w-3" /> Add text at playhead
             </button>
+            <div className="mt-2">
+              <div className="text-[10px] text-muted-foreground mb-1">Stickers (emoji, instant)</div>
+              <div className="flex gap-0.5 flex-wrap">
+                {EMOJI_STICKERS.map((em) => (
+                  <button
+                    key={em}
+                    className="h-7 w-7 rounded hover:bg-slate-700 text-base leading-none"
+                    title={`Add ${em}`}
+                    onClick={() => addEmoji(em)}
+                  >
+                    {em}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-2 grid grid-cols-2 gap-2 content-start">
             {media.map((m) => (
@@ -918,6 +981,8 @@ export function Editor({
             onDelete={deleteSelection}
             onSeek={(v) => engineRef.current?.seek(v)}
             filters={FILTER_PRESETS}
+            luts={lutList}
+            onImportLut={(f) => void onImportLut(f)}
           />
         </div>
       </div>
@@ -1005,7 +1070,34 @@ export function Editor({
                   </div>
                 </div>
               </div>
-              <Row k="Resolution" v={`${ASPECTS[project.aspect].w}×${ASPECTS[project.aspect].h} (${project.aspect})`} />
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <div className="text-muted-foreground text-xs mb-1">Resolution</div>
+                  <div className="flex gap-1.5">
+                    <button
+                      className={`text-xs border rounded px-2 py-1 ${exportRes === 1 ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
+                      onClick={() => setExportRes(1)}
+                    >
+                      {ASPECTS[project.aspect].w}×{ASPECTS[project.aspect].h}
+                    </button>
+                    <button
+                      className={`text-xs border rounded px-2 py-1 ${exportRes === 2 ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
+                      onClick={() => setExportRes(2)}
+                    >
+                      4K · {ASPECTS[project.aspect].w * 2}×{ASPECTS[project.aspect].h * 2}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex-1">
+                  <div className="text-muted-foreground text-xs mb-1">Aspect</div>
+                  <div className="text-xs leading-6">{project.aspect}</div>
+                </div>
+              </div>
+              {exportRes === 2 && (
+                <p className="text-[11px] text-amber-300/90 -mt-1">
+                  4K uses more battery/heat and needs a decent GPU — the MP4 encoder may fall back to WebM on weak devices.
+                </p>
+              )}
               <Row k="Length" v={fmtTime(dur)} />
               <Row k="Speed" v="Real-time render — keep this window open" />
             </div>

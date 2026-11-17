@@ -161,6 +161,11 @@ export function Timeline(p: Props) {
                       {s.clip.transitionIn !== "none" && i > 0 && (
                         <span className="ml-1 text-fuchsia-300">✂{s.clip.transitionIn}</span>
                       )}
+                      {s.clip.rampTo != null && <span className="ml-1 text-amber-300">ramp</span>}
+                      {(s.clip.effect ?? "none") !== "none" && (
+                        <span className="ml-1 text-emerald-300">fx:{s.clip.effect}</span>
+                      )}
+                      {s.clip.lut && <span className="ml-1 text-violet-300">lut:{s.clip.lut}</span>}
                     </span>
                   </div>
                   {m?.kind === "audio" && m.wave && (
@@ -378,6 +383,9 @@ function OverlayClipBox({
                 ? "▸ video"
                 : "image"}
           {clip.chroma && " · chroma"}
+          {clip.anim === "karaoke" && " · karaoke"}
+          {clip.fx && ((clip.fx.reverb ?? 0) > 0 || (clip.fx.echo ?? 0) > 0 || (clip.fx.pitch ?? 0) !== 0) && " · fx"}
+          {(clip.blend && clip.blend !== "normal") || (clip.mask && clip.mask !== "none") ? " · ◑" : ""}
         </span>
       )}
       {wave && (

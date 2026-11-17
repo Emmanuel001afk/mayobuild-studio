@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AudioWaveform, BrainCircuit, Copy, Music4, Palette, Scissors, Sparkles, Timer, X } from "lucide-react";
+import { AudioWaveform, BrainCircuit, Copy, Music4, Palette, Scissors, Sparkles, Subtitles, Timer, X } from "lucide-react";
 import {
   analyzeAudioBlob,
   beatSegments,
@@ -21,6 +21,17 @@ import { db } from "../idb";
 import type { Engine } from "../engine";
 import { fmtTime } from "../utils";
 import type { MediaItem, OverlayClip, Project } from "../types";
+import { uid } from "../types";
+import {
+  CAPTION_LANGUAGES,
+  WHISPER_MODELS,
+  captionSourceLabel,
+  captionsToTextClips,
+  projectAudio16k,
+  whisper,
+  type CaptionSegment,
+  type WhisperModelId,
+} from "../captions";
 
 export function Assist({
   engine,
@@ -39,7 +50,7 @@ export function Assist({
   onClose: () => void;
   selectedClip: { id: string; kind: string; mediaId?: string } | null;
 }) {
-  const [tab, setTab] = useState<"tools" | "ai">("tools");
+  const [tab, setTab] = useState<"tools" | "ai" | "captions">("tools");
   const [busy, setBusy] = useState<string | null>(null);
   const [beatMediaId, setBeatMediaId] = useState("");
   const [beatCount, setBeatCount] = useState(8);
@@ -48,6 +59,70 @@ export function Assist({
   const [silence, setSilence] = useState<{ lead: number; trail: number } | null>(null);
   const audioMedia = media.filter((m) => m.kind === "audio" || m.kind === "video");
   const audioOnly = media.filter((m) => m.kind === "audio");
+
+  // --- local captions (Whisper) ---
+  const [capModel, setCapModel] = useState<WhisperModelId>("Xenova/whisper-tiny");
+  const [capLang, setCapLang] = useState("auto");
+  const [capStatus, setCapStatus] = useState<{ msg: string; pct?: number } | null>(null);
+  const [capBusy, setCapBusy] = useState<"load" | "gen" | null>(null);
+  const [capSegs, setCapSegs] = useState<CaptionSegment[] | null>(null);
+
+  async function loadCapModel(files?: File[]) {
+    setCapBusy("load");
+    setCapStatus({ msg: files ? "Loading model from files…" : "Preparing model…" });
+    try {
+      await whisper.load(capModel, (msg, pct) => setCapStatus({ msg, pct }), files);
+      toast.success("Whisper ready — captions will run fully on this device");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not load the Whisper model");
+    } finally {
+      setCapBusy(null);
+      setCapStatus(null);
+    }
+  }
+
+  async function generateCaptions() {
+    if (!whisper.ready) {
+      toast.info("Get the model first (one-time download) — or keep editing, captions are optional");
+      return;
+    }
+    setCapBusy("gen");
+    setCapSegs(null);
+    setCapStatus({ msg: "Reading audio from the timeline…" });
+    try {
+      const audio = await projectAudio16k(engine, (m) => setCapStatus({ msg: m }));
+      if (!audio) {
+        toast.error("No audio found on the main track");
+        return;
+      }
+      const segs = await whisper.transcribe(audio.samples, capLang, (m) => setCapStatus({ msg: m }));
+      if (segs.length === 0) {
+        toast.info("No speech detected in that audio");
+        return;
+      }
+      setCapSegs(segs);
+      toast.success(`${segs.length} caption lines ready`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Transcription failed");
+    } finally {
+      setCapBusy(null);
+      setCapStatus(null);
+    }
+  }
+
+  function addCaptions(karaoke: boolean) {
+    if (!capSegs) return;
+    const clips = captionsToTextClips(capSegs, { karaoke });
+    onUndoable((eng) => {
+      const tr = eng.project.tracks.find((x) => x.id === "t_text");
+      if (!tr) return;
+      for (const c of clips) tr.clips.push({ ...c, id: uid("cap") } as OverlayClip);
+    });
+    setCapSegs(null);
+    toast.success(karaoke ? "Karaoke captions added — tweak them on the Text track" : "Captions added — tweak them on the Text track");
+  }
+
+
 
   useEffect(() => {
     if (!beatMediaId && audioMedia[0]) setBeatMediaId(audioMedia[0].id);
@@ -196,6 +271,9 @@ export function Assist({
         <TabBtn active={tab === "ai"} onClick={() => setTab("ai")}>
           <BrainCircuit className="h-3.5 w-3.5" /> AI writer
         </TabBtn>
+        <TabBtn active={tab === "captions"} onClick={() => setTab("captions")}>
+          <Subtitles className="h-3.5 w-3.5" /> Captions
+        </TabBtn>
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-5">
         {tab === "tools" ? (
@@ -274,6 +352,98 @@ export function Assist({
             <p className="text-[10px] text-muted-foreground leading-relaxed border-t border-border pt-3">
               These tools run entirely on this device with the WebAudio API — no model, no download, no network. They
               suggest and apply edits you can undo with <kbd className="px-1 border border-border rounded bg-slate-900">Ctrl+Z</kbd>.
+            </p>
+          </>
+        ) : tab === "captions" ? (
+          <>
+            <Tool
+              icon={<Subtitles className="h-4 w-4" />}
+              title="Auto captions — local Whisper"
+              desc="Transcribes the main-track audio on this device (OpenAI's public Whisper model, ONNX in WebAssembly). One-time model download, then fully offline — or bring the model files yourself. Output lands on the Text track as editable clips."
+            >
+              <div className="flex gap-1.5">
+                <select
+                  className="flex-1 bg-slate-900 border border-border rounded px-2 py-1.5 text-[11px]"
+                  value={capModel}
+                  onChange={(e) => setCapModel(e.target.value as WhisperModelId)}
+                >
+                  {WHISPER_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} · {m.size}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="w-28 bg-slate-900 border border-border rounded px-2 py-1.5 text-[11px]"
+                  value={capLang}
+                  onChange={(e) => setCapLang(e.target.value)}
+                >
+                  {CAPTION_LANGUAGES.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex gap-1.5 flex-wrap items-center">
+                <ToolBtn busy={capBusy === "load"} onClick={() => void loadCapModel()}>
+                  Get model (one-time)
+                </ToolBtn>
+                <label className="text-[11px] rounded px-2 py-1.5 border border-border hover:border-cyan-400 cursor-pointer flex items-center gap-1">
+                  Load model files…
+                  <input
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const fs = Array.from(e.target.files ?? []);
+                      if (fs.length) void loadCapModel(fs);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+                {whisper.ready && <span className="text-[10px] text-emerald-300">● ready — {whisper.model}</span>}
+              </div>
+              {capStatus && (
+                <div className="text-[10px] text-muted-foreground">
+                  {capStatus.msg}
+                  {typeof capStatus.pct === "number" && (
+                    <div className="h-1 bg-slate-800 rounded mt-1 overflow-hidden">
+                      <div className="h-full bg-primary" style={{ width: `${Math.round(capStatus.pct * 100)}%` }} />
+                    </div>
+                  )}
+                </div>
+              )}
+              <ToolBtn primary busy={capBusy === "gen"} disabled={!whisper.ready} onClick={() => void generateCaptions()}>
+                Generate captions · {captionSourceLabel(engine)}
+              </ToolBtn>
+              {capSegs && (
+                <div className="mt-1">
+                  <div className="max-h-40 overflow-y-auto border border-border rounded p-2 space-y-1">
+                    {capSegs.slice(0, 40).map((sg, i) => (
+                      <div key={i} className="text-[10px] leading-snug">
+                        <span className="text-muted-foreground tabular-nums">
+                          {fmtTime(sg.start)}–{fmtTime(sg.end)}
+                        </span>{" "}
+                        {sg.text}
+                      </div>
+                    ))}
+                    {capSegs.length > 40 && (
+                      <div className="text-[10px] text-muted-foreground">…and {capSegs.length - 40} more lines</div>
+                    )}
+                  </div>
+                  <div className="flex gap-1.5 mt-2">
+                    <ToolBtn primary onClick={() => addCaptions(false)}>
+                      Add subtitles ({capSegs.length})
+                    </ToolBtn>
+                    <ToolBtn onClick={() => addCaptions(true)}>Add karaoke (word-by-word)</ToolBtn>
+                  </div>
+                </div>
+              )}
+            </Tool>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              Assistive only: nothing touches your timeline until you press a button, and every caption is a normal text
+              clip you can edit, restyle, delete or keyframe. No audio ever leaves this device.
             </p>
           </>
         ) : (
