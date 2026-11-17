@@ -270,10 +270,10 @@ function Lane({
       onDoubleClick={onDoubleClick}
       title="Double-click: split at playhead"
     >
-      <div className="absolute left-1 top-0.5 text-[9px] uppercase tracking-wider text-muted-foreground/70 pointer-events-none">
+      <div className="absolute left-1 top-0.5 text-[9px] uppercase tracking-wider text-muted-foreground/70 pointer-events-none z-10 bg-slate-950/60 rounded px-0.5">
         {label}
       </div>
-      <div className="absolute inset-y-0 left-10 right-0">{children}</div>
+      <div className="absolute inset-0">{children}</div>
     </div>
   );
 }
