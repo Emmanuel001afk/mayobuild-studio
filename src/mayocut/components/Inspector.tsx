@@ -42,6 +42,42 @@ interface Props {
   filters: { id: string; name: string; css: string }[];
   luts: { id: string; name: string; builtin?: boolean }[];
   onImportLut: (f: File) => void;
+  denoise: { mediaId: string; progress: number } | null;
+  onDenoise: () => void;
+}
+
+function DenoiseRow({
+  media,
+  denoise,
+  onDenoise,
+}: {
+  media?: MediaItem;
+  denoise: { mediaId: string; progress: number } | null;
+  onDenoise: () => void;
+}) {
+  if (!media || media.kind !== "audio") return null;
+  if (denoise && denoise.mediaId === media.id) {
+    const pct = Math.round(denoise.progress * 100);
+    return (
+      <div className="mt-2">
+        <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
+          <span>Reducing noise (RNNoise)…</span>
+          <span>{pct}%</span>
+        </div>
+        <div className="h-1.5 rounded bg-secondary overflow-hidden">
+          <div className="h-full bg-cyan-400 transition-all duration-150" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+    );
+  }
+  if (media.denoised) {
+    return <p className="text-[10px] text-emerald-400 mt-2">✓ Denoised with RNNoise (100% local)</p>;
+  }
+  return (
+    <button className="mb-btn-ghost w-full text-xs h-7 mt-2" onClick={onDenoise} title="Speech denoise — runs the RNNoise model in the browser, replaces this clip's audio with a denoised copy">
+      🎙️ Denoise (RNNoise, local)
+    </button>
+  );
 }
 
 const POSITIONS: TextPos[] = ["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
@@ -92,6 +128,8 @@ export function Inspector(p: Props) {
   const isMain = p.selection.lane === "main";
   const main = isMain ? (p.clip as MainClip) : null;
   const over = !isMain && p.selection.lane === "overlay" ? (p.clip as OverlayClip) : null;
+  const mainMedia = main ? p.media.find((m) => m.id === main.mediaId) : undefined;
+  const overMedia = over?.mediaId ? p.media.find((m) => m.id === over.mediaId) : undefined;
   const clipId = p.clip.id;
   const localT = p.playheadLocal ?? 0;
   const setAnim = (patch: Partial<AnimValues>) => p.onAnimChange(clipId, localT, patch);
@@ -291,6 +329,7 @@ export function Inspector(p: Props) {
               <input type="checkbox" className="accent-cyan-400" checked={main.muted} onChange={(e) => p.onPatchMain({ muted: e.target.checked })} />
               Mute original sound
             </label>
+            <DenoiseRow media={mainMedia} denoise={p.denoise} onDenoise={p.onDenoise} />
           </Section>
 
           <Section label="Replace media">
@@ -509,9 +548,11 @@ export function Inspector(p: Props) {
               value={over.fx?.pitch ?? 0}
               onChange={(v) => p.onPatchOverlay(trackId, { fx: { ...over.fx, pitch: v } })}
             />
+            <DenoiseRow media={overMedia} denoise={p.denoise} onDenoise={p.onDenoise} />
             <p className="text-[10px] text-muted-foreground leading-snug">
-              Pitch-shifts clips up to 2 minutes (chipmuck / deep-voice). Reverb and echo apply to any length. All local
-              WebAudio — included in exports.
+              Pitch-shifts clips up to 2 minutes (chipmuck / deep-voice). Reverb and echo apply to any length. Denoise
+              runs the RNNoise speech model in the browser and swaps in a clean copy of the audio. All local — included
+              in exports.
             </p>
           </Section>
           <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />

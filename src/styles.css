@@ -122,4 +122,51 @@
     color: var(--foreground); border: 1px solid color-mix(in oklab, var(--primary) 30%, transparent);
     font-size: 0.75rem;
   }
+  .mb-btn:active { transform: translateY(0) scale(0.99); }
+  .mb-btn-ghost:active { transform: scale(0.99); }
+
+  /* keyboard focus — visible everywhere without breaking mouse UX */
+  .mb-btn:focus-visible,
+  .mb-btn-ghost:focus-visible,
+  button:focus-visible,
+  a:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* native media elements — blend into the dark studio theme */
+  audio { color-scheme: dark; }
+
+  /* thin themed scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--secondary) 90%, transparent) transparent;
+  }
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--secondary) 90%, transparent);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+    background-clip: content-box;
+  }
+}
+
+@layer base {
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 35%, transparent);
+    color: var(--foreground);
+  }
+  :root { color-scheme: dark; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mb-btn, .mb-btn-ghost { transition: none; }
+  .mb-btn:hover, .mb-btn:active, .mb-btn-ghost:active { transform: none; }
 }

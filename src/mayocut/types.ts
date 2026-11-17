@@ -17,6 +17,7 @@ export interface MediaItem {
   rms?: number; // overall root-mean-square level 0..1 (audio)
   isGif?: boolean; // animated sticker (frames decoded from the stored blob)
   gifFrames?: number;
+  denoised?: boolean; // audio processed by the RNNoise denoise batch
 }
 
 export interface FilterAdjust {

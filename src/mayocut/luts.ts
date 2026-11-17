@@ -187,13 +187,13 @@ export function parseCube(text: string): { size: number; data: Float32Array } {
  */
 export function applyLut(table: LutTable, px: Uint8ClampedArray): void {
   const n = table.size;
-  const inv = 1 / (n - 1);
+  const scale = (n - 1) / 255; // 0..255 → 0..(n-1) lattice units (exact at both ends)
   const data = table.data;
   const step = n * n;
   for (let i = 0; i < px.length; i += 4) {
-    let r = px[i] * inv;
-    let g = px[i + 1] * inv;
-    let b = px[i + 2] * inv;
+    const r = px[i] * scale;
+    const g = px[i + 1] * scale;
+    const b = px[i + 2] * scale;
     const r0 = Math.min(n - 2, r | 0);
     const g0 = Math.min(n - 2, g | 0);
     const b0 = Math.min(n - 2, b | 0);
@@ -201,14 +201,14 @@ export function applyLut(table: LutTable, px: Uint8ClampedArray): void {
     const gf = g - g0;
     const bf = b - b0;
     for (let c = 0; c < 3; c++) {
-      const v000 = data[(b0 * n + g0 * n + r0) * 3 + c];
-      const v100 = data[(b0 * n + g0 * n + r0 + 1) * 3 + c];
-      const v010 = data[(b0 * n + (g0 + 1) * n + r0) * 3 + c];
-      const v110 = data[(b0 * n + (g0 + 1) * n + r0 + 1) * 3 + c];
-      const v001 = data[((b0 + 1) * n + g0 * n + r0) * 3 + c];
-      const v101 = data[((b0 + 1) * n + g0 * n + r0 + 1) * 3 + c];
-      const v011 = data[((b0 + 1) * n + (g0 + 1) * n + r0) * 3 + c];
-      const v111 = data[((b0 + 1) * n + (g0 + 1) * n + r0 + 1) * 3 + c];
+      const v000 = data[(b0 * step + g0 * n + r0) * 3 + c];
+      const v100 = data[(b0 * step + g0 * n + r0 + 1) * 3 + c];
+      const v010 = data[(b0 * step + (g0 + 1) * n + r0) * 3 + c];
+      const v110 = data[(b0 * step + (g0 + 1) * n + r0 + 1) * 3 + c];
+      const v001 = data[((b0 + 1) * step + g0 * n + r0) * 3 + c];
+      const v101 = data[((b0 + 1) * step + g0 * n + r0 + 1) * 3 + c];
+      const v011 = data[((b0 + 1) * step + (g0 + 1) * n + r0) * 3 + c];
+      const v111 = data[((b0 + 1) * step + (g0 + 1) * n + r0 + 1) * 3 + c];
       const c00 = v000 + (v100 - v000) * rf;
       const c10 = v010 + (v110 - v010) * rf;
       const c01 = v001 + (v101 - v001) * rf;
@@ -218,7 +218,6 @@ export function applyLut(table: LutTable, px: Uint8ClampedArray): void {
       const v = c0 + (c1 - c0) * bf;
       px[i + c] = v * 255;
     }
-    void step;
   }
 }
 

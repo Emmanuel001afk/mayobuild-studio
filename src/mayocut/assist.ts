@@ -226,6 +226,9 @@ export function validatePack(raw: unknown): TemplatePack {
   if (!p || p.format !== "mayocut-pack" || !Array.isArray(p.templates) || p.templates.length === 0) {
     throw new Error("Not a valid MayoCut template pack (.json with format \"mayocut-pack\")");
   }
+  if (p.version !== 1) {
+    throw new Error(`Unsupported pack version ${String(p.version)} — this build reads version 1`);
+  }
   for (const t of p.templates) {
     if (!t.id || !t.name || (t.kind !== "project" && t.kind !== "enhance")) {
       throw new Error(`Pack template "${t?.name ?? "?"}" is malformed`);

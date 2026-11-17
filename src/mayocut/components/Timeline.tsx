@@ -166,6 +166,7 @@ export function Timeline(p: Props) {
                         <span className="ml-1 text-emerald-300">fx:{s.clip.effect}</span>
                       )}
                       {s.clip.lut && <span className="ml-1 text-violet-300">lut:{s.clip.lut}</span>}
+                      {m?.denoised && <span className="ml-1 text-teal-300">denoise</span>}
                     </span>
                   </div>
                   {m?.kind === "audio" && m.wave && (
@@ -254,6 +255,7 @@ export function Timeline(p: Props) {
                   selected={p.selection?.lane === "overlay" && p.selection.id === c.id}
                   thumb={c.mediaId ? mediaById(c.mediaId)?.thumb : undefined}
                   wave={c.kind === "audio" && c.mediaId ? mediaById(c.mediaId)?.wave : undefined}
+                  denoised={c.kind === "audio" && c.mediaId ? mediaById(c.mediaId)?.denoised : undefined}
                   onSelect={() => p.onSelect({ lane: "overlay", trackId: tr.id, id: c.id })}
                   onPatch={(patch) => p.onOverlayPatch(tr.id, c.id, patch)}
                 />
@@ -311,6 +313,7 @@ function OverlayClipBox({
   selected,
   thumb,
   wave,
+  denoised,
   onSelect,
   onPatch,
 }: {
@@ -320,6 +323,7 @@ function OverlayClipBox({
   selected: boolean;
   thumb?: string;
   wave?: number[];
+  denoised?: boolean;
   onSelect: () => void;
   onPatch: (patch: Partial<OverlayClip>) => void;
 }) {
@@ -383,6 +387,7 @@ function OverlayClipBox({
                 ? "▸ video"
                 : "image"}
           {clip.chroma && " · chroma"}
+          {denoised && " · denoise"}
           {clip.anim === "karaoke" && " · karaoke"}
           {clip.fx && ((clip.fx.reverb ?? 0) > 0 || (clip.fx.echo ?? 0) > 0 || (clip.fx.pitch ?? 0) !== 0) && " · fx"}
           {(clip.blend && clip.blend !== "normal") || (clip.mask && clip.mask !== "none") ? " · ◑" : ""}

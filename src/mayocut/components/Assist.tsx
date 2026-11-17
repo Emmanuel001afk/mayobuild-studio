@@ -8,7 +8,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AudioWaveform, BrainCircuit, Copy, Music4, Palette, Scissors, Sparkles, Subtitles, Timer, X } from "lucide-react";
+import {
+  AudioWaveform,
+  BrainCircuit,
+  Copy,
+  Mic,
+  Music4,
+  Palette,
+  Scissors,
+  Sparkles,
+  Subtitles,
+  Timer,
+  X,
+} from "lucide-react";
 import {
   analyzeAudioBlob,
   beatSegments,
@@ -32,6 +44,7 @@ import {
   type CaptionSegment,
   type WhisperModelId,
 } from "../captions";
+import { tts, TTS_MODEL_BYTES, type TtsAudio } from "../tts";
 
 export function Assist({
   engine,
@@ -41,6 +54,7 @@ export function Assist({
   onCanvas,
   onClose,
   selectedClip,
+  onAddTts,
 }: {
   engine: Engine;
   project: Project;
@@ -49,8 +63,9 @@ export function Assist({
   onCanvas: () => HTMLCanvasElement | null;
   onClose: () => void;
   selectedClip: { id: string; kind: string; mediaId?: string } | null;
+  onAddTts: (audio: TtsAudio, name: string) => void;
 }) {
-  const [tab, setTab] = useState<"tools" | "ai" | "captions">("tools");
+  const [tab, setTab] = useState<"tools" | "ai" | "captions" | "voice">("tools");
   const [busy, setBusy] = useState<string | null>(null);
   const [beatMediaId, setBeatMediaId] = useState("");
   const [beatCount, setBeatCount] = useState(8);
@@ -66,6 +81,13 @@ export function Assist({
   const [capStatus, setCapStatus] = useState<{ msg: string; pct?: number } | null>(null);
   const [capBusy, setCapBusy] = useState<"load" | "gen" | null>(null);
   const [capSegs, setCapSegs] = useState<CaptionSegment[] | null>(null);
+
+  // --- local text-to-speech (sherpa-onnx VITS) ---
+  const [ttsStatus, setTtsStatus] = useState<{ msg: string; pct?: number } | null>(null);
+  const [ttsBusy, setTtsBusy] = useState<"load" | "gen" | null>(null);
+  const [ttsText, setTtsText] = useState("");
+  const [ttsSpeed, setTtsSpeed] = useState(1);
+  const [ttsResult, setTtsResult] = useState<{ audio: TtsAudio; url: string; name: string } | null>(null);
 
   async function loadCapModel(files?: File[]) {
     setCapBusy("load");
@@ -120,6 +142,54 @@ export function Assist({
     });
     setCapSegs(null);
     toast.success(karaoke ? "Karaoke captions added — tweak them on the Text track" : "Captions added — tweak them on the Text track");
+  }
+
+  // --- TTS handlers ---
+  async function loadTtsModel() {
+    setTtsBusy("load");
+    try {
+      await tts.ensure((msg, pct) => setTtsStatus({ msg, pct }));
+      toast.success("Voice model ready — cached on this device, works offline");
+    } catch (e) {
+      toast.error(`Voice model failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setTtsBusy(null);
+      setTtsStatus(null);
+    }
+  }
+
+  async function genTts() {
+    const text = ttsText.trim();
+    if (!text) {
+      toast.info("Type something to narrate first");
+      return;
+    }
+    setTtsBusy("gen");
+    try {
+      setTtsStatus({ msg: "Generating speech… (single CPU thread in a worker)" });
+      const a = await tts.generate(text, ttsSpeed);
+      setTtsResult((prev) => {
+        if (prev) URL.revokeObjectURL(prev.url);
+        const url = URL.createObjectURL(a.wav);
+        const name = text.length > 28 ? text.slice(0, 28) + "…" : text;
+        return { audio: a, url, name };
+      });
+      setTtsStatus(null);
+    } catch (e) {
+      setTtsStatus(null);
+      toast.error(`Speech failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setTtsBusy(null);
+    }
+  }
+
+  function addTtsToTimeline() {
+    if (!ttsResult) return;
+    onAddTts(ttsResult.audio, ttsResult.name);
+    setTtsResult((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
   }
 
 
@@ -273,6 +343,9 @@ export function Assist({
         </TabBtn>
         <TabBtn active={tab === "captions"} onClick={() => setTab("captions")}>
           <Subtitles className="h-3.5 w-3.5" /> Captions
+        </TabBtn>
+        <TabBtn active={tab === "voice"} onClick={() => setTab("voice")}>
+          <Mic className="h-3.5 w-3.5" /> Voice (TTS)
         </TabBtn>
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-5">
@@ -444,6 +517,90 @@ export function Assist({
             <p className="text-[10px] text-muted-foreground leading-relaxed">
               Assistive only: nothing touches your timeline until you press a button, and every caption is a normal text
               clip you can edit, restyle, delete or keyframe. No audio ever leaves this device.
+            </p>
+          </>
+        ) : tab === "voice" ? (
+          <>
+            <Tool
+              icon={<Mic className="h-4 w-4" />}
+              title="Text to speech — fully local"
+              desc="Speaks your text with a neural voice (piper 'amy' via sherpa-onnx VITS, ONNX in WebAssembly). One-time model download of ~70 MB, then everything runs offline on this device. The result is a normal audio clip on the Audio track."
+            >
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-muted-foreground">Voice:</span>
+                <span className="font-medium">{tts.modelLabel}</span>
+                {tts.ready && <span className="text-emerald-300 text-[10px]">● ready</span>}
+              </div>
+              {!tts.ready ? (
+                <div className="flex gap-1.5 flex-wrap items-center">
+                  <ToolBtn busy={ttsBusy === "load"} onClick={() => void loadTtsModel()}>
+                    Get voice model (one-time, {(TTS_MODEL_BYTES / 1048576).toFixed(0)} MB)
+                  </ToolBtn>
+                </div>
+              ) : (
+                <>
+                  <textarea
+                    className="w-full h-24 bg-slate-900 border border-border rounded p-2 text-xs resize-y"
+                    placeholder="Type what the voice should say… (English)"
+                    value={ttsText}
+                    onChange={(e) => setTtsText(e.target.value)}
+                  />
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="text-muted-foreground w-12">Speed</span>
+                    <input
+                      type="range"
+                      min={0.5}
+                      max={2}
+                      step={0.1}
+                      value={ttsSpeed}
+                      onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
+                      className="flex-1 accent-cyan-400"
+                    />
+                    <span className="tabular-nums w-8">{ttsSpeed.toFixed(1)}×</span>
+                  </div>
+                  <ToolBtn primary busy={ttsBusy === "gen"} onClick={() => void genTts()}>
+                    Generate speech
+                  </ToolBtn>
+                </>
+              )}
+              {ttsStatus && (
+                <div className="text-[10px] text-muted-foreground">
+                  {ttsStatus.msg}
+                  {typeof ttsStatus.pct === "number" && ttsStatus.pct < 1 && (
+                    <div className="h-1 bg-slate-800 rounded mt-1 overflow-hidden">
+                      <div className="h-full bg-primary" style={{ width: `${Math.round(ttsStatus.pct * 100)}%` }} />
+                    </div>
+                  )}
+                </div>
+              )}
+              {ttsResult && (
+                <div className="mt-1 space-y-2">
+                  <audio controls src={ttsResult.url} className="w-full h-9" />
+                  <div className="text-[10px] text-muted-foreground">
+                    {ttsResult.audio.duration.toFixed(1)} s · {ttsResult.audio.sampleRate} Hz · “{ttsResult.name}”
+                  </div>
+                  <div className="flex gap-1.5">
+                    <ToolBtn primary onClick={addTtsToTimeline}>
+                      Add to Audio track
+                    </ToolBtn>
+                    <ToolBtn
+                      onClick={() => {
+                        setTtsResult((prev) => {
+                          if (prev) URL.revokeObjectURL(prev.url);
+                          return null;
+                        });
+                      }}
+                    >
+                      Discard
+                    </ToolBtn>
+                  </div>
+                </div>
+              )}
+            </Tool>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              Assistive only: the clip is added at the playhead — you can move, trim, fade, denoise or FX it like any
+              audio. Generation is single-threaded CPU: a few seconds per 10 s of speech on desktop, slower on phones.
+              Nothing leaves this device.
             </p>
           </>
         ) : (

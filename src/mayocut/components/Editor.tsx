@@ -20,6 +20,8 @@ import {
   X,
 } from "lucide-react";
 import { downloadJson, startMicRecording, templateToPackFile } from "../assist";
+import { analyzeMono, denoiseAudio, encodeWavMono } from "../denoise";
+import { tts } from "../tts";
 import { importLut, loadAllLuts } from "../luts";
 import { db } from "../idb";
 import { Engine, FILTER_PRESETS, mp4Supported, pickMime } from "../engine";
@@ -91,6 +93,7 @@ export function Editor({
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [assistOpen, setAssistOpen] = useState(false);
+  const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [recState, setRecState] = useState<{ active: boolean; secs: number; error?: string }>({ active: false, secs: 0 });
   const recRef = useRef<{ stop: () => void } | null>(null);
   const undoStack = useRef<string[]>([]);
@@ -291,6 +294,12 @@ export function Editor({
     [pushUndo],
   );
 
+  // The TTS engine keeps a ~15 MB wasm worker alive once loaded — free it whenever the
+  // Assist drawer closes so the editor doesn't hold ~230 MB idle.
+  useEffect(() => {
+    if (!assistOpen) tts.dispose();
+  }, [assistOpen]);
+
   const doSplit = useCallback(() => {
     const eng = engineRef.current;
     if (!eng || eng.duration() === 0) {
@@ -377,6 +386,108 @@ export function Editor({
     },
     [pushUndo],
   );
+
+  // ------------------------------------------------------------- RNNoise denoise (batch)
+
+  async function denoiseSelected() {
+    const eng = engineRef.current;
+    if (!eng || !selection || denoise) return;
+    let clipMediaId: string | undefined;
+    if (selection.lane === "main") {
+      const c = eng.project.main.find((x) => x.id === selection.id);
+      clipMediaId = c?.mediaId;
+    } else {
+      const tr = eng.project.tracks.find((x) => x.id === selection.trackId);
+      const c = tr?.clips.find((x) => x.id === selection.id);
+      if (c && c.kind !== "audio") return;
+      clipMediaId = c?.mediaId;
+    }
+    if (!clipMediaId) return;
+    const m = eng.getMedia(clipMediaId);
+    if (!m || m.kind !== "audio") {
+      toast.info("Denoise works on audio clips");
+      return;
+    }
+    const mediaId = m.id;
+    setDenoise({ mediaId, progress: 0 });
+    try {
+      const blob = await db.getBlob(mediaId);
+      if (!blob) throw new Error("media blob not found");
+      const res = await denoiseAudio(blob, (d, tot) => setDenoise({ mediaId, progress: tot ? d / tot : 0 }));
+      const { wave, rms } = analyzeMono(res.samples);
+      const base = m.name.replace(/\.[a-z0-9]{2,5}$/i, "");
+      const item: MediaItem = {
+        ...m,
+        id: uid("med"),
+        name: `${base} (denoised)`,
+        size: res.wav.size,
+        duration: res.duration,
+        createdAt: Date.now(),
+        denoised: true,
+        wave,
+        rms,
+      };
+      await db.putMedia(item, res.wav);
+      const all = await db.listMedia();
+      setMedia(all);
+      eng.setMedia(all);
+      eng.attachUrl(item.id, URL.createObjectURL(res.wav));
+      const sel = selection;
+      undoable((e) => {
+        if (sel.lane === "main") {
+          const c = e.project.main.find((x) => x.id === sel.id);
+          if (c) c.mediaId = item.id;
+        } else {
+          const tr = e.project.tracks.find((x) => x.id === sel.trackId);
+          const c = tr?.clips.find((x) => x.id === sel.id);
+          if (c) c.mediaId = item.id;
+        }
+      });
+      toast.success(
+        res.speechProb < 0.05
+          ? "Denoised — note: little speech was detected in this clip"
+          : "Noise reduced (RNNoise, 100% local)",
+      );
+    } catch (err) {
+      toast.error(`Denoise failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDenoise(null);
+    }
+  }
+
+  // ------------------------------------------------------------- TTS audio (from Assist)
+
+  async function addTtsClip(samples: Float32Array, sampleRate: number, name: string) {
+    const eng = engineRef.current;
+    if (!eng) return;
+    const wav = encodeWavMono(samples, sampleRate);
+    const id = uid("med");
+    const { wave, rms } = analyzeMono(samples);
+    const item: MediaItem = {
+      id,
+      name: `Voice: ${name}`,
+      kind: "audio",
+      size: wav.size,
+      createdAt: Date.now(),
+      duration: samples.length / sampleRate,
+      wave,
+      rms,
+    };
+    try {
+      await db.putMedia(item, wav);
+      const all = await db.listMedia();
+      setMedia(all);
+      eng.setMedia(all);
+      eng.attachUrl(id, URL.createObjectURL(wav));
+      const at = Math.max(0, eng.t);
+      undoable((e) => {
+        e.addAudioClip("t_audio", item, at);
+      });
+      toast.success("Voice clip added to the Audio track at the playhead");
+    } catch (err) {
+      toast.error(`Could not save voice clip: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // ------------------------------------------------------------- media import (in editor)
 
@@ -983,6 +1094,8 @@ export function Editor({
             filters={FILTER_PRESETS}
             luts={lutList}
             onImportLut={(f) => void onImportLut(f)}
+            denoise={denoise}
+            onDenoise={() => void denoiseSelected()}
           />
         </div>
       </div>
@@ -997,6 +1110,7 @@ export function Editor({
           onCanvas={() => canvasWrapRef.current?.querySelector("canvas") ?? null}
           onClose={() => setAssistOpen(false)}
           selectedClip={assistClip}
+          onAddTts={(audio, name) => void addTtsClip(audio.samples, audio.sampleRate, name)}
         />
       )}
 
