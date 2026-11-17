@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 
 const REPO = "Emmanuel001afk/mayobuild-studio";
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 const LATEST = `https://github.com/${REPO}/releases/latest/download`;
 const EXE_URL = `${LATEST}/mayocut-setup-${VERSION}.exe`;
 const APK_URL = `${LATEST}/mayocut-android-${VERSION}.apk`;
@@ -108,6 +108,7 @@ function DownloadsPage() {
             <Feature ok label="Projects & media stored on-device (IndexedDB)" />
             <Feature ok label="Export MP4 + WebM up to 4K, 24/30/60 fps, saved locally" />
             <Feature ok label="On-device assist tools + optional local AI (always private)" />
+            <Feature ok label="Adapts to your device — heavy engines auto-stop on low-power phones" />
           </div>
         </div>
 

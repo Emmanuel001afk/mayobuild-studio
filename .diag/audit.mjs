@@ -291,5 +291,66 @@ await t('analyzeMono: wave bins + rms', () => {
   assert.ok(a.rms > 0.2 && a.rms < 0.8);
 });
 
+
+// ================= device capability =================
+const DV = await import('./b-device.mjs');
+console.log('device.ts');
+const highEnv = { cores: 8, memoryGB: 16, webgl: 2, crossOriginIsolated: true, platform: "windows", gpu: "RTX 4060" };
+const medEnv  = { cores: 4, memoryGB: 8, webgl: 2, crossOriginIsolated: false, platform: "linux", gpu: "iGPU" };
+const lowEnv  = { cores: 2, memoryGB: 2, webgl: 1, crossOriginIsolated: false, platform: "android", gpu: "Mali" };
+const high = DV.scoreDevice(highEnv), med = DV.scoreDevice(medEnv), low = DV.scoreDevice(lowEnv);
+
+await t('score: strong desktop -> high, all features on, 4K + 60fps', () => {
+  assert.equal(high.tier, "high", `score ${high.score}`);
+  assert.equal(high.limits.previewMaxSide, 1920);
+  assert.equal(high.limits.exportMaxScale, 2);
+  assert.equal(high.limits.maxExportFps, 60);
+  for (const f of ["tts", "denoise", "ai", "captions"]) assert.ok(high.limits.features[f].ok, f);
+});
+await t('score: mid laptop -> balanced, 4K ok, 30fps cap', () => {
+  assert.equal(med.tier, "medium", `score ${med.score}`);
+  assert.equal(med.limits.previewMaxSide, 1280);
+  assert.equal(med.limits.exportMaxScale, 2);
+  assert.equal(med.limits.maxExportFps, 30);
+  for (const f of ["tts", "denoise", "ai", "captions"]) assert.ok(med.limits.features[f].ok, f);
+});
+await t('score: weak phone -> low power, ALL heavy features hard-stopped with reason', () => {
+  assert.equal(low.tier, "low", `score ${low.score}`);
+  assert.equal(low.limits.previewMaxSide, 960);
+  assert.equal(low.limits.exportMaxScale, 1);
+  assert.equal(low.limits.maxExportFps, 30);
+  for (const f of ["tts", "denoise", "ai", "captions"]) {
+    const g = low.limits.features[f];
+    assert.equal(g.ok, false, f);
+    assert.ok(g.reason && g.reason.length > 10, `reason for ${f}`);
+  }
+});
+await t('score: unknown RAM (Safari) stays neutral, not penalized', () => {
+  const ios = DV.scoreDevice({ cores: 6, memoryGB: null, webgl: 2, crossOriginIsolated: false, platform: "ios", gpu: "Apple GPU" });
+  assert.equal(ios.tier, "medium", `score ${ios.score}`);
+  assert.equal(ios.memoryGB, null);
+});
+await t('score: monotonic — stronger env never scores lower', () => {
+  assert.ok(high.score > med.score && med.score > low.score, `${high.score} / ${med.score} / ${low.score}`);
+});
+await t('previewCapFor: caps buffer per profile (9:16 1080x1920)', () => {
+  assert.equal(DV.previewCapFor(high, 1080, 1920), 1);
+  assert.ok(Math.abs(DV.previewCapFor(med, 1080, 1920) - 0.667) < 1e-3, DV.previewCapFor(med, 1080, 1920));
+  assert.ok(Math.abs(DV.previewCapFor(low, 1080, 1920) - 0.5) < 1e-3);
+  assert.equal(DV.previewCapFor(low, 540, 960), 1, 'already under cap -> 1');
+});
+await t('gateFor: low tier is a HARD stop even if user prefs say on', () => {
+  const g = DV.gateFor(low, "tts", { tts: true });
+  assert.equal(g.ok, false);
+});
+await t('gateFor: manual off wins on capable devices', () => {
+  const g = DV.gateFor(med, "denoise", { denoise: false });
+  assert.equal(g.ok, false);
+  assert.ok(/switched/i.test(g.reason ?? ""), g.reason);
+  const ok = DV.gateFor(med, "denoise", {});
+  assert.equal(ok.ok, true);
+});
+
+
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -281,6 +281,13 @@ export class Engine {
   /** 1 = canvas native, 2 = 4K (export only; draw() resizes the buffer). */
   exportScale = 1;
 
+  /**
+   * Live-preview stabilization (from device.ts): longest canvas buffer side
+   * allowed for the preview, in pixels. 0 = no cap (full quality). Export
+   * always renders at full quality — the export paths temporarily clear this.
+   */
+  previewMaxSide = 0;
+
   setLuts(map: Map<string, LutTable>) {
     this.lutCache = map;
   }
@@ -822,8 +829,14 @@ export class Engine {
     const ctx = this.ctx;
     if (!ctx || !this.canvas) return;
     const base = ASPECTS[this.project.aspect];
-    const W = base.w * this.exportScale;
-    const H = base.h * this.exportScale;
+    // exportScale is the export multiplier (1 or 2). previewMaxSide caps the
+    // LIVE preview buffer on weak devices (0 = no cap; cleared while exporting
+    // so exports always render at full quality).
+    const maxSide = Math.max(base.w, base.h);
+    const cap = this.previewMaxSide > 0 ? Math.min(1, this.previewMaxSide / maxSide) : 1;
+    const k = this.exportScale * cap;
+    const W = Math.max(2, Math.round(base.w * k));
+    const H = Math.max(2, Math.round(base.h * k));
     if (this.canvas.width !== W || this.canvas.height !== H) {
       this.canvas.width = W;
       this.canvas.height = H;
@@ -1791,12 +1804,14 @@ export class Engine {
 
   async exportMedia(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
     if (!this.canvas) throw new Error("Canvas not ready");
-    const prevScale = this.exportScale;
-    this.exportScale = opts.scale ?? 1;
     const picked = pickMime();
     if (!picked) throw new Error("This browser does not support video recording. Use Chrome/Edge.");
     await this.ensureAudio();
     if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
+    const prevScale = this.exportScale;
+    const prevCap = this.previewMaxSide;
+    this.exportScale = opts.scale ?? 1;
+    this.previewMaxSide = 0; // exports always render at full quality
     for (const [id, rec] of this.els) {
       if (rec.el instanceof HTMLImageElement) continue;
       if (!rec.sourceNode) {
@@ -1845,10 +1860,12 @@ export class Engine {
     canvasStream.getTracks().forEach((t) => t.stop());
     if (blob.size < 1000) {
       this.exportScale = prevScale;
+      this.previewMaxSide = prevCap;
       throw new Error("Export produced no data — try again");
     }
     onProgress(1);
     this.exportScale = prevScale;
+    this.previewMaxSide = prevCap;
     return blob;
   }
 
@@ -1857,14 +1874,17 @@ export class Engine {
   // (the timeline plays once while frames are captured), same as the WebM path.
 
   async exportMP4(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
-    const prevScale = this.exportScale;
-    this.exportScale = opts.scale ?? 1;    if (!this.canvas) throw new Error("Canvas not ready");
+    if (!this.canvas) throw new Error("Canvas not ready");
     if (!mp4Supported()) throw new Error("MP4 export needs WebCodecs — use Chrome or Edge (WebM also works).");
     const { w: W, h: H } = ASPECTS[this.project.aspect];
     const codec = await pickAvcCodec(W, H, opts.fps, opts.videoBitsPerSecond);
     if (!codec) throw new Error("H.264 encoding is not supported at this resolution here — use WebM.");
     await this.ensureAudio();
     if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
+    const prevScale = this.exportScale;
+    const prevCap = this.previewMaxSide;
+    this.exportScale = opts.scale ?? 1;
+    this.previewMaxSide = 0; // exports always render at full quality
     for (const [id, rec] of this.els) {
       if (rec.el instanceof HTMLImageElement) continue;
       if (!rec.sourceNode) {
@@ -2031,6 +2051,7 @@ export class Engine {
       if (!wasPlaying) this.pause();
       this.loop = wasLoop;
       this.exportScale = prevScale;
+      this.previewMaxSide = prevCap;
     }
     if (encError) throw encError instanceof Error ? encError : new Error("Encoder failed: " + String(encError));
     muxer.finalize();

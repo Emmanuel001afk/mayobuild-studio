@@ -44,16 +44,19 @@ interface Props {
   onImportLut: (f: File) => void;
   denoise: { mediaId: string; progress: number } | null;
   onDenoise: () => void;
+  denoiseGate: { ok: boolean; reason?: string };
 }
 
 function DenoiseRow({
   media,
   denoise,
   onDenoise,
+  denoiseGate,
 }: {
   media?: MediaItem;
   denoise: { mediaId: string; progress: number } | null;
   onDenoise: () => void;
+  denoiseGate: { ok: boolean; reason?: string };
 }) {
   if (!media || media.kind !== "audio") return null;
   if (denoise && denoise.mediaId === media.id) {
@@ -74,8 +77,13 @@ function DenoiseRow({
     return <p className="text-[10px] text-emerald-400 mt-2">✓ Denoised with RNNoise (100% local)</p>;
   }
   return (
-    <button className="mb-btn-ghost w-full text-xs h-7 mt-2" onClick={onDenoise} title="Speech denoise — runs the RNNoise model in the browser, replaces this clip's audio with a denoised copy">
-      🎙️ Denoise (RNNoise, local)
+    <button
+      className={`mb-btn-ghost w-full text-xs h-7 mt-2 ${denoiseGate.ok ? "" : "opacity-40 cursor-not-allowed"}`}
+      onClick={denoiseGate.ok ? onDenoise : undefined}
+      disabled={!denoiseGate.ok}
+      title={denoiseGate.ok ? "Speech denoise — runs the RNNoise model in the browser, replaces this clip's audio with a denoised copy" : denoiseGate.reason ?? "Unavailable on this device"}
+    >
+      🎙️ Denoise (RNNoise, local){!denoiseGate.ok && " — off on this device"}
     </button>
   );
 }
@@ -329,7 +337,7 @@ export function Inspector(p: Props) {
               <input type="checkbox" className="accent-cyan-400" checked={main.muted} onChange={(e) => p.onPatchMain({ muted: e.target.checked })} />
               Mute original sound
             </label>
-            <DenoiseRow media={mainMedia} denoise={p.denoise} onDenoise={p.onDenoise} />
+            <DenoiseRow media={mainMedia} denoise={p.denoise} onDenoise={p.onDenoise} denoiseGate={p.denoiseGate} />
           </Section>
 
           <Section label="Replace media">
@@ -548,7 +556,7 @@ export function Inspector(p: Props) {
               value={over.fx?.pitch ?? 0}
               onChange={(v) => p.onPatchOverlay(trackId, { fx: { ...over.fx, pitch: v } })}
             />
-            <DenoiseRow media={overMedia} denoise={p.denoise} onDenoise={p.onDenoise} />
+            <DenoiseRow media={overMedia} denoise={p.denoise} onDenoise={p.onDenoise} denoiseGate={p.denoiseGate} />
             <p className="text-[10px] text-muted-foreground leading-snug">
               Pitch-shifts clips up to 2 minutes (chipmuck / deep-voice). Reverb and echo apply to any length. Denoise
               runs the RNNoise speech model in the browser and swaps in a clean copy of the audio. All local — included

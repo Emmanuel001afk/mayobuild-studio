@@ -6,12 +6,13 @@
 //    already has in Mayobuild). If no model is loaded, the tab says so and
 //    everything else in the editor keeps working.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   AudioWaveform,
   BrainCircuit,
   Copy,
+  Cpu,
   Mic,
   Music4,
   Palette,
@@ -45,6 +46,14 @@ import {
   type WhisperModelId,
 } from "../captions";
 import { tts, TTS_MODEL_BYTES, type TtsAudio } from "../tts";
+import {
+  HEAVY_FEATURES,
+  can,
+  device,
+  getFeaturePrefs,
+  setFeaturePref,
+  type FeaturePrefs,
+} from "../device";
 
 export function Assist({
   engine,
@@ -351,6 +360,7 @@ export function Assist({
       <div className="flex-1 overflow-y-auto p-3 space-y-5">
         {tab === "tools" ? (
           <>
+            <DevicePanel />
             <Tool
               icon={<Music4 className="h-4 w-4" />}
               title="Beat cuts"
@@ -428,7 +438,7 @@ export function Assist({
             </p>
           </>
         ) : tab === "captions" ? (
-          <>
+          <FeatureGate gate={can("captions")} label="Auto captions (Whisper)">
             <Tool
               icon={<Subtitles className="h-4 w-4" />}
               title="Auto captions — local Whisper"
@@ -518,9 +528,9 @@ export function Assist({
               Assistive only: nothing touches your timeline until you press a button, and every caption is a normal text
               clip you can edit, restyle, delete or keyframe. No audio ever leaves this device.
             </p>
-          </>
+          </FeatureGate>
         ) : tab === "voice" ? (
-          <>
+          <FeatureGate gate={can("tts")} label="Text-to-speech">
             <Tool
               icon={<Mic className="h-4 w-4" />}
               title="Text to speech — fully local"
@@ -602,12 +612,105 @@ export function Assist({
               audio. Generation is single-threaded CPU: a few seconds per 10 s of speech on desktop, slower on phones.
               Nothing leaves this device.
             </p>
-          </>
+          </FeatureGate>
         ) : (
-          <AIWriter project={project} />
+          <FeatureGate gate={can("ai")} label="Local AI writer">
+            <AIWriter project={project} />
+          </FeatureGate>
         )}
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** Wraps a heavy feature: if the device/profile says "no", show the reason
+ *  instead of a UI that would hang or OOM. Otherwise render the real feature. */
+function FeatureGate({
+  gate,
+  label,
+  children,
+}: {
+  gate: { ok: boolean; reason?: string };
+  label: string;
+  children: ReactNode;
+}) {
+  if (gate.ok) return <>{children}</>;
+  return (
+    <div className="border border-amber-500/30 bg-amber-500/5 rounded-lg p-4 text-center">
+      <Cpu className="h-6 w-6 mx-auto text-amber-300/80 mb-2" />
+      <div className="text-sm font-medium">{label} isn't available here</div>
+      <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{gate.reason}</p>
+    </div>
+  );
+}
+
+/** Device profile card + manual off-switches for the heavy engines. */
+function DevicePanel() {
+  const dev = device();
+  const [prefs, setPrefs] = useState<FeaturePrefs>(() => getFeaturePrefs());
+  const tier = dev.tier;
+  const badge =
+    tier === "high"
+      ? { cls: "border-emerald-400/40 text-emerald-300 bg-emerald-400/10", label: "High performance" }
+      : tier === "medium"
+        ? { cls: "border-amber-400/40 text-amber-300 bg-amber-400/10", label: "Balanced" }
+        : { cls: "border-red-400/40 text-red-300 bg-red-400/10", label: "Low power" };
+  const mem = dev.memoryGB === null ? "RAM n/a" : `${dev.memoryGB} GB RAM`;
+  const toggle = (id: (typeof HEAVY_FEATURES)[number]["id"], on: boolean) =>
+    setPrefs(setFeaturePref(id, on));
+
+  return (
+    <Tool icon={<Cpu className="h-4 w-4" />} title="This device" desc="How much muscle was detected — and which heavy engines are allowed to run.">
+      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <span className={`inline-flex items-center gap-1 border rounded-full px-2 py-0.5 text-[10px] font-medium ${badge.cls}`}>
+          {badge.label}
+        </span>
+        <span className="text-muted-foreground">{dev.cores} cores</span>
+        <span className="text-muted-foreground">· {mem}</span>
+        <span className="text-muted-foreground">· {dev.gpu}</span>
+        <span className="text-muted-foreground">· {dev.platform}</span>
+      </div>
+
+      {tier === "low" ? (
+        <p className="text-[11px] text-amber-300/90 mt-2 leading-relaxed">
+          This device is running the <b>low-power profile</b>. Text-to-speech, audio denoise, local AI and auto
+          captions are switched off so the editor stays smooth. On a faster device (4+ cores, 4 GB+ RAM) they turn on
+          automatically.
+        </p>
+      ) : (
+        <>
+          <div className="text-[10px] text-muted-foreground mt-2 mb-1">
+            You can also switch any of these off here (they start {tier === "medium" ? "on" : "on"} for this profile).
+          </div>
+          <div className="space-y-1">
+            {HEAVY_FEATURES.map((f) => {
+              const deviceOk = dev.limits.features[f.id].ok;
+              const on = deviceOk && prefs[f.id] !== false;
+              return (
+                <label
+                  key={f.id}
+                  className={`flex items-center gap-2 text-[11px] rounded px-2 py-1 border border-border ${
+                    deviceOk ? "cursor-pointer hover:border-cyan-400/60" : "opacity-40 cursor-not-allowed"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="accent-cyan-400"
+                    disabled={!deviceOk}
+                    checked={on}
+                    onChange={(e) => toggle(f.id, e.target.checked)}
+                  />
+                  <span className="flex-1">{f.label}</span>
+                  {!deviceOk && <span className="text-[10px] text-amber-300/80">off (device)</span>}
+                </label>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </Tool>
   );
 }
 

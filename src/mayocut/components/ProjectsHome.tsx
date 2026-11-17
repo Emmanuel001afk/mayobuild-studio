@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Clapperboard,
+  Cpu,
   Download,
   FileJson,
   Film,
@@ -27,6 +28,7 @@ import {
   packToTemplates,
   validatePack,
 } from "../assist";
+import { device } from "../device";
 import { db } from "../idb";
 import {
   ASPECTS,
@@ -58,6 +60,7 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
   const fileRef = useRef<HTMLInputElement>(null);
   const packFileRef = useRef<HTMLInputElement>(null);
   const [loaded, setLoaded] = useState(false);
+  const dev = device(); // device capability profile (memoized)
   const [installing, setInstalling] = useState<string | null>(null);
   const [enhanceFor, setEnhanceFor] = useState<UserTemplate | null>(null);
   const [installedPacks, setInstalledPacks] = useState<Set<string>>(new Set());
@@ -283,6 +286,19 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
           </div>
         </div>
       </header>
+
+      {dev.tier === "low" && (
+        <div className="border-b border-amber-500/30 bg-amber-500/10">
+          <div className="max-w-6xl mx-auto px-4 py-2 flex items-center gap-2 text-[12px] text-amber-200">
+            <Cpu className="h-4 w-4 shrink-0" />
+            <span>
+              <b>Low-power device detected</b> ({dev.cores} cores{dev.memoryGB ? `, ${dev.memoryGB} GB RAM` : ""}, {dev.gpu}).
+              Text-to-speech, audio denoise, local AI and auto captions are switched off so editing stays smooth — they
+              turn on automatically on a faster device. Full editing and export still work.
+            </span>
+          </div>
+        </div>
+      )}
 
       <input
         ref={fileRef}

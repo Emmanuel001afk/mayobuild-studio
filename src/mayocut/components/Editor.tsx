@@ -22,6 +22,7 @@ import {
 import { downloadJson, startMicRecording, templateToPackFile } from "../assist";
 import { analyzeMono, denoiseAudio, encodeWavMono } from "../denoise";
 import { tts } from "../tts";
+import { can, device } from "../device";
 import { importLut, loadAllLuts } from "../luts";
 import { db } from "../idb";
 import { Engine, FILTER_PRESETS, mp4Supported, pickMime } from "../engine";
@@ -90,6 +91,7 @@ export function Editor({
   const [exportFps, setExportFps] = useState(30);
   const [exportKbps, setExportKbps] = useState(8000);
   const [exportRes, setExportRes] = useState<1 | 2>(1);
+  const devProfile = device(); // memoized; drives export/feature gating
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [assistOpen, setAssistOpen] = useState(false);
@@ -133,6 +135,9 @@ export function Editor({
     const eng = new Engine(JSON.parse(JSON.stringify(project)));
     engineRef.current = eng;
     eng.setMedia(media);
+    // Stabilization: cap the live-preview buffer on weak devices (exports are
+    // unaffected — they always render at full quality).
+    eng.previewMaxSide = device().limits.previewMaxSide;
     eng.onTime = (v) => setT(v);
     eng.onPlayingChange = (v) => setPlaying(v);
     eng.onVersion = () => {
@@ -630,12 +635,25 @@ export function Editor({
       toast.error("This browser can't record video. Use Chrome or Edge, or the desktop app.");
       return;
     }
+    // Respect this device's capability limits — downgrade (with a note) rather
+    // than render 4K/60fps that a weak CPU/GPU can't sustain.
+    const dev = device();
+    let scale: 1 | 2 = exportRes;
+    let fps = exportFps;
+    if (scale > dev.limits.exportMaxScale) {
+      scale = dev.limits.exportMaxScale;
+      toast.warning("4K export isn't available on this device — exported at full (1080p-class) instead");
+    }
+    if (fps > dev.limits.maxExportFps) {
+      fps = dev.limits.maxExportFps;
+      toast.warning(`This device is capped at ${fps} fps — using that`);
+    }
     const wantMp4 = exportFmt === "mp4" || (exportFmt === "auto" && canMp4);
     const opts = {
-      fps: exportFps,
-      videoBitsPerSecond: (exportKbps * 1000) * (exportRes === 2 ? 1.75 : 1),
+      fps,
+      videoBitsPerSecond: (exportKbps * 1000) * (scale === 2 ? 1.75 : 1),
       audioBitsPerSecond: 192_000,
-      scale: exportRes,
+      scale,
     };
     setExporting(true);
     setExportProgress(0);
@@ -1039,6 +1057,7 @@ export function Editor({
             clip={selClip}
             project={project}
             media={media}
+            denoiseGate={can("denoise")}
             t={t}
             clipStart={clipStart}
             playheadLocal={playheadLocal}
@@ -1152,15 +1171,22 @@ export function Editor({
                 <div className="flex-1">
                   <div className="text-muted-foreground text-xs mb-1">Frame rate</div>
                   <div className="flex gap-1.5">
-                    {[24, 30, 60].map((f) => (
-                      <button
-                        key={f}
-                        className={`text-xs border rounded px-2 py-1 ${exportFps === f ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
-                        onClick={() => setExportFps(f)}
-                      >
-                        {f}
-                      </button>
-                    ))}
+                    {[24, 30, 60].map((f) => {
+                      const off = f > devProfile.limits.maxExportFps;
+                      return (
+                        <button
+                          key={f}
+                          className={`text-xs border rounded px-2 py-1 ${exportFps === f ? "border-cyan-400 bg-cyan-400/10" : "border-border"} ${
+                            off ? "opacity-40 cursor-not-allowed" : ""
+                          }`}
+                          title={off ? `This device is capped at ${devProfile.limits.maxExportFps} fps` : undefined}
+                          disabled={off}
+                          onClick={() => setExportFps(f)}
+                        >
+                          {f}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
                 <div className="flex-1">
@@ -1195,7 +1221,15 @@ export function Editor({
                       {ASPECTS[project.aspect].w}×{ASPECTS[project.aspect].h}
                     </button>
                     <button
-                      className={`text-xs border rounded px-2 py-1 ${exportRes === 2 ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
+                      className={`text-xs border rounded px-2 py-1 ${exportRes === 2 ? "border-cyan-400 bg-cyan-400/10" : "border-border"} ${
+                        devProfile.limits.exportMaxScale < 2 ? "opacity-40 cursor-not-allowed" : ""
+                      }`}
+                      title={
+                        devProfile.limits.exportMaxScale < 2
+                          ? "4K needs more CPU/GPU than this device has — 1080p-class export is enabled"
+                          : undefined
+                      }
+                      disabled={devProfile.limits.exportMaxScale < 2}
                       onClick={() => setExportRes(2)}
                     >
                       4K · {ASPECTS[project.aspect].w * 2}×{ASPECTS[project.aspect].h * 2}
