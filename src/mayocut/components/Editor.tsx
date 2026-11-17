@@ -1382,7 +1382,9 @@ export function Editor({
   );
 
   return (
-    <div className="h-dvh flex flex-col bg-background text-foreground overflow-hidden">
+    // h-screen is the safe base (100dvh is ignored on older WebViews); modern
+    // browsers upgrade to dynamic viewport height so the tab bar stays visible.
+    <div className="h-screen supports-[height:100dvh]:h-dvh flex flex-col bg-background text-foreground overflow-hidden">
       {isMobile ? topbarMobile : topbarDesktop}
       {isMobile ? (
         <>
