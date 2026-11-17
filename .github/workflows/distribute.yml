@@ -61,7 +61,7 @@ jobs:
       # --ignore-scripts: electron's postinstall binary download is handled by
       # electron-builder itself during the build step below.
       - run: npm --prefix desktop ci --ignore-scripts
-      - run: npm --prefix desktop exec electron-builder -- --win --x64
+      - run: cd desktop && npx electron-builder --win --x64
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
