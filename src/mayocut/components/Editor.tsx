@@ -309,9 +309,11 @@ export function Editor({
       } else if (e.key === "Delete" || e.key === "Backspace") {
         deleteSelection();
       } else if (e.key === "ArrowLeft") {
-        eng.seek(eng.t - (e.shiftKey ? 1 : 1 / 30));
+        // Step by the selected export frame rate so frame-accurate review
+        // remains aligned with 24/30/60 fps projects.
+        eng.seek(eng.t - (e.shiftKey ? 1 : 1 / Math.max(1, exportFps)));
       } else if (e.key === "ArrowRight") {
-        eng.seek(eng.t + (e.shiftKey ? 1 : 1 / 30));
+        eng.seek(eng.t + (e.shiftKey ? 1 : 1 / Math.max(1, exportFps)));
       } else if (e.key === "Home") {
         eng.seek(0);
       } else if (e.key === "End") {
@@ -327,7 +329,7 @@ export function Editor({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection, project]);
+  }, [selection, project, exportFps]);
 
   // ------------------------------------------------------------- mutations
 
