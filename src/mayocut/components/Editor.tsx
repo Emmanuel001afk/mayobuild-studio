@@ -152,7 +152,9 @@ export function Editor({
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [assistOpen, setAssistOpen] = useState(false);
-  const [assistInitialTab, setAssistInitialTab] = useState<\n    "tools" | "ai" | "cloud" | "captions" | "voice"\n  >("tools");
+  const [assistInitialTab, setAssistInitialTab] = useState<
+    "tools" | "ai" | "cloud" | "captions" | "voice"
+  >("tools");
   const isMobile = useIsMobile();
   const landscape = useOrientationLandscape();
   // Rotated (landscape) phones: compact the fixed chrome so the preview stays
@@ -160,7 +162,15 @@ export function Editor({
   const compact = isMobile && landscape;
   const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
   const [workspaceTab, setWorkspaceTab] = useState<
-    | "media"\n    | "audio"\n    | "text"\n    | "stickers"\n    | "effects"\n    | "filters"\n    | "transitions"\n    | "captions"\n    | "ai"
+    | "media"
+    | "audio"
+    | "text"
+    | "stickers"
+    | "effects"
+    | "filters"
+    | "transitions"
+    | "captions"
+    | "ai"
   >("media");
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
