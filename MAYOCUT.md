@@ -64,11 +64,16 @@ pulse, sway) plus **keyframes on x/y/scale/rotation/opacity for every clip**.
 - Beat detection → **beat markers drawn on the ruler** → split at every beat
 
 **Export**
-- **MP4 (H.264 + Opus via WebCodecs)**, **WebM (VP9)**, **animated GIF**,
+- **MP4 (H.264 + AAC via WebCodecs when the device exposes AAC encoding)**, **WebM (VP9/Opus)**, **animated GIF**,
   **PNG still**, **WAV (full stereo mix)**
 - 24/30/60 fps, 1080p / 4K, quality ladder; per-device caps with an explanation
 - Export settings are remembered per project
 - Finished exports are kept in an on-device library with **inline preview**
+
+**Media compatibility**
+- Imports common video containers (MP4, MOV, M4V, WebM, MKV, AVI, 3GP, FLV, MPEG/TS variants and others), then probes for a real decoded frame instead of trusting the filename extension
+- Container support is not codec support: MP4/MOV files may contain HEVC/H.265, which some browsers/WebViews cannot decode. The library marks unsupported clips rather than pretending they play; the portable interchange target is MP4 with H.264 video and AAC audio
+- Preview loads active video sources on demand, not every source in the project at once; preview compositing is capped at 30 fps and timeline React updates at 15 fps to reduce playback overhead
 
 **Platform**
 - **8 canvas formats** — 9:16, 4:5, 1:1, 16:9, 3:4, 4:3, 2:3, 21:9
