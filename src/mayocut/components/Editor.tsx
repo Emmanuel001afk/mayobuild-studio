@@ -46,6 +46,7 @@ import {
   type OverlayClip,
   type Project,
   type UserTemplate,
+  type TransitionKind,
 } from "../types";
 import { fmtBytes, fmtTime, importFiles, kindFromMime } from "../utils";
 import { Timeline } from "./Timeline";
@@ -1008,6 +1009,56 @@ export function Editor({
     if (!eng) return;
     const clip = mutateRet((e) => e.addTextClip("t_text", Math.max(0, e.t)));
     if (clip) setSelection({ lane: "overlay", trackId: "t_text", id: clip.id });
+  }
+
+  function addTextPreset(preset: (typeof TEXT_PRESETS)[number]) {
+    const clip = mutateRet((e) => {
+      const created = e.addTextClip("t_text", Math.max(0, e.t));
+      Object.assign(created, preset.patch);
+      return created;
+    });
+    if (clip) setSelection({ lane: "overlay", trackId: "t_text", id: clip.id });
+  }
+
+  function applyMainEffect(effect: EffectId) {
+    if (selection?.lane !== "main") {
+      toast.info("Select a main-track video clip first");
+      return;
+    }
+    const changed = mutateVoid((eng) => {
+      const clip = eng.project.main.find((item) => item.id === selection.id);
+      if (!clip) return false;
+      clip.effect = effect;
+    });
+    if (changed) toast.success("Effect applied to selected clip");
+  }
+
+  function applyMainFilter(filter: string) {
+    if (selection?.lane !== "main") {
+      toast.info("Select a main-track video clip first");
+      return;
+    }
+    mutateVoid((eng) => {
+      const clip = eng.project.main.find((item) => item.id === selection.id);
+      if (!clip) return false;
+      clip.filter = filter;
+    });
+  }
+
+  function applyMainTransition(kind: TransitionKind) {
+    if (selection?.lane !== "main") {
+      toast.info("Select a main-track clip to set its incoming transition");
+      return;
+    }
+    const changed = mutateVoid((eng) => {
+      const index = eng.project.main.findIndex((item) => item.id === selection.id);
+      const clip = eng.project.main[index];
+      if (!clip || index === 0) return false;
+      clip.transitionIn = kind;
+      clip.transitionDur = kind === "none" ? 0 : 0.5;
+    });
+    if (changed) toast.success("Incoming transition updated");
+    else toast.info("The first main-track clip has no incoming transition");
   }
 
   function addEmoji(emoji: string) {
