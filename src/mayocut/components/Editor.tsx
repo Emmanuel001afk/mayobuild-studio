@@ -2101,7 +2101,7 @@ export function Editor({
         </label>
         <button
           className="mb-btn-ghost h-7 px-2"
-          onClick={() => setPps((v) => Math.max(16, v - 12))
+          onClick={() => setPps((v) => Math.max(16, v - 12))}
           title="Zoom out"
         >
           −
