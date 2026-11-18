@@ -208,6 +208,14 @@ const checks = [
   ["undo/redo present", /undo|redo/i.test(html) || document.querySelectorAll("button").length > 10],
   ["inspector visible (desktop)", /canvas format|inspector|tune|shortcuts/i.test(text)],
   ["aspect picker", /16:9|9:16/.test(text)],
+  [
+    "preview render quality controls",
+    [...document.querySelectorAll("select")].some((select) =>
+      ["Auto", "540p", "720p", "1080p"].every((label) =>
+        [...select.options].some((option) => option.textContent === label),
+      ),
+    ),
+  ],
   ["sticker categories visible", /Sticker library/i.test(text) && /Reactions/.test(text) && /Creator/.test(text) && /Lifestyle/.test(text)],
   ["no fatal render error", !/cannot read|is not a function|Minified React error/i.test(text)],
 ];
