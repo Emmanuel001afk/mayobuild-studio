@@ -936,5 +936,25 @@ await t('new creator templates: product and talking-head overlays stay within so
   }
 });
 
+
+// ================= AI background removal matte math =================
+const BM = await import('./b-background-math.mjs');
+console.log('background-math.ts');
+await t('applyAlphaMask: opaque matte preserves source RGBA', () => {
+  const source = new Uint8ClampedArray([20, 40, 60, 255, 90, 80, 70, 128]);
+  const result = BM.applyAlphaMask(source, new Uint8Array([255, 255]), 2, 1);
+  assert.deepEqual(Array.from(result), Array.from(source));
+  assert.deepEqual(Array.from(source), [20, 40, 60, 255, 90, 80, 70, 128], 'source is not mutated');
+});
+await t('applyAlphaMask: transparent and soft matte values become pixel alpha', () => {
+  const source = new Uint8ClampedArray([1, 2, 3, 255, 4, 5, 6, 200, 7, 8, 9, 100]);
+  const result = BM.applyAlphaMask(source, new Uint8Array([0, 128, 255]), 3, 1);
+  assert.deepEqual([result[3], result[7], result[11]], [0, 100, 100]);
+});
+await t('applyAlphaMask: rejects mismatched dimensions and invalid channels', () => {
+  assert.throws(() => BM.applyAlphaMask(new Uint8ClampedArray(8), new Uint8Array(1), 2, 1));
+  assert.throws(() => BM.applyAlphaMask(new Uint8ClampedArray(4), new Uint8Array(4), 1, 1, 0));
+});
+
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
