@@ -89,7 +89,7 @@ export async function removeImageBackground(
       canvas.height,
       mask.channels,
     );
-    ctx.putImageData(new ImageData(rgba, canvas.width, canvas.height), 0, 0);
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), canvas.width, canvas.height), 0, 0);
     const blob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((value) => {
         if (value) resolve(value);
