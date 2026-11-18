@@ -13,7 +13,14 @@ on:
   push:
     branches: ["main"]
     paths:
+      - "src/**"
+      - "android/**"
+      - "desktop/**"
+      - "shell/**"
+      - "scripts/**"
       - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/distribute.yml"
     tags:
       - "mc-*"
   workflow_dispatch:
