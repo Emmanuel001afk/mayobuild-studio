@@ -856,6 +856,7 @@ export class Engine {
     }
     this.onPlayingChange?.(false);
     this.draw();
+    this.onTime?.(this.t);
   }
 
   toggle() {
