@@ -2962,11 +2962,13 @@ export class Engine {
       numberOfChannels: 2,
       bitrate: opts.audioBitsPerSecond,
     };
-    if (!(await supportsAacEncoder(
-      aacConfig.sampleRate!,
-      aacConfig.numberOfChannels!,
-      aacConfig.bitrate!,
-    ))) {
+    if (
+      !(await supportsAacEncoder(
+        aacConfig.sampleRate!,
+        aacConfig.numberOfChannels!,
+        aacConfig.bitrate!,
+      ))
+    ) {
       throw new Error(
         "This device cannot encode AAC audio for a standard MP4 file. Choose WebM or use a device with AAC WebCodecs encoding support.",
       );
