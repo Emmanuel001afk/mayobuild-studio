@@ -45,7 +45,8 @@ async function loadModelBlob(onProgress?: Progress): Promise<Blob> {
       }
       onProgress?.("Downloading MODNet portrait model (about 25 MB)…");
       const response = await fetch(MODEL_URL);
-      if (!response.ok) throw new Error(`Background model download failed (HTTP ${response.status})`);
+      if (!response.ok)
+        throw new Error(`Background model download failed (HTTP ${response.status})`);
       const blob = await response.blob();
       if (blob.size < 1_000_000) throw new Error("The downloaded background model is incomplete");
       await db.putRawBlob(MODEL_CACHE_ID, blob);
