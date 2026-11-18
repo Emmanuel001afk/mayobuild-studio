@@ -268,9 +268,7 @@ export function Editor({
     const deviceCap = devProfile.limits.previewMaxSide;
     const requested = previewQuality === "auto" ? deviceCap : Number(previewQuality);
     eng.previewMaxSide =
-      previewQuality === "auto" || deviceCap <= 0
-        ? requested
-        : Math.min(deviceCap, requested);
+      previewQuality === "auto" || deviceCap <= 0 ? requested : Math.min(deviceCap, requested);
     eng.draw();
   }, [previewQuality, devProfile.limits.previewMaxSide]);
 
