@@ -1,0 +1,71 @@
+# MayoCut logic audit + real render smoke tests.
+#
+# Runs on every push/PR that touches the editor:
+#   1. audit.mjs — 75 pure-logic assertions over types / engine / LUTs /
+#      captions / assist / device gating (freeze frames, transitions, splits,
+#      keyframes, colour grading, speed math, template packs).
+#   2. build the production shell bundle.
+#   3. smoke-shell — the bundle actually boots and renders "/" and "/mayocut".
+#   4. smoke-editor — the EDITOR route mounts with a seeded project and every
+#      new surface (beats, freeze, transitions, ducking, aspect picker).
+#
+# A green build alone is not proof the app works; these steps assert it renders.
+name: audit
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "src/mayocut/**"
+      - "scripts/smoke-*.mjs"
+      - ".diag/**"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "src/mayocut/**"
+      - ".diag/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps --ignore-scripts
+
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Lint (mayocut only)
+        run: npx eslint src/mayocut src/routes/mayocut
+
+      - name: Rebuild pure-logic bundles for the audit
+        run: |
+          npx esbuild src/mayocut/types.ts   --bundle --format=esm --outfile=.diag/b-types.mjs
+          npx esbuild src/mayocut/engine.ts  --bundle --format=esm --outfile=.diag/b-engine.mjs
+          npx esbuild src/mayocut/assist.ts  --bundle --format=esm --outfile=.diag/b-assist.mjs
+          npx esbuild src/mayocut/captions.ts --bundle --format=esm --outfile=.diag/b-captions.mjs
+          npx esbuild src/mayocut/device.ts  --bundle --format=esm --outfile=.diag/b-device.mjs
+          npx esbuild src/mayocut/luts.ts    --bundle --format=esm --outfile=.diag/b-luts.mjs
+
+      - name: Logic audit
+        run: node .diag/audit.mjs
+
+      - name: Build offline shell bundle
+        run: npm run build:shell
+
+      - name: Render smoke (home + /mayocut)
+        run: |
+          npm install --no-save --ignore-scripts happy-dom fake-indexeddb
+          node scripts/smoke-shell.mjs /
+          node scripts/smoke-shell.mjs /mayocut
+          node scripts/smoke-editor.mjs

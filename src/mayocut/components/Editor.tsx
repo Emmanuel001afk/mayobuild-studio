@@ -12,6 +12,7 @@ import {
   Music,
   Plus,
   RotateCcw,
+  RotateCw,
   Scissors,
   Sparkles,
   SlidersHorizontal,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import { downloadJson, startMicRecording, templateToPackFile } from "../assist";
 import { analyzeMono, denoiseAudio, encodeWavMono } from "../denoise";
+import { analyzeAudioBlob, detectBeats } from "../assist";
 import { tts } from "../tts";
 import { can, device } from "../device";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
@@ -47,11 +49,18 @@ import { Inspector } from "./Inspector";
 import { Assist } from "./Assist";
 
 export type Selection =
-  | { lane: "main"; id: string }
-  | { lane: "overlay"; trackId: string; id: string }
-  | null;
+  { lane: "main"; id: string } | { lane: "overlay"; trackId: string; id: string } | null;
 
-type ExportFmt = "auto" | "mp4" | "webm";
+type ExportFmt = "auto" | "mp4" | "webm" | "gif" | "png" | "wav";
+
+const EXPORT_FORMATS: { id: ExportFmt; label: string; need?: "mp4" | null; note?: string }[] = [
+  { id: "auto", label: "Auto" },
+  { id: "mp4", label: "MP4 · H.264", need: "mp4" },
+  { id: "webm", label: "WebM · VP9" },
+  { id: "gif", label: "GIF · animated" },
+  { id: "png", label: "PNG · this frame" },
+  { id: "wav", label: "WAV · audio only" },
+];
 
 const EMPTY_PROJECT: Project = {
   id: "",
@@ -66,7 +75,6 @@ const EMPTY_PROJECT: Project = {
   createdAt: 0,
   updatedAt: 0,
 };
-
 
 /** Phones get a CapCut-style layout (dominant preview + bottom tab bar);
  *  tablets/desktop keep the three-panel studio.
@@ -93,8 +101,8 @@ function useIsMobile() {
 }
 
 function useOrientationLandscape() {
-  const [l, setL] = useState(
-    () => (typeof window !== "undefined" ? window.matchMedia("(orientation: landscape)").matches : false),
+  const [l, setL] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(orientation: landscape)").matches : false,
   );
   useEffect(() => {
     const q = window.matchMedia("(orientation: landscape)");
@@ -143,10 +151,15 @@ export function Editor({
   const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
-  const [recState, setRecState] = useState<{ active: boolean; secs: number; error?: string }>({ active: false, secs: 0 });
+  const [recState, setRecState] = useState<{ active: boolean; secs: number; error?: string }>({
+    active: false,
+    secs: 0,
+  });
   const recRef = useRef<{ stop: () => void } | null>(null);
   const undoStack = useRef<string[]>([]);
+  const redoStack = useRef<string[]>([]);
   const [undoCount, setUndoCount] = useState(0);
+  const [redoCount, setRedoCount] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const autosaveTimer = useRef<number | null>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
@@ -165,6 +178,11 @@ export function Editor({
         }
         setProject(p);
         setMedia(m);
+        if (p.exportPreset) {
+          setExportFps(p.exportPreset.fps);
+          setExportKbps(p.exportPreset.kbps);
+          setExportRes(p.exportPreset.scale);
+        }
       } catch (e) {
         console.error(e);
         setLoadError("Could not load project from local storage.");
@@ -264,20 +282,46 @@ export function Editor({
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       const eng = engineRef.current;
       if (!eng) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) doRedo();
+        else doUndo();
+        return;
+      }
+      if (mod && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        doRedo();
+        return;
+      }
+      if (mod && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        doDuplicate();
+        return;
+      }
       if (e.code === "Space") {
         e.preventDefault();
         eng.toggle();
       } else if (e.key === "s" || e.key === "S") {
         if (doSplit()) toast.success("Split at playhead");
+      } else if (e.key === "f" || e.key === "F") {
+        doFreeze();
       } else if (e.key === "Delete" || e.key === "Backspace") {
         deleteSelection();
       } else if (e.key === "ArrowLeft") {
-        eng.seek(eng.t - 1 / 30);
+        eng.seek(eng.t - (e.shiftKey ? 1 : 1 / 30));
       } else if (e.key === "ArrowRight") {
-        eng.seek(eng.t + 1 / 30);
-      } else if ((e.ctrlKey || e.metaKey) && e.key === "z") {
-        e.preventDefault();
-        doUndo();
+        eng.seek(eng.t + (e.shiftKey ? 1 : 1 / 30));
+      } else if (e.key === "Home") {
+        eng.seek(0);
+      } else if (e.key === "End") {
+        eng.seek(eng.duration());
+      } else if (e.key === "j" || e.key === "J") {
+        if (!eng.playing) void eng.play();
+      } else if (e.key === "k" || e.key === "K") {
+        eng.pause();
+      } else if (e.key === "l" || e.key === "L") {
+        if (!eng.playing) void eng.play();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -291,8 +335,10 @@ export function Editor({
     const eng = engineRef.current;
     if (!eng) return;
     undoStack.current.push(eng.snapshot());
-    if (undoStack.current.length > 60) undoStack.current.shift();
+    if (undoStack.current.length > 80) undoStack.current.shift();
+    redoStack.current = []; // a new edit invalidates the redo branch
     setUndoCount(undoStack.current.length);
+    setRedoCount(0);
   }, []);
 
   const doUndo = useCallback(() => {
@@ -303,6 +349,21 @@ export function Editor({
       toast.info("Nothing to undo");
       return;
     }
+    redoStack.current.push(eng.snapshot());
+    setRedoCount(redoStack.current.length);
+    eng.restore(snap);
+  }, []);
+
+  const doRedo = useCallback(() => {
+    const eng = engineRef.current;
+    const snap = redoStack.current.pop();
+    setRedoCount(redoStack.current.length);
+    if (!eng || !snap) {
+      toast.info("Nothing to redo");
+      return;
+    }
+    undoStack.current.push(eng.snapshot());
+    setUndoCount(undoStack.current.length);
     eng.restore(snap);
   }, []);
 
@@ -386,14 +447,17 @@ export function Editor({
   // ------------------------------------------------------------- drag-to-move
   // Dragging a text/sticker directly on the preview repositions it (the
   // CapCut way). One undo snapshot per drag gesture.
-  const onOverlayDragStart = useCallback((clipId: string) => {
-    const eng = engineRef.current;
-    if (!eng) return;
-    const trackId = eng.overlayTrackOf(clipId);
-    if (!trackId) return;
-    pushUndo();
-    setSelection({ lane: "overlay", trackId, id: clipId });
-  }, [pushUndo]);
+  const onOverlayDragStart = useCallback(
+    (clipId: string) => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      const trackId = eng.overlayTrackOf(clipId);
+      if (!trackId) return;
+      pushUndo();
+      setSelection({ lane: "overlay", trackId, id: clipId });
+    },
+    [pushUndo],
+  );
 
   const onOverlayDragMove = useCallback((clipId: string, x: number, y: number) => {
     engineRef.current?.setOverlayFreePos(clipId, x, y);
@@ -476,6 +540,148 @@ export function Editor({
     [pushUndo],
   );
 
+  /**
+   * Trim a main clip on the timeline.
+   *
+   * The old right-edge formula clamped `out` to `in + 0.1` — dragging the
+   * right handle collapsed the clip to a tenth of a second. This version
+   * clamps to the media length and keeps at least one frame on each side.
+   */
+  const trimMain = useCallback(
+    (id: string, edge: "in" | "out", srcTime: number) => {
+      mutateVoid((eng) => {
+        const c = eng.project.main.find((x) => x.id === id);
+        if (!c) return false;
+        const media = eng.getMedia(c.mediaId);
+        const len = media?.duration && media.duration > 0 ? media.duration : undefined;
+        const MIN = 1 / 30;
+        if (edge === "in") {
+          const maxIn = c.out - MIN;
+          c.in = Math.max(0, Math.min(srcTime, maxIn));
+        } else {
+          const minOut = c.in + MIN;
+          const maxOut = len ?? srcTime;
+          c.out = Math.max(minOut, Math.min(srcTime, maxOut));
+        }
+        if (c.freeze) c.out = Math.max(c.in + 0.2, c.out);
+      });
+    },
+    [mutateVoid],
+  );
+
+  // ------------------------------------------------------------- freeze frame
+
+  const doFreeze = useCallback(() => {
+    const eng = engineRef.current;
+    if (!eng || eng.duration() === 0) {
+      toast.info("Add a clip first — nothing to freeze");
+      return;
+    }
+    const ok = mutateVoid((e) => {
+      e.freezeAt(e.t, 3);
+    });
+    if (ok) toast.success("Frozen frame inserted (3 s)");
+  }, [mutateVoid]);
+
+  /** Aspect change keeps a single undo step and refreshes the canvas. */
+  const setAspect = useCallback(
+    (a: AspectId) => {
+      mutateVoid((eng) => eng.setAspect(a));
+    },
+    [mutateVoid],
+  );
+
+  /** Colour match: copy this clip's grade to every other main clip. */
+  const doMatchColor = useCallback(
+    (clipId: string) => {
+      const eng = engineRef.current;
+      const src = eng?.project.main.find((c) => c.id === clipId);
+      if (!src) return;
+      const grade = { ...src.adjust };
+      const filter = src.filter;
+      const lut = src.lut;
+      mutateVoid((e) => {
+        let n = 0;
+        for (const c of e.project.main) {
+          if (c.id === clipId) continue;
+          c.adjust = { ...grade };
+          c.filter = filter;
+          c.lut = lut;
+          n++;
+        }
+        if (n === 0) return false;
+      });
+      toast.success("Color matched across the timeline");
+    },
+    [mutateVoid],
+  );
+
+  /** Beat detection from the timeline toolbar (audio under the playhead). */
+  const doDetectBeats = useCallback(
+    async (mediaId: string) => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      const audioClips = eng.project.tracks
+        .flatMap((tr) => tr.clips)
+        .filter((c) => c.kind === "audio" && c.mediaId);
+      const target =
+        (mediaId && audioClips.find((c) => c.mediaId === mediaId)) ||
+        audioClips.find((c) => eng.t >= c.start && eng.t < c.start + c.duration) ||
+        audioClips[0];
+      if (!target?.mediaId) {
+        toast.info("Add an audio clip (music or voiceover) first");
+        return;
+      }
+      const blob = await db.getBlob(target.mediaId);
+      if (!blob) {
+        toast.error("Audio data isn't on this device");
+        return;
+      }
+      try {
+        const { peaks, duration } = await analyzeAudioBlob(blob, 0.04);
+        const found = detectBeats(peaks, duration, 24);
+        if (found.length < 2) {
+          toast.error("No clear rhythm found in that track");
+          return;
+        }
+        // beat times are source-relative: map to timeline via the clip
+        const shifted = found.map((b) => b + target.start).filter((b) => b <= eng.duration());
+        pushUndo();
+        eng.setBeats(shifted);
+        toast.success(`${shifted.length} beat markers on the ruler`);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Beat analysis failed");
+      }
+    },
+    [pushUndo],
+  );
+
+  /** Import a font (.ttf/.otf) — stored on-device, usable in text clips. */
+  async function importFont(file: File) {
+    try {
+      const family = `mc-${file.name.replace(/[^\w]+/g, "-").toLowerCase()}-${Math.random().toString(36).slice(2, 6)}`;
+      const buf = await file.arrayBuffer();
+      const face = new FontFace(family, buf);
+      await face.load();
+      (document.fonts as FontFaceSet).add(face);
+      const fonts = [
+        ...(project?.fonts ?? []),
+        { id: family, family, name: file.name.replace(/\.[a-z0-9]+$/i, "") },
+      ];
+      await db
+        .saveFont?.({ id: family, family, name: file.name, blob: new Blob([buf]) })
+        .catch(() => undefined);
+      mutateVoid((eng) => {
+        eng.project.fonts = fonts;
+      });
+      toast.success(`Font “${file.name}” imported`);
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? `Could not load that font: ${e.message}` : "Could not load that font",
+      );
+    }
+  }
+
   // ------------------------------------------------------------- RNNoise denoise (batch)
 
   async function denoiseSelected() {
@@ -502,7 +708,9 @@ export function Editor({
     try {
       const blob = await db.getBlob(mediaId);
       if (!blob) throw new Error("media blob not found");
-      const res = await denoiseAudio(blob, (d, tot) => setDenoise({ mediaId, progress: tot ? d / tot : 0 }));
+      const res = await denoiseAudio(blob, (d, tot) =>
+        setDenoise({ mediaId, progress: tot ? d / tot : 0 }),
+      );
       const { wave, rms } = analyzeMono(res.samples);
       const base = m.name.replace(/\.[a-z0-9]{2,5}$/i, "");
       const item: MediaItem = {
@@ -673,7 +881,10 @@ export function Editor({
     if (!eng) return;
     const used =
       eng.project.main.filter((c) => c.mediaId === item.id).length +
-      eng.project.tracks.reduce((a, tr) => a + tr.clips.filter((c) => c.mediaId === item.id).length, 0);
+      eng.project.tracks.reduce(
+        (a, tr) => a + tr.clips.filter((c) => c.mediaId === item.id).length,
+        0,
+      );
     const msg = used
       ? `Remove “${item.name}” from the library?\nIt is used by ${used} timeline clip(s) — those will be removed too.`
       : `Remove “${item.name}” from the library?`;
@@ -752,7 +963,7 @@ export function Editor({
       setSelection({ lane: "main", id: clip.id });
       if (eng.project.main.length > 1) {
         toast.success(
-          `Added after the last clip — ${eng.project.main.length} clips on the timeline (tap one in Tune to split, mute or move it)`
+          `Added after the last clip — ${eng.project.main.length} clips on the timeline (tap one in Tune to split, mute or move it)`,
         );
       }
     }
@@ -783,14 +994,20 @@ export function Editor({
   const refreshLuts = useCallback(async () => {
     const map = await loadAllLuts();
     engineRef.current?.setLuts(map);
-    setLutList(Array.from(map.values()).map((l) => ({ id: l.name, name: l.name, builtin: l.builtin })));
+    setLutList(
+      Array.from(map.values()).map((l) => ({ id: l.name, name: l.name, builtin: l.builtin })),
+    );
   }, []);
   useEffect(() => {
     void refreshLuts();
   }, [refreshLuts]);
   async function onImportLut(f: File) {
     try {
-      const name = f.name.replace(/\.cube$/i, "").replace(/[^\w\-]+/g, "-").toLowerCase() || "custom-lut";
+      const name =
+        f.name
+          .replace(/\.cube$/i, "")
+          .replace(/[^\w-]+/g, "-")
+          .toLowerCase() || "custom-lut";
       const t = await importLut(name, f);
       await refreshLuts();
       toast.success(`LUT "${t.name}" imported — pick it in the clip's Color LUT section`);
@@ -800,13 +1017,48 @@ export function Editor({
   }
 
   const EMOJI_STICKERS = useMemo(
-    () =>
-      [
-        "🔥", "❤️", "😂", "😮", "👀", "👏", "💯", "✨", "⚡", "🎉",
-        "🚀", "💰", "📈", "🏆", "🎯", "🍿", "🥶", "😍", "🤯", "👉",
-        "👆", "✅", "❌", "⭐", "🌊", "🌙", "☀️", "🎵", "🎬", "📱",
-        "💬", "🙌", "💪", "🧠", "👑", "🍕", "🏖️", "🎮", "🛹", "📸",
-      ],
+    () => [
+      "🔥",
+      "❤️",
+      "😂",
+      "😮",
+      "👀",
+      "👏",
+      "💯",
+      "✨",
+      "⚡",
+      "🎉",
+      "🚀",
+      "💰",
+      "📈",
+      "🏆",
+      "🎯",
+      "🍿",
+      "🥶",
+      "😍",
+      "🤯",
+      "👉",
+      "👆",
+      "✅",
+      "❌",
+      "⭐",
+      "🌊",
+      "🌙",
+      "☀️",
+      "🎵",
+      "🎬",
+      "📱",
+      "💬",
+      "🙌",
+      "💪",
+      "🧠",
+      "👑",
+      "🍕",
+      "🏖️",
+      "🎮",
+      "🛹",
+      "📸",
+    ],
     [],
   );
 
@@ -821,6 +1073,71 @@ export function Editor({
       toast.error("The timeline is empty — add media first");
       return;
     }
+    // Remember the user's export choices on the project (CapCut remembers too).
+    eng.project.exportPreset = { fps: exportFps, kbps: exportKbps, scale: exportRes };
+    scheduleAutosave();
+
+    const save = async (blob: Blob, baseName: string, ext: string) => {
+      const name = `${baseName}.${ext}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 8000);
+      await db
+        .saveExport(
+          { id: uid("exp"), name, size: blob.size, createdAt: Date.now(), mime: blob.type },
+          blob,
+        )
+        .catch(() => undefined);
+      toast.success(
+        `Exported ${fmtBytes(blob.size)} (${ext.toUpperCase()}) — saved to this device`,
+      );
+    };
+    const baseName = eng.project.name.replace(/[^\w\- ]+/g, "").trim() || "mayocut";
+
+    // --- non-video formats -------------------------------------------------
+    if (exportFmt === "png" || exportFmt === "wav") {
+      setExporting(true);
+      setExportProgress(0);
+      try {
+        if (exportFmt === "png") {
+          const blob = await eng.exportStill(ASPECTS[eng.project.aspect].w * exportRes);
+          await save(blob, `${baseName}-frame`, "png");
+        } else {
+          const blob = await eng.exportAudioWav((p) => setExportProgress(p));
+          await save(blob, baseName, "wav");
+        }
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Export failed");
+      } finally {
+        setExporting(false);
+        setShowExport(false);
+      }
+      return;
+    }
+
+    if (exportFmt === "gif") {
+      setExporting(true);
+      setExportProgress(0);
+      try {
+        toast.info("GIF renders frame-by-frame — a few seconds per clip length");
+        const blob = await eng.exportGIF(
+          { fps: Math.min(exportFps, 15), maxSide: exportRes === 2 ? 720 : 480 },
+          (p) => setExportProgress(p),
+        );
+        await save(blob, baseName, "gif");
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "GIF export failed");
+      } finally {
+        setExporting(false);
+        setShowExport(false);
+      }
+      return;
+    }
+
+    // --- video formats -----------------------------------------------------
     if (!pickMime() && !canMp4) {
       toast.error("This browser can't record video. Use Chrome or Edge, or the desktop app.");
       return;
@@ -832,7 +1149,9 @@ export function Editor({
     let fps = exportFps;
     if (scale > dev.limits.exportMaxScale) {
       scale = dev.limits.exportMaxScale;
-      toast.warning("4K export isn't available on this device — exported at full (1080p-class) instead");
+      toast.warning(
+        "4K export isn't available on this device — exported at full (1080p-class) instead",
+      );
     }
     if (fps > dev.limits.maxExportFps) {
       fps = dev.limits.maxExportFps;
@@ -841,7 +1160,7 @@ export function Editor({
     const wantMp4 = exportFmt === "mp4" || (exportFmt === "auto" && canMp4);
     const opts = {
       fps,
-      videoBitsPerSecond: (exportKbps * 1000) * (scale === 2 ? 1.75 : 1),
+      videoBitsPerSecond: exportKbps * 1000 * (scale === 2 ? 1.75 : 1),
       audioBitsPerSecond: 192_000,
       scale,
     };
@@ -863,22 +1182,7 @@ export function Editor({
         blob = await eng.exportMedia(opts, (p) => setExportProgress(p));
       }
       const ext = blob.type.includes("mp4") ? "mp4" : "webm";
-      const name = `${eng.project.name.replace(/[^\w\- ]+/g, "").trim() || "mayocut"}.${ext}`;
-      // download
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = name;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 8000);
-      // keep a copy in the local export library
-      const extItem = { id: uid("exp"), name, size: blob.size, createdAt: Date.now(), mime: blob.type };
-      try {
-        await db.saveExport(extItem, blob);
-      } catch {
-        /* storage full — the download already succeeded */
-      }
-      toast.success(`Exported ${fmtBytes(blob.size)} (${ext.toUpperCase()}) — saved to this device`);
+      await save(blob, baseName, ext);
     } catch (e: unknown) {
       console.error(e);
       toast.error(e instanceof Error ? e.message : "Export failed");
@@ -909,7 +1213,7 @@ export function Editor({
       // remember original file names so other devices can re-match media
       const names: Record<string, string> = {};
       for (const m of media) names[m.id] = m.name;
-      (tpl.project as any).__mediaNames = names;
+      (tpl.project as Project & { __mediaNames?: Record<string, string> }).__mediaNames = names;
       await db.saveTemplate(tpl);
       toast.success("Template saved — find it in the template gallery");
     })().finally(() => setSavingTemplate(false));
@@ -921,7 +1225,7 @@ export function Editor({
     const proj = JSON.parse(JSON.stringify(eng.project));
     const names: Record<string, string> = {};
     for (const m of media) names[m.id] = m.name;
-    (proj as any).__mediaNames = names;
+    (proj as Project & { __mediaNames?: Record<string, string> }).__mediaNames = names;
     const tpl: UserTemplate = {
       id: eng.project.id,
       name: eng.project.name,
@@ -932,7 +1236,10 @@ export function Editor({
       project: proj,
     };
     const pack = templateToPackFile(tpl);
-    downloadJson(`${(eng.project.name || "template").replace(/[^\w\- ]+/g, "_")}.mayocut-pack.json`, pack);
+    downloadJson(
+      `${(eng.project.name || "template").replace(/[^\w\- ]+/g, "_")}.mayocut-pack.json`,
+      pack,
+    );
     toast.success("Template pack exported — share the .json file");
   }
 
@@ -940,10 +1247,11 @@ export function Editor({
 
   const spans = mainSpans(project ?? EMPTY_PROJECT);
   const dur = project ? projectDuration(project) : 0;
-  const selClip: (MainClip | OverlayClip | null) = (() => {
+  const selClip: MainClip | OverlayClip | null = (() => {
     const eng = engineRef.current;
     if (!eng || !selection) return null;
-    if (selection.lane === "main") return eng.project.main.find((c) => c.id === selection.id) ?? null;
+    if (selection.lane === "main")
+      return eng.project.main.find((c) => c.id === selection.id) ?? null;
     for (const tr of eng.project.tracks) {
       const c = tr.clips.find((x) => x.id === selection.id);
       if (c) return c;
@@ -951,7 +1259,9 @@ export function Editor({
     return null;
   })();
 
-  const { clipStart, local: playheadLocal } = selClip ? clipLocal(engineRef.current!, selClip.id) : { clipStart: 0, local: null };
+  const { clipStart, local: playheadLocal } = selClip
+    ? clipLocal(engineRef.current!, selClip.id)
+    : { clipStart: 0, local: null };
   const anim: AnimValues =
     selClip && engineRef.current
       ? engineRef.current.animAtPlayhead(selClip, clipStart)
@@ -996,7 +1306,10 @@ export function Editor({
         <div className="mb-card p-8 max-w-sm text-center">
           <Clapperboard className="h-8 w-8 mx-auto text-muted-foreground mb-3" />
           <div className="font-semibold">{loadError}</div>
-          <button className="mb-btn mt-4" onClick={onExit ?? (() => window.location.assign("/mayocut"))}>
+          <button
+            className="mb-btn mt-4"
+            onClick={onExit ?? (() => window.location.assign("/mayocut"))}
+          >
             Back to projects
           </button>
         </div>
@@ -1018,48 +1331,66 @@ export function Editor({
 
   const topbarDesktop = (
     <div className="h-12 border-b border-border flex items-center gap-2 px-3 shrink-0">
-        <button className="mb-btn-ghost h-8 px-2" onClick={onExit ?? (() => window.location.assign("/mayocut"))} title="Save & close">
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-        <Scissors className="h-4 w-4 text-primary" />
-        <input
-          className="bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 text-sm w-44 md:w-64"
-          value={project.name}
-          onChange={(e) => {
-            const eng = engineRef.current;
-            if (eng) {
-              eng.project.name = e.target.value;
-              setProject({ ...eng.project });
-              scheduleAutosave();
-            }
-          }}
-        />
-        <span className="mb-chip hidden md:flex items-center gap-1">
-          <WifiOff className="h-3 w-3" /> offline
-        </span>
+      <button
+        className="mb-btn-ghost h-8 px-2"
+        onClick={onExit ?? (() => window.location.assign("/mayocut"))}
+        title="Save & close"
+      >
+        <ArrowLeft className="h-4 w-4" />
+      </button>
+      <Scissors className="h-4 w-4 text-primary" />
+      <input
+        className="bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 text-sm w-44 md:w-64"
+        value={project.name}
+        onChange={(e) => {
+          const eng = engineRef.current;
+          if (eng) {
+            eng.project.name = e.target.value;
+            setProject({ ...eng.project });
+            scheduleAutosave();
+          }
+        }}
+      />
+      <span className="mb-chip hidden md:flex items-center gap-1">
+        <WifiOff className="h-3 w-3" /> offline
+      </span>
+      <button
+        className="mb-chip hidden lg:flex items-center gap-1 hover:border-primary"
+        onClick={() => setAssistOpen(true)}
+        title="Assist: on-device tools (beats, loudness, color) + optional local AI"
+      >
+        <Sparkles className="h-3 w-3" /> Assist
+      </button>
+      <div className="ml-auto flex items-center gap-2">
         <button
-          className="mb-chip hidden lg:flex items-center gap-1 hover:border-primary"
-          onClick={() => setAssistOpen(true)}
-          title="Assist: on-device tools (beats, loudness, color) + optional local AI"
+          className="mb-btn-ghost h-8 px-2 text-xs"
+          onClick={() => void saveAsTemplate()}
+          disabled={savingTemplate}
         >
-          <Sparkles className="h-3 w-3" /> Assist
+          <Clapperboard className="h-3.5 w-3.5" /> {savingTemplate ? "Saving…" : "Save as template"}
         </button>
-        <div className="ml-auto flex items-center gap-2">
-          <button className="mb-btn-ghost h-8 px-2 text-xs" onClick={() => void saveAsTemplate()} disabled={savingTemplate}>
-            <Clapperboard className="h-3.5 w-3.5" /> {savingTemplate ? "Saving…" : "Save as template"}
-          </button>
-          <button className="mb-btn-ghost h-8 px-2 text-xs" onClick={exportTemplateJson} title="Export this project as a shareable .json template pack">
-            <FileJson className="h-3.5 w-3.5" /> Export pack
-          </button>
-          <button className="mb-btn h-8 px-3 text-sm bg-primary" onClick={() => setShowExport(true)}>
-            <Download className="h-4 w-4" /> Export
-          </button>
-        </div>
+        <button
+          className="mb-btn-ghost h-8 px-2 text-xs"
+          onClick={exportTemplateJson}
+          title="Export this project as a shareable .json template pack"
+        >
+          <FileJson className="h-3.5 w-3.5" /> Export pack
+        </button>
+        <button className="mb-btn h-8 px-3 text-sm bg-primary" onClick={() => setShowExport(true)}>
+          <Download className="h-4 w-4" /> Export
+        </button>
       </div>
+    </div>
   );
   const topbarMobile = (
-    <div className={`shrink-0 border-b border-border flex items-center gap-1.5 px-2 ${compact ? "h-11" : "h-12"}`}>
-      <button className="mb-btn-ghost h-8 w-8 p-0" onClick={onExit ?? (() => window.location.assign("/mayocut"))} title="Save & close">
+    <div
+      className={`shrink-0 border-b border-border flex items-center gap-1.5 px-2 ${compact ? "h-11" : "h-12"}`}
+    >
+      <button
+        className="mb-btn-ghost h-8 w-8 p-0"
+        onClick={onExit ?? (() => window.location.assign("/mayocut"))}
+        title="Save & close"
+      >
         <ArrowLeft className="h-4 w-4" />
       </button>
       <Scissors className="h-4 w-4 text-primary shrink-0" />
@@ -1075,13 +1406,25 @@ export function Editor({
           }
         }}
       />
-      <button className="mb-btn-ghost h-8 w-8 p-0" onClick={() => void saveAsTemplate()} disabled={savingTemplate} title="Save as template">
+      <button
+        className="mb-btn-ghost h-8 w-8 p-0"
+        onClick={() => void saveAsTemplate()}
+        disabled={savingTemplate}
+        title="Save as template"
+      >
         <Clapperboard className="h-4 w-4" />
       </button>
-      <button className="mb-btn-ghost h-8 w-8 p-0" onClick={exportTemplateJson} title="Export this project as a shareable .json template pack">
+      <button
+        className="mb-btn-ghost h-8 w-8 p-0"
+        onClick={exportTemplateJson}
+        title="Export this project as a shareable .json template pack"
+      >
         <FileJson className="h-4 w-4" />
       </button>
-      <button className="mb-btn h-8 px-3 text-xs bg-primary shrink-0" onClick={() => setShowExport(true)}>
+      <button
+        className="mb-btn h-8 px-3 text-xs bg-primary shrink-0"
+        onClick={() => setShowExport(true)}
+      >
         <Download className="h-4 w-4" /> Export
       </button>
     </div>
@@ -1130,174 +1473,222 @@ export function Editor({
   const mediaPanel = (
     <div className="w-52 md:w-60 border-r border-border flex flex-col shrink-0">
       <div className="p-2 border-b border-border">
-            <button className="mb-btn w-full h-8 text-xs" onClick={() => fileRef.current?.click()}>
-              <Upload className="h-3.5 w-3.5" /> Import media
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              multiple
-              accept="video/*,image/*,audio/*"
-              className="hidden"
-              onChange={(e) => {
-                void onImport(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            <button
-              className={`mb-btn-ghost w-full h-7 mt-1 text-[11px] ${recState.active ? "text-red-400 border-red-400/50" : ""}`}
-              onClick={startRecording}
-              title="Record voiceover or music from the microphone"
-            >
-              {recState.active ? (
-                <span className="flex items-center justify-center gap-1">
-                  <Square className="h-3 w-3" /> Stop · {recState.secs}s
-                </span>
-              ) : (
-                <span className="flex items-center justify-center gap-1">
-                  <Mic className="h-3 w-3" /> Record audio
-                </span>
-              )}
-            </button>
-            <div className="flex gap-1 mt-2">
+        <button className="mb-btn w-full h-8 text-xs" onClick={() => fileRef.current?.click()}>
+          <Upload className="h-3.5 w-3.5" /> Import media
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept="video/*,image/*,audio/*"
+          className="hidden"
+          onChange={(e) => {
+            void onImport(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <button
+          className={`mb-btn-ghost w-full h-7 mt-1 text-[11px] ${recState.active ? "text-red-400 border-red-400/50" : ""}`}
+          onClick={startRecording}
+          title="Record voiceover or music from the microphone"
+        >
+          {recState.active ? (
+            <span className="flex items-center justify-center gap-1">
+              <Square className="h-3 w-3" /> Stop · {recState.secs}s
+            </span>
+          ) : (
+            <span className="flex items-center justify-center gap-1">
+              <Mic className="h-3 w-3" /> Record audio
+            </span>
+          )}
+        </button>
+        <div className="flex gap-1 mt-2">
+          <button
+            className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "main" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
+            onClick={() => setAddMode("main")}
+          >
+            + clip → timeline
+          </button>
+          <button
+            className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "overlay" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
+            onClick={() => setAddMode("overlay")}
+          >
+            + sticker → overlay
+          </button>
+        </div>
+        <button className="mb-btn-ghost w-full h-7 mt-1 text-[11px]" onClick={addText}>
+          <Plus className="h-3 w-3" /> Add text at playhead
+        </button>
+        <div className="mt-2">
+          <div className="text-[10px] text-muted-foreground mb-1">Stickers (emoji, instant)</div>
+          <div className="flex gap-0.5 flex-wrap">
+            {EMOJI_STICKERS.map((em) => (
               <button
-                className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "main" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-                onClick={() => setAddMode("main")}
+                key={em}
+                className="h-7 w-7 rounded hover:bg-slate-700 text-base leading-none"
+                title={`Add ${em}`}
+                onClick={() => addEmoji(em)}
               >
-                + clip → timeline
+                {em}
               </button>
-              <button
-                className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "overlay" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-                onClick={() => setAddMode("overlay")}
-              >
-                + sticker → overlay
-              </button>
-            </div>
-            <button className="mb-btn-ghost w-full h-7 mt-1 text-[11px]" onClick={addText}>
-              <Plus className="h-3 w-3" /> Add text at playhead
-            </button>
-            <div className="mt-2">
-              <div className="text-[10px] text-muted-foreground mb-1">Stickers (emoji, instant)</div>
-              <div className="flex gap-0.5 flex-wrap">
-                {EMOJI_STICKERS.map((em) => (
-                  <button
-                    key={em}
-                    className="h-7 w-7 rounded hover:bg-slate-700 text-base leading-none"
-                    title={`Add ${em}`}
-                    onClick={() => addEmoji(em)}
-                  >
-                    {em}
-                  </button>
-                ))}
-              </div>
-            </div>
+            ))}
           </div>
-          <div className={`flex-1 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}>
-            {media.map(mediaCard)}
-            {media.length === 0 && (
-              <div className="col-span-2 text-[11px] text-muted-foreground text-center py-6">
-                Library empty.
-                <br />
-                Import media to start.
-              </div>
-            )}
+        </div>
+      </div>
+      <div
+        className={`flex-1 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}
+      >
+        {media.map(mediaCard)}
+        {media.length === 0 && (
+          <div className="col-span-2 text-[11px] text-muted-foreground text-center py-6">
+            Library empty.
+            <br />
+            Import media to start.
           </div>
+        )}
+      </div>
     </div>
   );
   const previewArea = (
     <div className="flex-1 min-h-0 flex items-center justify-center bg-black/60 p-2 sm:p-3 relative overflow-hidden">
-            <div
-              ref={canvasWrapRef}
-              className="relative max-h-full max-w-full"
-              style={{
-                aspectRatio: `${ASPECTS[project.aspect].w} / ${ASPECTS[project.aspect].h}`,
-                height: "100%",
-              }}
-            >
-              <EditorCanvas
-                engine={engineRef}
-                project={project}
-                onReady={(c) => engineRef.current?.bind(c)}
-                onDragStart={onOverlayDragStart}
-                onDragMove={onOverlayDragMove}
-                onDragEnd={onOverlayDragEnd}
-              />
+      <div
+        ref={canvasWrapRef}
+        className="relative max-h-full max-w-full"
+        style={{
+          aspectRatio: `${ASPECTS[project.aspect].w} / ${ASPECTS[project.aspect].h}`,
+          height: "100%",
+        }}
+      >
+        <EditorCanvas
+          engine={engineRef}
+          project={project}
+          onReady={(c) => engineRef.current?.bind(c)}
+          onDragStart={onOverlayDragStart}
+          onDragMove={onOverlayDragMove}
+          onDragEnd={onOverlayDragEnd}
+        />
+      </div>
+      {brokenAtPlayhead && (
+        <div className="absolute bottom-2 inset-x-2 sm:inset-x-8 bg-amber-400/15 border border-amber-400/40 text-amber-200 rounded-lg px-3 py-2 text-[11px] sm:text-xs leading-snug pointer-events-none">
+          ⚠ “{brokenAtPlayhead}” can't be decoded on this device (usually an HEVC camera clip). Its{" "}
+          <b>audio + captions still work</b> — for the picture, convert it to H.264 (any video
+          converter / compressor app) and import it again.
+        </div>
+      )}
+      {spans.length === 0 && project.tracks.every((tr) => tr.clips.length === 0) && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="text-center text-muted-foreground text-xs sm:text-sm max-w-[92%] bg-black/60 rounded-lg px-4 py-3">
+            <Film className="h-8 w-8 mx-auto mb-2 opacity-60" />
+            Import media on the left, then click a clip to add it
+            <div className="text-xs mt-1 opacity-70">
+              or start from a template on the home screen
             </div>
-            {brokenAtPlayhead && (
-              <div className="absolute bottom-2 inset-x-2 sm:inset-x-8 bg-amber-400/15 border border-amber-400/40 text-amber-200 rounded-lg px-3 py-2 text-[11px] sm:text-xs leading-snug pointer-events-none">
-                ⚠ “{brokenAtPlayhead}” can't be decoded on this device (usually an HEVC camera clip).
-                Its <b>audio + captions still work</b> — for the picture, convert it to H.264 (any video
-                converter / compressor app) and import it again.
-              </div>
-            )}
-            {spans.length === 0 && project.tracks.every((tr) => tr.clips.length === 0) && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="text-center text-muted-foreground text-xs sm:text-sm max-w-[92%] bg-black/60 rounded-lg px-4 py-3">
-                  <Film className="h-8 w-8 mx-auto mb-2 opacity-60" />
-                  Import media on the left, then click a clip to add it
-                  <div className="text-xs mt-1 opacity-70">or start from a template on the home screen</div>
-                </div>
-              </div>
-            )}
           </div>
+        </div>
+      )}
+    </div>
   );
   const transportDesktop = (
     <div className="h-10 border-t border-border flex items-center gap-2 px-3 text-xs shrink-0">
-            <button className="mb-btn-ghost h-7 px-3" onClick={() => engineRef.current?.toggle()}>
-              {playing ? "❚❚" : "▶"}
-            </button>
-            <button
-              className={`mb-btn-ghost h-7 px-2 ${loop ? "text-primary" : "text-muted-foreground"}`}
-              onClick={() => {
-                const v = !loop;
-                setLoop(v);
-                if (engineRef.current) engineRef.current.loop = v;
-              }}
-              title="Loop"
-            >
-              ⟳
-            </button>
-            <button className="mb-btn-ghost h-7 px-2" onClick={doUndo} title="Undo (Ctrl+Z)">
-              <RotateCcw className="h-3.5 w-3.5" /> {undoCount > 0 && <span className="text-[10px] text-muted-foreground">{undoCount}</span>}
-            </button>
-            <span className="font-mono tabular-nums">
-              {fmtTime(t)} <span className="text-muted-foreground">/ {fmtTime(dur)}</span>
-            </span>
-            {selection && (
-              <div className="flex items-center gap-1">
-                <button className="mb-btn-ghost h-7 px-2 text-[10px]" onClick={doSplit} title="Split at playhead (S)">
-                  ✂ Split
-                </button>
-                <button className="mb-btn-ghost h-7 px-2 text-[10px]" onClick={doDuplicate} title="Duplicate selected clip">
-                  ⧉ Duplicate
-                </button>
-                <button className="mb-btn-ghost h-7 px-2 text-[10px] text-red-400" onClick={deleteSelection} title="Delete selected clip (Del)">
-                  🗑 Delete
-                </button>
-              </div>
-            )}
-            <div className="ml-auto flex items-center gap-2">
-              <button className="mb-btn-ghost h-7 px-2" onClick={() => setPps((v) => Math.max(16, v - 12))} title="Zoom out">
-                −
-              </button>
-              <input
-                type="range"
-                min={16}
-                max={160}
-                step={4}
-                value={pps}
-                onChange={(e) => setPps(Number(e.target.value))}
-                className="w-28 accent-cyan-400"
-                title="Timeline zoom"
-              />
-              <button className="mb-btn-ghost h-7 px-2" onClick={() => setPps((v) => Math.min(160, v + 12))} title="Zoom in">
-                +
-              </button>
-            </div>
-          </div>
+      <button className="mb-btn-ghost h-7 px-3" onClick={() => engineRef.current?.toggle()}>
+        {playing ? "❚❚" : "▶"}
+      </button>
+      <button
+        className={`mb-btn-ghost h-7 px-2 ${loop ? "text-primary" : "text-muted-foreground"}`}
+        onClick={() => {
+          const v = !loop;
+          setLoop(v);
+          if (engineRef.current) engineRef.current.loop = v;
+        }}
+        title="Loop"
+      >
+        ⟳
+      </button>
+      <button
+        className="mb-btn-ghost h-7 px-2"
+        onClick={doUndo}
+        title="Undo (Ctrl+Z)"
+        disabled={undoCount === 0}
+      >
+        <RotateCcw className="h-3.5 w-3.5" />{" "}
+        {undoCount > 0 && <span className="text-[10px] text-muted-foreground">{undoCount}</span>}
+      </button>
+      <button
+        className="mb-btn-ghost h-7 px-2"
+        onClick={doRedo}
+        title="Redo (Ctrl+Shift+Z)"
+        disabled={redoCount === 0}
+      >
+        <RotateCw className="h-3.5 w-3.5" />{" "}
+        {redoCount > 0 && <span className="text-[10px] text-muted-foreground">{redoCount}</span>}
+      </button>
+      <button
+        className="mb-btn-ghost h-7 px-2 text-[10px]"
+        onClick={doFreeze}
+        title="Freeze frame at playhead (F)"
+      >
+        ❄
+      </button>
+      <span className="font-mono tabular-nums">
+        {fmtTime(t)} <span className="text-muted-foreground">/ {fmtTime(dur)}</span>
+      </span>
+      {selection && (
+        <div className="flex items-center gap-1">
+          <button
+            className="mb-btn-ghost h-7 px-2 text-[10px]"
+            onClick={doSplit}
+            title="Split at playhead (S)"
+          >
+            ✂ Split
+          </button>
+          <button
+            className="mb-btn-ghost h-7 px-2 text-[10px]"
+            onClick={doDuplicate}
+            title="Duplicate selected clip"
+          >
+            ⧉ Duplicate
+          </button>
+          <button
+            className="mb-btn-ghost h-7 px-2 text-[10px] text-red-400"
+            onClick={deleteSelection}
+            title="Delete selected clip (Del)"
+          >
+            🗑 Delete
+          </button>
+        </div>
+      )}
+      <div className="ml-auto flex items-center gap-2">
+        <button
+          className="mb-btn-ghost h-7 px-2"
+          onClick={() => setPps((v) => Math.max(16, v - 12))}
+          title="Zoom out"
+        >
+          −
+        </button>
+        <input
+          type="range"
+          min={16}
+          max={160}
+          step={4}
+          value={pps}
+          onChange={(e) => setPps(Number(e.target.value))}
+          className="w-28 accent-cyan-400"
+          title="Timeline zoom"
+        />
+        <button
+          className="mb-btn-ghost h-7 px-2"
+          onClick={() => setPps((v) => Math.min(160, v + 12))}
+          title="Zoom in"
+        >
+          +
+        </button>
+      </div>
+    </div>
   );
   const transportMobile = (
-    <div className={`shrink-0 border-t border-border flex items-center gap-1 px-2 text-xs ${compact ? "h-9" : "h-10"}`}>
+    <div
+      className={`shrink-0 border-t border-border flex items-center gap-1 px-2 text-xs ${compact ? "h-9" : "h-10"}`}
+    >
       <button className="mb-btn-ghost h-7 px-2.5" onClick={() => engineRef.current?.toggle()}>
         {playing ? "❚❚" : "▶"}
       </button>
@@ -1312,84 +1703,153 @@ export function Editor({
       >
         ⟳
       </button>
-      <button className="mb-btn-ghost h-7 px-2" onClick={doUndo} title="Undo (Ctrl+Z)">
+      <button
+        className="mb-btn-ghost h-7 px-2"
+        onClick={doUndo}
+        title="Undo (Ctrl+Z)"
+        disabled={undoCount === 0}
+      >
         <RotateCcw className="h-3.5 w-3.5" />
+      </button>
+      <button
+        className="mb-btn-ghost h-7 px-2"
+        onClick={doRedo}
+        title="Redo"
+        disabled={redoCount === 0}
+      >
+        <RotateCw className="h-3.5 w-3.5" />
       </button>
       <span className="font-mono tabular-nums ml-1">
         {fmtTime(t)} <span className="text-muted-foreground">/ {fmtTime(dur)}</span>
       </span>
       {selection && (
         <div className="flex items-center gap-0.5 ml-1">
-          <button className="mb-btn-ghost h-7 px-1.5 text-[10px]" onClick={doSplit} title="Split at playhead">✂</button>
-          <button className="mb-btn-ghost h-7 px-1.5 text-[10px]" onClick={doDuplicate} title="Duplicate clip">⧉</button>
-          <button className="mb-btn-ghost h-7 px-1.5 text-[10px] text-red-400" onClick={deleteSelection} title="Delete clip">🗑</button>
+          <button
+            className="mb-btn-ghost h-7 px-1.5 text-[10px]"
+            onClick={doSplit}
+            title="Split at playhead"
+          >
+            ✂
+          </button>
+          <button
+            className="mb-btn-ghost h-7 px-1.5 text-[10px]"
+            onClick={doDuplicate}
+            title="Duplicate clip"
+          >
+            ⧉
+          </button>
+          <button
+            className="mb-btn-ghost h-7 px-1.5 text-[10px] text-red-400"
+            onClick={deleteSelection}
+            title="Delete clip"
+          >
+            🗑
+          </button>
         </div>
       )}
       <div className="ml-auto flex items-center gap-1">
-        <button className="mb-btn-ghost h-7 w-7 p-0" onClick={() => setPps((v) => Math.max(16, v - 12))} title="Zoom out">−</button>
-        <button className="mb-btn-ghost h-7 w-7 p-0" onClick={() => setPps((v) => Math.min(160, v + 12))} title="Zoom in">+</button>
+        <button
+          className="mb-btn-ghost h-7 w-7 p-0"
+          onClick={() => setPps((v) => Math.max(16, v - 12))}
+          title="Zoom out"
+        >
+          −
+        </button>
+        <button
+          className="mb-btn-ghost h-7 w-7 p-0"
+          onClick={() => setPps((v) => Math.min(160, v + 12))}
+          title="Zoom in"
+        >
+          +
+        </button>
       </div>
     </div>
   );
+  /** One Inspector instance, shared by the desktop panel and the mobile Tune sheet. */
+  const renderInspector = () => (
+    <Inspector
+      selection={selection}
+      clip={selClip}
+      project={project}
+      media={media}
+      denoiseGate={can("denoise")}
+      t={t}
+      clipStart={clipStart}
+      playheadLocal={playheadLocal}
+      anim={anim}
+      onPatchMain={(patch) => {
+        if (!selection || selection.lane !== "main") return;
+        mutateVoid((eng) => {
+          const c = eng.project.main.find((x) => x.id === selection.id);
+          if (!c) return false;
+          Object.assign(c, patch);
+          if (patch.adjust) c.adjust = { ...c.adjust, ...patch.adjust };
+        });
+      }}
+      onPatchOverlay={(trackId, patch) => {
+        if (!selection || selection.lane !== "overlay") return;
+        mutateVoid((eng) => {
+          const tr = eng.project.tracks.find((x) => x.id === trackId);
+          const c = tr?.clips.find((x) => x.id === selection.id);
+          if (!c) return false;
+          Object.assign(c, patch);
+        });
+      }}
+      onAnimChange={onAnimChange}
+      onKeyframeAdd={onKeyframeAdd}
+      onKeyframeDelete={onKeyframeDelete}
+      onSetAspect={setAspect}
+      onReplaceMedia={(clipId, item) =>
+        mutateVoid((eng) => {
+          eng.replaceMainClipMedia(clipId, item);
+        })
+      }
+      onSplit={doSplit}
+      onDuplicate={doDuplicate}
+      onDelete={deleteSelection}
+      onSeek={(v) => engineRef.current?.seek(v)}
+      filters={FILTER_PRESETS}
+      luts={lutList}
+      onImportLut={(f) => void onImportLut(f)}
+      denoise={denoise}
+      onDenoise={() => void denoiseSelected()}
+      onExtractAudio={() => void extractAudioSelected()}
+      extracting={extracting}
+      onFreeze={doFreeze}
+      onApplyTransitionAll={(kind, dur) =>
+        mutateVoid((eng) => {
+          eng.setTransitionAll(kind, dur);
+        })
+      }
+      onMatchColor={doMatchColor}
+      onSetBackground={(color) =>
+        mutateVoid((eng) => {
+          eng.project.background = color;
+        })
+      }
+      onPatchProject={(patch) =>
+        mutateVoid((eng) => {
+          Object.assign(eng.project, patch);
+        })
+      }
+      onSplitAtBeats={() => {
+        const n = mutateRet((eng) => eng.splitAtAllBeats());
+        if (n) toast.success(`Split at ${n} beat${n === 1 ? "" : "s"}`);
+        else toast.info("Detect beats first (timeline toolbar → beats)");
+      }}
+      onImportFont={(f) => void importFont(f)}
+      projectFonts={project.fonts}
+    />
+  );
   const inspectorPanel = (
     <div className="w-60 md:w-72 border-l border-border shrink-0 overflow-y-auto">
-      <Inspector
-            selection={selection}
-            clip={selClip}
-            project={project}
-            media={media}
-            denoiseGate={can("denoise")}
-            t={t}
-            clipStart={clipStart}
-            playheadLocal={playheadLocal}
-            anim={anim}
-            onPatchMain={(patch) => {
-              if (!selection || selection.lane !== "main") return;
-              mutateVoid((eng) => {
-                const c = eng.project.main.find((x) => x.id === selection.id);
-                if (!c) return false;
-                Object.assign(c, patch);
-                if (patch.adjust) c.adjust = { ...c.adjust, ...patch.adjust };
-              });
-            }}
-            onPatchOverlay={(trackId, patch) => {
-              if (!selection || selection.lane !== "overlay") return;
-              mutateVoid((eng) => {
-                const tr = eng.project.tracks.find((x) => x.id === trackId);
-                const c = tr?.clips.find((x) => x.id === selection.id);
-                if (!c) return false;
-                Object.assign(c, patch);
-              });
-            }}
-            onAnimChange={onAnimChange}
-            onKeyframeAdd={onKeyframeAdd}
-            onKeyframeDelete={onKeyframeDelete}
-            onSetAspect={(a) => {
-              const eng = engineRef.current;
-              if (eng) {
-                pushUndo();
-                eng.setAspect(a);
-              }
-            }}
-            onReplaceMedia={(clipId, item) =>
-              mutateVoid((eng) => {
-                eng.replaceMainClipMedia(clipId, item);
-              })
-            }
-            onSplit={doSplit}
-            onDuplicate={doDuplicate}
-            onDelete={deleteSelection}
-            onSeek={(v) => engineRef.current?.seek(v)}
-            filters={FILTER_PRESETS}
-            luts={lutList}
-            onImportLut={(f) => void onImportLut(f)}
-            denoise={denoise}
-            onDenoise={() => void denoiseSelected()}
-          />
+      {renderInspector()}
     </div>
   );
   const bottomBar = (
-    <div className={`shrink-0 border-t border-border grid grid-cols-4 bg-card/90 backdrop-blur ${compact ? "h-12" : "h-14"}`}>
+    <div
+      className={`shrink-0 border-t border-border grid grid-cols-4 bg-card/90 backdrop-blur ${compact ? "h-12" : "h-14"}`}
+    >
       {(
         [
           { id: "media", icon: Film, label: "Media" },
@@ -1403,7 +1863,9 @@ export function Editor({
           className={`flex flex-col items-center justify-center gap-0.5 text-[10px] ${
             b.id === "assist" || sheet === b.id ? "text-cyan-300" : "text-muted-foreground"
           }`}
-          onClick={() => (b.id === "assist" ? setAssistOpen(true) : setSheet(sheet === b.id ? null : b.id))}
+          onClick={() =>
+            b.id === "assist" ? setAssistOpen(true) : setSheet(sheet === b.id ? null : b.id)
+          }
         >
           <b.icon className="h-5 w-5" />
           {b.label}
@@ -1418,79 +1880,88 @@ export function Editor({
           <DrawerHeader className="p-3 pb-2 text-left">
             <DrawerTitle className="text-sm">Media library</DrawerTitle>
           </DrawerHeader>
-          <div className="overflow-y-auto px-3 pb-8"><div className="p-2 border-b border-border">
-            <button className="mb-btn w-full h-8 text-xs" onClick={() => fileRef.current?.click()}>
-              <Upload className="h-3.5 w-3.5" /> Import media
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              multiple
-              accept="video/*,image/*,audio/*"
-              className="hidden"
-              onChange={(e) => {
-                void onImport(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            <button
-              className={`mb-btn-ghost w-full h-7 mt-1 text-[11px] ${recState.active ? "text-red-400 border-red-400/50" : ""}`}
-              onClick={startRecording}
-              title="Record voiceover or music from the microphone"
-            >
-              {recState.active ? (
-                <span className="flex items-center justify-center gap-1">
-                  <Square className="h-3 w-3" /> Stop · {recState.secs}s
-                </span>
-              ) : (
-                <span className="flex items-center justify-center gap-1">
-                  <Mic className="h-3 w-3" /> Record audio
-                </span>
-              )}
-            </button>
-            <div className="flex gap-1 mt-2">
+          <div className="overflow-y-auto px-3 pb-8">
+            <div className="p-2 border-b border-border">
               <button
-                className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "main" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-                onClick={() => setAddMode("main")}
+                className="mb-btn w-full h-8 text-xs"
+                onClick={() => fileRef.current?.click()}
               >
-                + clip → timeline
+                <Upload className="h-3.5 w-3.5" /> Import media
               </button>
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                accept="video/*,image/*,audio/*"
+                className="hidden"
+                onChange={(e) => {
+                  void onImport(e.target.files);
+                  e.target.value = "";
+                }}
+              />
               <button
-                className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "overlay" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-                onClick={() => setAddMode("overlay")}
+                className={`mb-btn-ghost w-full h-7 mt-1 text-[11px] ${recState.active ? "text-red-400 border-red-400/50" : ""}`}
+                onClick={startRecording}
+                title="Record voiceover or music from the microphone"
               >
-                + sticker → overlay
+                {recState.active ? (
+                  <span className="flex items-center justify-center gap-1">
+                    <Square className="h-3 w-3" /> Stop · {recState.secs}s
+                  </span>
+                ) : (
+                  <span className="flex items-center justify-center gap-1">
+                    <Mic className="h-3 w-3" /> Record audio
+                  </span>
+                )}
               </button>
-            </div>
-            <button className="mb-btn-ghost w-full h-7 mt-1 text-[11px]" onClick={addText}>
-              <Plus className="h-3 w-3" /> Add text at playhead
-            </button>
-            <div className="mt-2">
-              <div className="text-[10px] text-muted-foreground mb-1">Stickers (emoji, instant)</div>
-              <div className="flex gap-0.5 flex-wrap">
-                {EMOJI_STICKERS.map((em) => (
-                  <button
-                    key={em}
-                    className="h-7 w-7 rounded hover:bg-slate-700 text-base leading-none"
-                    title={`Add ${em}`}
-                    onClick={() => addEmoji(em)}
-                  >
-                    {em}
-                  </button>
-                ))}
+              <div className="flex gap-1 mt-2">
+                <button
+                  className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "main" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
+                  onClick={() => setAddMode("main")}
+                >
+                  + clip → timeline
+                </button>
+                <button
+                  className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "overlay" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
+                  onClick={() => setAddMode("overlay")}
+                >
+                  + sticker → overlay
+                </button>
               </div>
+              <button className="mb-btn-ghost w-full h-7 mt-1 text-[11px]" onClick={addText}>
+                <Plus className="h-3 w-3" /> Add text at playhead
+              </button>
+              <div className="mt-2">
+                <div className="text-[10px] text-muted-foreground mb-1">
+                  Stickers (emoji, instant)
+                </div>
+                <div className="flex gap-0.5 flex-wrap">
+                  {EMOJI_STICKERS.map((em) => (
+                    <button
+                      key={em}
+                      className="h-7 w-7 rounded hover:bg-slate-700 text-base leading-none"
+                      title={`Add ${em}`}
+                      onClick={() => addEmoji(em)}
+                    >
+                      {em}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div
+              className={`flex-1 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}
+            >
+              {media.map(mediaCard)}
+              {media.length === 0 && (
+                <div className="col-span-2 text-[11px] text-muted-foreground text-center py-6">
+                  Library empty.
+                  <br />
+                  Import media to start.
+                </div>
+              )}
             </div>
           </div>
-          <div className={`flex-1 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}>
-            {media.map(mediaCard)}
-            {media.length === 0 && (
-              <div className="col-span-2 text-[11px] text-muted-foreground text-center py-6">
-                Library empty.
-                <br />
-                Import media to start.
-              </div>
-            )}
-          </div></div>
         </DrawerContent>
       </Drawer>
       <Drawer open={sheet === "add"} onClose={() => setSheet(null)}>
@@ -1503,18 +1974,25 @@ export function Editor({
               <Plus className="h-4 w-4" /> Add text at playhead
             </button>
             <div>
-              <div className="text-[10px] text-muted-foreground mb-1.5">Stickers (emoji, instant)</div>
+              <div className="text-[10px] text-muted-foreground mb-1.5">
+                Stickers (emoji, instant)
+              </div>
               <div className="grid grid-cols-8 gap-1">
                 {EMOJI_STICKERS.map((em) => (
-                  <button key={em} className="h-9 w-9 rounded-lg border border-border hover:border-cyan-400/60 text-lg leading-none" title={`Add ${em}`} onClick={() => addEmoji(em)}>
+                  <button
+                    key={em}
+                    className="h-9 w-9 rounded-lg border border-border hover:border-cyan-400/60 text-lg leading-none"
+                    title={`Add ${em}`}
+                    onClick={() => addEmoji(em)}
+                  >
                     {em}
                   </button>
                 ))}
               </div>
             </div>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Audio: record a voiceover or import a track in <b>Media</b>. Spoken voice (text-to-speech) lives in{" "}
-              <b>Assist → Voice</b>.
+              Audio: record a voiceover or import a track in <b>Media</b>. Spoken voice
+              (text-to-speech) lives in <b>Assist → Voice</b>.
             </p>
           </div>
         </DrawerContent>
@@ -1522,66 +2000,16 @@ export function Editor({
       <Drawer open={sheet === "tune"} onClose={() => setSheet(null)}>
         <DrawerContent className="max-h-[82dvh]">
           <DrawerHeader className="p-3 pb-2 text-left">
-            <DrawerTitle className="text-sm">{selection ? "Tune the selected clip" : "Tune"}</DrawerTitle>
+            <DrawerTitle className="text-sm">
+              {selection ? "Tune the selected clip" : "Tune"}
+            </DrawerTitle>
             <span className="text-[11px] text-muted-foreground font-normal">
-              {selection ? "Filters, motion, keyframes, text, position and audio." : "Tap a clip on the timeline first."}
+              {selection
+                ? "Filters, motion, keyframes, text, position and audio."
+                : "Tap a clip on the timeline first."}
             </span>
           </DrawerHeader>
-          <div className="overflow-y-auto px-3 pb-8"><Inspector
-            selection={selection}
-            clip={selClip}
-            project={project}
-            media={media}
-            denoiseGate={can("denoise")}
-            t={t}
-            clipStart={clipStart}
-            playheadLocal={playheadLocal}
-            anim={anim}
-            onPatchMain={(patch) => {
-              if (!selection || selection.lane !== "main") return;
-              mutateVoid((eng) => {
-                const c = eng.project.main.find((x) => x.id === selection.id);
-                if (!c) return false;
-                Object.assign(c, patch);
-                if (patch.adjust) c.adjust = { ...c.adjust, ...patch.adjust };
-              });
-            }}
-            onPatchOverlay={(trackId, patch) => {
-              if (!selection || selection.lane !== "overlay") return;
-              mutateVoid((eng) => {
-                const tr = eng.project.tracks.find((x) => x.id === trackId);
-                const c = tr?.clips.find((x) => x.id === selection.id);
-                if (!c) return false;
-                Object.assign(c, patch);
-              });
-            }}
-            onAnimChange={onAnimChange}
-            onKeyframeAdd={onKeyframeAdd}
-            onKeyframeDelete={onKeyframeDelete}
-            onSetAspect={(a) => {
-              const eng = engineRef.current;
-              if (eng) {
-                pushUndo();
-                eng.setAspect(a);
-              }
-            }}
-            onReplaceMedia={(clipId, item) =>
-              mutateVoid((eng) => {
-                eng.replaceMainClipMedia(clipId, item);
-              })
-            }
-            onSplit={doSplit}
-            onDuplicate={doDuplicate}
-            onDelete={deleteSelection}
-            onSeek={(v) => engineRef.current?.seek(v)}
-            filters={FILTER_PRESETS}
-            luts={lutList}
-            onImportLut={(f) => void onImportLut(f)}
-            denoise={denoise}
-            onDenoise={() => void denoiseSelected()}
-            onExtractAudio={() => void extractAudioSelected()}
-            extracting={extracting}
-          /></div>
+          <div className="overflow-y-auto px-3 pb-8">{renderInspector()}</div>
         </DrawerContent>
       </Drawer>
     </>
@@ -1605,30 +2033,42 @@ export function Editor({
               spans={spans}
               onSeek={(v) => engineRef.current?.seek(v)}
               onSelect={(sel) => {
-              setSelection(sel);
-              if (isMobile) setSheet("tune");
-            }}
-              onMainTrim={(id, edge, srcTime) =>
-                mutateVoid((eng) => {
-                  const c = eng.project.main.find((x) => x.id === id);
-                  if (!c) return false;
-                  if (edge === "in") c.in = Math.max(0, Math.min(srcTime, c.out - 0.1));
-                  else c.out = Math.min(c.in + 0.1, Math.max(srcTime, c.in + 0.1));
-                })
-              }
+                setSelection(sel);
+                if (isMobile) setSheet("tune");
+              }}
+              onMainTrim={trimMain}
               onMainSpeed={(id, speed) =>
                 mutateVoid((eng) => {
                   const c = eng.project.main.find((x) => x.id === id);
-                  if (c) c.speed = speed;
+                  if (!c) return false;
+                  c.speed = speed;
                 })
               }
               onMainMove={(id, dir) => mutateVoid((eng) => eng.moveMainClip(id, dir))}
+              onMainReorder={(id, idx) => mutateVoid((eng) => eng.reorderMainClip(id, idx))}
               onOverlayPatch={(trackId, clipId, patch) =>
                 mutateVoid((eng) => {
                   const tr = eng.project.tracks.find((x) => x.id === trackId);
                   const c = tr?.clips.find((x) => x.id === clipId);
                   if (!c) return false;
                   Object.assign(c, patch);
+                })
+              }
+              onOverlayMoveTrack={(clipId, trackId) =>
+                mutateVoid((eng) => {
+                  eng.moveOverlayToTrack(clipId, trackId);
+                })
+              }
+              onTrackFlag={(trackId, patch) =>
+                mutateVoid((eng) => {
+                  eng.setTrackFlag(trackId, patch);
+                })
+              }
+              onZoomChange={setPps}
+              onDetectBeats={(mediaId) => void doDetectBeats(mediaId)}
+              onClearBeats={() =>
+                mutateVoid((eng) => {
+                  eng.setBeats([]);
                 })
               }
               onSplit={doSplit}
@@ -1648,44 +2088,52 @@ export function Editor({
             {transportDesktop}
             <div className="h-56 border-t border-border shrink-0">
               <Timeline
-              project={project}
-              pps={pps}
-              t={t}
-              selection={selection}
-              spans={spans}
-              onSeek={(v) => engineRef.current?.seek(v)}
-              onSelect={(sel) => {
-              setSelection(sel);
-              if (isMobile) setSheet("tune");
-            }}
-              onMainTrim={(id, edge, srcTime) =>
-                mutateVoid((eng) => {
-                  const c = eng.project.main.find((x) => x.id === id);
-                  if (!c) return false;
-                  if (edge === "in") c.in = Math.max(0, Math.min(srcTime, c.out - 0.1));
-                  else c.out = Math.min(c.in + 0.1, Math.max(srcTime, c.in + 0.1));
-                })
-              }
-              onMainSpeed={(id, speed) =>
-                mutateVoid((eng) => {
-                  const c = eng.project.main.find((x) => x.id === id);
-                  if (c) c.speed = speed;
-                })
-              }
-              onMainMove={(id, dir) => mutateVoid((eng) => eng.moveMainClip(id, dir))}
-              onOverlayPatch={(trackId, clipId, patch) =>
-                mutateVoid((eng) => {
-                  const tr = eng.project.tracks.find((x) => x.id === trackId);
-                  const c = tr?.clips.find((x) => x.id === clipId);
-                  if (!c) return false;
-                  Object.assign(c, patch);
-                })
-              }
-              onSplit={doSplit}
-              onDelete={deleteSelection}
-              onDeselect={() => setSelection(null)}
-              media={media}
-            />
+                project={project}
+                pps={pps}
+                t={t}
+                selection={selection}
+                spans={spans}
+                onSeek={(v) => engineRef.current?.seek(v)}
+                onSelect={(sel) => setSelection(sel)}
+                onMainTrim={trimMain}
+                onMainSpeed={(id, speed) =>
+                  mutateVoid((eng) => {
+                    const c = eng.project.main.find((x) => x.id === id);
+                    if (c) c.speed = speed;
+                  })
+                }
+                onMainMove={(id, dir) => mutateVoid((eng) => eng.moveMainClip(id, dir))}
+                onMainReorder={(id, idx) => mutateVoid((eng) => eng.reorderMainClip(id, idx))}
+                onOverlayPatch={(trackId, clipId, patch) =>
+                  mutateVoid((eng) => {
+                    const tr = eng.project.tracks.find((x) => x.id === trackId);
+                    const c = tr?.clips.find((x) => x.id === clipId);
+                    if (!c) return false;
+                    Object.assign(c, patch);
+                  })
+                }
+                onOverlayMoveTrack={(clipId, trackId) =>
+                  mutateVoid((eng) => {
+                    eng.moveOverlayToTrack(clipId, trackId);
+                  })
+                }
+                onTrackFlag={(trackId, patch) =>
+                  mutateVoid((eng) => {
+                    eng.setTrackFlag(trackId, patch);
+                  })
+                }
+                onZoomChange={setPps}
+                onDetectBeats={(mediaId) => void doDetectBeats(mediaId)}
+                onClearBeats={() =>
+                  mutateVoid((eng) => {
+                    eng.setBeats([]);
+                  })
+                }
+                onSplit={doSplit}
+                onDelete={deleteSelection}
+                onDeselect={() => setSelection(null)}
+                media={media}
+              />
             </div>
           </div>
           {inspectorPanel}
@@ -1704,13 +2152,19 @@ export function Editor({
         />
       )}
       {showExport && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => !exporting && setShowExport(false)}>
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          onClick={() => !exporting && setShowExport(false)}
+        >
           <div className="mb-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2">
               <Download className="h-5 w-5 text-primary" />
               <h3 className="font-bold text-lg">Export video</h3>
               {!exporting && (
-                <button className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => setShowExport(false)}>
+                <button
+                  className="ml-auto text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowExport(false)}
+                >
                   <X className="h-4 w-4" />
                 </button>
               )}
@@ -1718,67 +2172,86 @@ export function Editor({
             <div className="mt-4 space-y-3 text-sm">
               <div>
                 <div className="text-muted-foreground text-xs mb-1">Format</div>
-                <div className="flex gap-1.5">
-                  {(
-                    [
-                      ["auto", canMp4 ? "Auto (MP4 here)" : "Auto (WebM here)"],
-                      ["mp4", canMp4 ? "MP4 · H.264" : "MP4 · needs Chrome/Edge"],
-                      ["webm", "WebM · VP9"],
-                    ] as [ExportFmt, string][]
-                  ).map(([v, label]) => (
-                    <button
-                      key={v}
-                      className={`text-xs border rounded px-2 py-1 ${exportFmt === v ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
-                      onClick={() => setExportFmt(v)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <div className="text-muted-foreground text-xs mb-1">Frame rate</div>
-                  <div className="flex gap-1.5">
-                    {[24, 30, 60].map((f) => {
-                      const off = f > devProfile.limits.maxExportFps;
-                      return (
-                        <button
-                          key={f}
-                          className={`text-xs border rounded px-2 py-1 ${exportFps === f ? "border-cyan-400 bg-cyan-400/10" : "border-border"} ${
-                            off ? "opacity-40 cursor-not-allowed" : ""
-                          }`}
-                          title={off ? `This device is capped at ${devProfile.limits.maxExportFps} fps` : undefined}
-                          disabled={off}
-                          onClick={() => setExportFps(f)}
-                        >
-                          {f}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="flex-1">
-                  <div className="text-muted-foreground text-xs mb-1">Quality</div>
-                  <div className="flex gap-1.5">
-                    {(
-                      [
-                        [4000, "4"],
-                        [8000, "8"],
-                        [16000, "16"],
-                      ] as [number, string][]
-                    ).map(([k, label]) => (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {EXPORT_FORMATS.map((f) => {
+                    const unsupported = f.need === "mp4" && !canMp4;
+                    return (
                       <button
-                        key={k}
-                        className={`text-xs border rounded px-2 py-1 ${exportKbps === k ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
-                        onClick={() => setExportKbps(k)}
+                        key={f.id}
+                        className={`text-[11px] border rounded px-2 py-1.5 text-left ${
+                          exportFmt === f.id
+                            ? "border-cyan-400 bg-cyan-400/10"
+                            : "border-border hover:border-white/40"
+                        } ${unsupported ? "opacity-50" : ""}`}
+                        title={
+                          unsupported ? "MP4 needs Chrome/Edge — WebM works everywhere" : f.note
+                        }
+                        onClick={() => setExportFmt(f.id)}
                       >
-                        {label}M
+                        {f.id === "auto" ? (canMp4 ? "Auto (MP4)" : "Auto (WebM)") : f.label}
                       </button>
-                    ))}
+                    );
+                  })}
+                </div>
+                {(exportFmt === "gif" || exportFmt === "png" || exportFmt === "wav") && (
+                  <p className="text-[10px] text-amber-200/80 mt-1.5 leading-snug">
+                    {exportFmt === "gif"
+                      ? "GIF: silent, 15 fps, capped at 480–720 px — perfect for chats and sticker packs."
+                      : exportFmt === "png"
+                        ? "PNG: a still of the current playhead frame (set the frame you want first)."
+                        : "WAV: the full audio mix, 16-bit stereo — podcasts, voiceovers, music beds."}
+                  </p>
+                )}
+              </div>
+              {exportFmt !== "png" && exportFmt !== "wav" && (
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <div className="text-muted-foreground text-xs mb-1">Frame rate</div>
+                    <div className="flex gap-1.5">
+                      {[24, 30, 60].map((f) => {
+                        const off = f > devProfile.limits.maxExportFps;
+                        return (
+                          <button
+                            key={f}
+                            className={`text-xs border rounded px-2 py-1 ${exportFps === f ? "border-cyan-400 bg-cyan-400/10" : "border-border"} ${
+                              off ? "opacity-40 cursor-not-allowed" : ""
+                            }`}
+                            title={
+                              off
+                                ? `This device is capped at ${devProfile.limits.maxExportFps} fps`
+                                : undefined
+                            }
+                            disabled={off}
+                            onClick={() => setExportFps(f)}
+                          >
+                            {f}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-muted-foreground text-xs mb-1">Quality</div>
+                    <div className="flex gap-1.5">
+                      {(
+                        [
+                          [4000, "4"],
+                          [8000, "8"],
+                          [16000, "16"],
+                        ] as [number, string][]
+                      ).map(([k, label]) => (
+                        <button
+                          key={k}
+                          className={`text-xs border rounded px-2 py-1 ${exportKbps === k ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
+                          onClick={() => setExportKbps(k)}
+                        >
+                          {label}M
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
               <div className="flex gap-3">
                 <div className="flex-1">
                   <div className="text-muted-foreground text-xs mb-1">Resolution</div>
@@ -1812,7 +2285,8 @@ export function Editor({
               </div>
               {exportRes === 2 && (
                 <p className="text-[11px] text-amber-300/90 -mt-1">
-                  4K uses more battery/heat and needs a decent GPU — the MP4 encoder may fall back to WebM on weak devices.
+                  4K uses more battery/heat and needs a decent GPU — the MP4 encoder may fall back
+                  to WebM on weak devices.
                 </p>
               )}
               <Row k="Length" v={fmtTime(dur)} />
@@ -1832,18 +2306,20 @@ export function Editor({
               </div>
             ) : (
               <button className="mb-btn w-full mt-5" onClick={() => void runExport()}>
-                <Loader2 className={`h-4 w-4 ${dur === 0 ? "animate-spin" : "opacity-0"}`} /> Start export
+                <Loader2 className={`h-4 w-4 ${dur === 0 ? "animate-spin" : "opacity-0"}`} /> Start
+                export
               </button>
             )}
             {unplayableMainCount > 0 && (
               <p className="text-[11px] text-amber-300/90 -mt-1">
-                ⚠ {unplayableMainCount} clip(s) can't be decoded on this device — they will be exported as audio over
-                a black screen.
+                ⚠ {unplayableMainCount} clip(s) can't be decoded on this device — they will be
+                exported as audio over a black screen.
               </p>
             )}
             <p className="text-[11px] text-muted-foreground mt-3">
-              MP4 (H.264 + Opus) is encoded by the WebCodecs engine — Chrome, Edge and the desktop/Android builds. The
-              finished video is saved on this device (downloads + export library).
+              MP4 (H.264 + Opus) is encoded by the WebCodecs engine — Chrome, Edge and the
+              desktop/Android builds. The finished video is saved on this device (downloads + export
+              library).
             </p>
           </div>
         </div>

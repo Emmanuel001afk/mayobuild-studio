@@ -111,7 +111,8 @@ export async function denoiseAudio(
   onProgress?: (done: number, total: number) => void,
 ): Promise<DenoiseResult> {
   const Ctor =
-    window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) throw new Error("WebAudio is not available");
 
   // 1) decode + downmix to mono (native rate)

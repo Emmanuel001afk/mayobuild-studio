@@ -10,7 +10,7 @@ import {
   DEFAULT_ANIM,
   fontCss,
   mainClipDuration,
-  mainRateAt,
+  mainPlaybackRate,
   mainSpans,
   mainSrcAt,
   projectDuration,
@@ -26,10 +26,13 @@ import {
   type OverlayTrack,
   type Project,
   type TextPos,
+  type TransitionKind,
+  isDipTo,
+  freezeClipFrom,
 } from "./types";
 import { applyLut, type LutTable } from "./luts";
 import { makeImpulse, probeGif } from "./utils";
-import { GifReader } from "omggif";
+import { GifReader, GifWriter } from "omggif";
 
 /** Decode every frame of a GIF into canvases (capped; null if too big). */
 function decodeGifFrames(blob: Blob): Promise<{ frames: CanvasImageSource[]; fps: number } | null> {
@@ -73,19 +76,43 @@ export const FILTER_PRESETS: { id: string; name: string; css: string }[] = [
   { id: "cool", name: "Cool", css: "hue-rotate(-8deg) saturate(1.15) brightness(1.02)" },
   { id: "bw", name: "B&W", css: "grayscale(1)" },
   { id: "noir", name: "Noir", css: "grayscale(1) contrast(1.35) brightness(0.95)" },
-  { id: "vintage", name: "Vintage", css: "sepia(0.4) contrast(1.05) brightness(1.06) saturate(0.85)" },
+  {
+    id: "vintage",
+    name: "Vintage",
+    css: "sepia(0.4) contrast(1.05) brightness(1.06) saturate(0.85)",
+  },
   { id: "cinema", name: "Cinema", css: "contrast(1.18) saturate(1.12) brightness(0.97)" },
   { id: "soft", name: "Soft", css: "brightness(1.08) saturate(1.06) blur(0.4px)" },
   { id: "punch", name: "Punch", css: "contrast(1.28) saturate(1.45)" },
-  { id: "tealorange", name: "Teal & Orange", css: "contrast(1.1) saturate(1.35) sepia(0.14) hue-rotate(-14deg)" },
-  { id: "golden", name: "Golden Hour", css: "sepia(0.32) saturate(1.4) brightness(1.06) contrast(1.03)" },
+  {
+    id: "tealorange",
+    name: "Teal & Orange",
+    css: "contrast(1.1) saturate(1.35) sepia(0.14) hue-rotate(-14deg)",
+  },
+  {
+    id: "golden",
+    name: "Golden Hour",
+    css: "sepia(0.32) saturate(1.4) brightness(1.06) contrast(1.03)",
+  },
   { id: "faded", name: "Faded", css: "contrast(0.9) brightness(1.07) saturate(0.72) sepia(0.16)" },
   { id: "dreamy", name: "Dreamy", css: "brightness(1.12) saturate(1.18) blur(0.6px)" },
   { id: "moody", name: "Moody", css: "contrast(1.26) brightness(0.88) saturate(0.82)" },
-  { id: "pastel", name: "Pastel", css: "brightness(1.09) saturate(1.25) contrast(0.88) hue-rotate(6deg)" },
+  {
+    id: "pastel",
+    name: "Pastel",
+    css: "brightness(1.09) saturate(1.25) contrast(0.88) hue-rotate(6deg)",
+  },
   { id: "dramatic", name: "Dramatic", css: "contrast(1.38) saturate(1.22) brightness(0.94)" },
-  { id: "night", name: "Night", css: "hue-rotate(12deg) saturate(1.08) brightness(0.9) contrast(1.12)" },
-  { id: "retro", name: "Retro Film", css: "sepia(0.45) contrast(1.1) saturate(1.25) brightness(1.02) hue-rotate(-6deg)" },
+  {
+    id: "night",
+    name: "Night",
+    css: "hue-rotate(12deg) saturate(1.08) brightness(0.9) contrast(1.12)",
+  },
+  {
+    id: "retro",
+    name: "Retro Film",
+    css: "sepia(0.45) contrast(1.1) saturate(1.25) brightness(1.02) hue-rotate(-6deg)",
+  },
 ];
 
 export function presetCss(id: string): string {
@@ -100,6 +127,12 @@ export function buildFilterCss(clip: MainClip): string {
   if (a.contrast !== 100) parts2.push(`contrast(${(a.contrast / 100).toFixed(3)})`);
   if (a.saturation !== 100) parts2.push(`saturate(${(a.saturation / 100).toFixed(3)})`);
   if (a.hue !== 0) parts2.push(`hue-rotate(${a.hue}deg)`);
+  // Fade (matte film look): squash contrast and lift the mids a touch.
+  const fade = a.fade ?? 0;
+  if (fade > 0) {
+    parts2.push(`contrast(${(1 - 0.32 * (fade / 100)).toFixed(3)})`);
+    parts2.push(`brightness(${(1 + 0.07 * (fade / 100)).toFixed(3)})`);
+  }
   return [...parts, ...parts2].filter(Boolean).join(" ");
 }
 
@@ -197,6 +230,10 @@ interface FxChain {
   feedback: GainNode;
   conv: ConvolverNode;
   convWet: GainNode;
+  /** voice shaping: low shelf → mid peak → high shelf */
+  low: BiquadFilterNode;
+  mid: BiquadFilterNode;
+  high: BiquadFilterNode;
 }
 
 interface ElRecord {
@@ -258,8 +295,17 @@ export function mp4Supported(): boolean {
 
 const AVC_CANDIDATES = ["avc1.640028", "avc1.640021", "avc1.64001f", "avc1.42002a", "avc1.42001f"];
 
-async function pickAvcCodec(width: number, height: number, fps: number, bitrate: number): Promise<string | null> {
-  const Ctor = (window as unknown as { VideoEncoder?: { isConfigSupported: (c: object) => Promise<{ supported: boolean }> } }).VideoEncoder;
+async function pickAvcCodec(
+  width: number,
+  height: number,
+  fps: number,
+  bitrate: number,
+): Promise<string | null> {
+  const Ctor = (
+    window as unknown as {
+      VideoEncoder?: { isConfigSupported: (c: object) => Promise<{ supported: boolean }> };
+    }
+  ).VideoEncoder;
   if (!Ctor?.isConfigSupported) return null;
   for (const codec of AVC_CANDIDATES) {
     try {
@@ -417,7 +463,10 @@ export class Engine {
         const r2 = this.els.get(media.id);
         if (!r2) return;
         if (!r2.videoBroken && (r2.el as HTMLVideoElement).readyState < 2) {
-          this.markVideoBroken(media.id, "no decoded frame after 8 s (codec not supported on this device?)");
+          this.markVideoBroken(
+            media.id,
+            "no decoded frame after 8 s (codec not supported on this device?)",
+          );
         }
       }, 8000);
       v.addEventListener("canplay", () => window.clearTimeout(watchdog), { once: true });
@@ -446,7 +495,9 @@ export class Engine {
     const rec = this.els.get(mediaId);
     if (!rec || rec.videoBroken) return;
     rec.videoBroken = true;
-    console.warn(`[mayocut] video not playable on this device — ${why}: ${this.media.get(mediaId)?.name ?? mediaId}`);
+    console.warn(
+      `[mayocut] video not playable on this device — ${why}: ${this.media.get(mediaId)?.name ?? mediaId}`,
+    );
     // The <video>'s own audio path must go quiet (it can't render anyway);
     // the shadow element takes over the WebAudio routing.
     if (rec.sourceNode) {
@@ -473,7 +524,8 @@ export class Engine {
 
   private clipUsingMedia(clipId: string, mediaId: string): boolean {
     if (this.project.main.some((c) => c.id === clipId && c.mediaId === mediaId)) return true;
-    for (const tr of this.project.tracks) if (tr.clips.some((c) => c.id === clipId && c.mediaId === mediaId)) return true;
+    for (const tr of this.project.tracks)
+      if (tr.clips.some((c) => c.id === clipId && c.mediaId === mediaId)) return true;
     return false;
   }
 
@@ -506,7 +558,24 @@ export class Engine {
     conv.buffer = this.impulse;
     const convWet = ctx.createGain();
     convWet.gain.value = 0;
-    inNode.connect(out); // dry
+    // voice-shaping EQ sits on the dry path, before the output
+    const low = ctx.createBiquadFilter();
+    low.type = "lowshelf";
+    low.frequency.value = 220;
+    low.gain.value = 0;
+    const mid = ctx.createBiquadFilter();
+    mid.type = "peaking";
+    mid.frequency.value = 1600;
+    mid.Q.value = 1;
+    mid.gain.value = 0;
+    const high = ctx.createBiquadFilter();
+    high.type = "highshelf";
+    high.frequency.value = 4800;
+    high.gain.value = 0;
+    inNode.connect(low);
+    low.connect(mid);
+    mid.connect(high);
+    high.connect(out); // dry
     inNode.connect(delay);
     delay.connect(feedback);
     feedback.connect(delay);
@@ -515,7 +584,7 @@ export class Engine {
     conv.connect(convWet);
     convWet.connect(out);
     out.connect(this.master!);
-    const chain: FxChain = { in: inNode, out, delay, feedback, conv, convWet };
+    const chain: FxChain = { in: inNode, out, delay, feedback, conv, convWet, low, mid, high };
     if (rec) {
       if (rec.sourceNode) {
         try {
@@ -560,7 +629,7 @@ export class Engine {
   async extractAudioWav(
     mediaId: string,
     inS: number,
-    outS: number
+    outS: number,
   ): Promise<{ samples: Float32Array; sampleRate: number; duration: number } | null> {
     if (!this.audioBufferAllowed(mediaId)) return null;
     await this.ensureAudio();
@@ -591,7 +660,10 @@ export class Engine {
   /** Apply the active clip's FX to its media chain (no-op when nothing is active). */
   private syncFx() {
     const t = this.t;
-    const active = new Map<string, { reverb: number; echo: number }>();
+    const active = new Map<
+      string,
+      { reverb: number; echo: number; low?: number; mid?: number; high?: number }
+    >();
     for (const tr of this.project.tracks)
       for (const c of tr.clips) {
         if (c.kind !== "audio" || !c.mediaId) continue;
@@ -602,6 +674,19 @@ export class Engine {
           });
         }
       }
+    // voice shaping from main clips (bass / mid / treble "voice enhance")
+    for (const s2 of mainSpans(this.project)) {
+      if (!s2.clip.voice) continue;
+      if (t >= s2.start && t < s2.end) {
+        const cur = active.get(s2.clip.mediaId) ?? { reverb: 0, echo: 0 };
+        active.set(s2.clip.mediaId, {
+          ...cur,
+          low: s2.clip.voice.low,
+          mid: s2.clip.voice.mid,
+          high: s2.clip.voice.high,
+        });
+      }
+    }
     for (const [id, rec] of this.els) {
       if (!rec.el || rec.el instanceof HTMLImageElement) continue;
       const fx = this.ensureFx(id);
@@ -612,6 +697,10 @@ export class Engine {
       fx.delay.delayTime.value = 0.22 + 0.18 * echo;
       fx.feedback.gain.value = echo > 0 ? 0.45 * echo : 0;
       fx.convWet.gain.value = reverb;
+      // voice shaping (dB: ±12 for a strong but usable range)
+      fx.low.gain.value = (a?.low ?? 0) * 12;
+      fx.mid.gain.value = (a?.mid ?? 0) * 10;
+      fx.high.gain.value = (a?.high ?? 0) * 12;
       // pull dry down slightly when wet is hot to avoid clipping
       fx.in.gain.value = 1 - 0.35 * Math.max(reverb, echo);
     }
@@ -626,7 +715,8 @@ export class Engine {
     if (
       rec.bufSrc &&
       rec.bufClip?.clipId === c.id &&
-      Math.abs((rec.bufClip.start + (this.audioCtx.currentTime - (rec.bufStartWall ?? 0))) - local) < 0.4
+      Math.abs(rec.bufClip.start + (this.audioCtx.currentTime - (rec.bufStartWall ?? 0)) - local) <
+        0.4
     )
       return; // still the same clip, close enough — keep playing
     this.stopBufSource(mediaId);
@@ -765,6 +855,20 @@ export class Engine {
       const el = this.audioEl(s.clip.mediaId);
       if (!el) continue;
       if (el instanceof HTMLVideoElement || rec?.videoBroken) {
+        if (s.clip.freeze) {
+          // held frame: hold this exact frame, silent
+          const at = s.clip.in + 1 / 60;
+          if (Math.abs(el.currentTime - at) > 0.02) {
+            try {
+              el.currentTime = Math.max(0, at);
+            } catch {
+              /* not seekable yet */
+            }
+          }
+          el.volume = 0;
+          if (!el.paused) el.pause();
+          continue;
+        }
         const local = mainSrcAt(s.clip, t - s.start);
         if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
           try {
@@ -773,7 +877,8 @@ export class Engine {
             /* not seekable yet */
           }
         }
-        el.playbackRate = mainRateAt(s.clip, t - s.start);
+        // reverse clips advance the element forward, so use the clock rate
+        el.playbackRate = mainPlaybackRate(s.clip, t - s.start);
         el.volume = this.effectiveVolume(s.clip, t, s);
         if (s.clip.reverse) {
           if (!el.paused) el.pause();
@@ -814,7 +919,7 @@ export class Engine {
                   /* ignore */
                 }
               }
-              el.volume = this.overlayAudioVolume(c, t);
+              el.volume = this.overlayAudioVolume(c, t) * this.duckFactor(t);
               if (this.playing && el.paused) void el.play().catch(() => undefined);
             }
           }
@@ -824,7 +929,11 @@ export class Engine {
             activeIds.add(c.mediaId);
             const el = this.audioEl(c.mediaId);
             if (el instanceof HTMLVideoElement) {
-              const local = t - c.start;
+              let local = (t - c.start) * (c.speed ?? 1);
+              if (c.loop) {
+                const md = this.media.get(c.mediaId)?.duration ?? 0;
+                if (md > 0.05) local %= md;
+              }
               if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
                 try {
                   el.currentTime = Math.max(0, local);
@@ -857,6 +966,7 @@ export class Engine {
     for (const s of spans) {
       const winStart = s.clip.transitionIn !== "none" ? s.start - s.clip.transitionDur : s.start;
       if (t >= winStart && t < s.end) {
+        if (s.clip.freeze) continue;
         const el = this.audioEl(s.clip.mediaId);
         if (el) out.push({ el, clipReverse: !!s.clip.reverse });
       }
@@ -876,13 +986,15 @@ export class Engine {
   }
 
   private effectiveVolume(clip: MainClip, t: number, s: { start: number; end: number }): number {
-    if (clip.reverse) return 0; // reversed playback is silent (frame-stepped)
+    if (clip.reverse || clip.freeze) return 0; // frame-stepped / held frames are silent
     let v = clip.muted ? 0 : clip.volume;
     if (clip.transitionIn !== "none" && t < s.start && clip.transitionDur > 0) {
       const k = (t - (s.start - clip.transitionDur)) / clip.transitionDur;
       v *= Math.max(0, Math.min(1, k));
     }
-    if (s.end - t < 0.3 && clip.transitionIn === "none") v *= Math.max(0, Math.min(1, (s.end - t) / 0.3));
+    if (s.end - t < 0.3 && clip.transitionIn === "none")
+      v *= Math.max(0, Math.min(1, (s.end - t) / 0.3));
+    v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
     return Math.max(0, Math.min(1, v));
   }
 
@@ -894,7 +1006,51 @@ export class Engine {
     let v = c.volume ?? 1;
     if (fadeIn > 0) v *= clamp01(inT / fadeIn);
     if (fadeOut > 0) v *= clamp01(outT / fadeOut);
+    v *= this.trackGain(this.overlayTrackOf(c.id));
     return Math.max(0, Math.min(1, v));
+  }
+
+  /**
+   * Track-level audio gain from mute/solo. Solo anywhere = every non-solo
+   * track goes silent (CapCut behaviour). Applies to main-track sound and all
+   * audio overlays, in preview and export alike.
+   */
+  private trackGain(trackId: string | null): number {
+    const tracks = this.project.tracks;
+    const anySolo = tracks.some((t) => t.solo);
+    if (anySolo) {
+      const tr = trackId ? tracks.find((t) => t.id === trackId) : null;
+      if (!tr?.solo) return 0;
+      return tr.muted ? 0 : 1;
+    }
+    const tr = trackId ? tracks.find((t) => t.id === trackId) : null;
+    return tr?.muted ? 0 : 1;
+  }
+
+  /** Solo/mute for the main track (main sound is muted when any solo is on). */
+  private mainTrackAudible(): boolean {
+    return !this.project.tracks.some((t) => t.solo && t.clips.length > 0);
+  }
+
+  /** Ducking: how much to pull music down while a `duck` clip is playing. */
+  private duckFactor(t: number): number {
+    const amount = this.project.duckAmount ?? 0.7;
+    if (amount <= 0) return 1;
+    // a solo'd clip is the main event: nothing is allowed to quiet it
+    let k = 1;
+    for (const tr of this.project.tracks) {
+      for (const c of tr.clips) {
+        if (!c.duck || c.kind === "text") continue;
+        // ramp the duck in/out over 250ms so it never clicks
+        const inK = clamp01((t - c.start) / 0.25);
+        const outK = clamp01((c.start + c.duration - t) / 0.25);
+        const amt = Math.min(0.98, c.duck) * amount * Math.min(inK, outK);
+        // isolated (solo'd) tracks are exempt from ducking
+        if (this.project.tracks.some((x) => x.solo) && this.trackGain(tr.id) === 1) continue;
+        k = Math.min(k, 1 - amt);
+      }
+    }
+    return Math.max(0, k);
   }
 
   // ------------------------------------------------------------- audio graph
@@ -916,7 +1072,7 @@ export class Engine {
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.audioCtx = new Ctor();
       this.master = this.audioCtx.createGain();
-      this.master.gain.value = 1;
+      this.master.gain.value = this.project.masterGain ?? 1;
       this.master.connect(this.audioCtx.destination);
       this.exportDest = this.audioCtx.createMediaStreamDestination();
       this.master.connect(this.exportDest);
@@ -960,7 +1116,13 @@ export class Engine {
   /** Base animation values for a clip (used when a param has no keyframes). */
   animBase(clip: MainClip | OverlayClip): AnimValues {
     if ("kind" in clip && (clip.kind === "image" || clip.kind === "video")) {
-      return { x: clip.x ?? 0, y: clip.y ?? 0, scale: clip.scale ?? 0.5, rotation: clip.rot ?? 0, opacity: 1 };
+      return {
+        x: clip.x ?? 0,
+        y: clip.y ?? 0,
+        scale: clip.scale ?? 0.5,
+        rotation: clip.rot ?? 0,
+        opacity: 1,
+      };
     }
     if ("kind" in clip && clip.kind === "text") {
       // free positioning: base x/y (drag on the preview, or the sliders),
@@ -1049,42 +1211,31 @@ export class Engine {
     ctx.globalAlpha = 1;
     ctx.filter = "none";
     ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = "#000";
+    // canvas background (lets users put letterboxed footage on a color)
+    ctx.fillStyle = this.project.background || "#000";
     ctx.fillRect(0, 0, W, H);
 
     // --- main track (with transitions) ---
     const spans = mainSpans(this.project);
-    type DrawItem = { s: (typeof spans)[number]; alpha: number };
-    const items: DrawItem[] = [];
     for (let i = 0; i < spans.length; i++) {
       const s = spans[i];
       const c = s.clip;
-      const winStart = c.transitionIn !== "none" ? s.start - c.transitionDur : s.start;
+      const dur = c.transitionIn !== "none" ? Math.max(0, c.transitionDur) : 0;
+      const winStart = dur > 0 ? s.start - dur : s.start;
       if (t < winStart || t >= s.end + 0.001) continue;
-      if (c.transitionIn === "crossfade" && t < s.start && c.transitionDur > 0) {
-        const k = clamp01((t - (s.start - c.transitionDur)) / c.transitionDur);
-        if (i > 0) items.push({ s: spans[i - 1], alpha: 1 - k });
-        items.push({ s, alpha: k });
-      } else if (c.transitionIn === "fadeblack" && t < s.start && c.transitionDur > 0) {
-        // true dip-to-black: previous clip fades to black in the first half,
-        // the new one fades in from black in the second half
-        const k = clamp01((t - (s.start - c.transitionDur)) / c.transitionDur);
-        if (k < 0.5) {
-          if (i > 0) items.push({ s: spans[i - 1], alpha: 1 - 2 * k });
-        } else {
-          items.push({ s, alpha: 2 * k - 1 });
-        }
-      } else {
-        items.push({ s, alpha: 1 });
+      // not inside the transition window → plain draw
+      if (!(dur > 0 && t < s.start) || i === 0) {
+        this.drawMainItem(ctx, s, 1, W, H, t);
+        continue;
       }
-    }
-    for (const { s, alpha } of items) {
-      this.drawMainItem(ctx, s, alpha, W, H, t);
+      const k = clamp01((t - winStart) / dur);
+      this.composeTransition(ctx, spans[i - 1], s, c.transitionIn, k, W, H, t);
     }
 
     // --- overlay tracks ---
     this.overlayRects.length = 0;
     for (const tr of this.project.tracks) {
+      if (tr.hidden) continue;
       for (const c of tr.clips) {
         if (t < c.start || t >= c.start + c.duration) continue;
         const localT = t - c.start;
@@ -1137,10 +1288,30 @@ export class Engine {
             ctx.save();
             ctx.globalAlpha = alpha;
             if (blend) ctx.globalCompositeOperation = blend;
+            if (c.filter && c.filter !== "none") {
+              ctx.filter = presetCss(c.filter) || "none";
+            }
             ctx.translate(cx, cy);
             ctx.rotate(rot);
             if (c.mask && c.mask !== "none") this.applyMask(ctx, c.mask, size, ar);
-            ctx.drawImage(src, -size / 2, -size / (2 * ar), size, size / ar);
+            const dw = size;
+            const dh = size / ar;
+            if (c.fit === "contain" || c.fit === "blur") {
+              // letterbox inside the sticker box, optional blurred backdrop
+              const k2 = Math.min(dw / sw, dh / sh);
+              const iw = sw * k2;
+              const ih = sh * k2;
+              if (c.fit === "blur") {
+                const s2 = Math.max(dw / sw, dh / sh) * 1.1;
+                const bx = ctx.filter;
+                ctx.filter = `${bx ? bx + " " : ""}blur(${Math.max(2, dh * 0.06).toFixed(1)}px)`;
+                ctx.drawImage(src, (dw - sw * s2) / 2, (dh - sh * s2) / 2, sw * s2, sh * s2);
+                ctx.filter = bx || "none";
+              }
+              ctx.drawImage(src, -iw / 2, -ih / 2, iw, ih);
+            } else {
+              ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
+            }
             ctx.restore();
           }
         }
@@ -1152,6 +1323,109 @@ export class Engine {
 
   // ------------------------------------------------------------ main render
 
+  /**
+   * Composite an A→B transition at progress k (0..1). Handles crossfade,
+   * dip-to-black/white, directional slides, wipes, a zoom punch and a blur
+   * dissolve. Both clips render through the exact same path as normal playback
+   * (filters, keyframes, LUTs, effects), so preview and export stay identical.
+   */
+  private composeTransition(
+    ctx: CanvasRenderingContext2D,
+    a: { clip: MainClip; start: number; end: number },
+    b: { clip: MainClip; start: number; end: number },
+    kind: TransitionKind,
+    k: number,
+    W: number,
+    H: number,
+    t: number,
+  ) {
+    const dip = isDipTo(kind);
+    if (dip) {
+      // previous clip fades to the dip colour, the new one fades in from it
+      if (k < 0.5) {
+        this.drawMainItem(ctx, a, 1 - 2 * k, W, H, t);
+        ctx.save();
+        ctx.globalAlpha = k * 2;
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillStyle = dip === "white" ? "#fff" : "#000";
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.fillStyle = dip === "white" ? "#fff" : "#000";
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+        this.drawMainItem(ctx, b, 2 * k - 1, W, H, t);
+      }
+      return;
+    }
+
+    if (kind === "crossfade") {
+      this.drawMainItem(ctx, a, 1, W, H, t);
+      this.drawMainItem(ctx, b, k, W, H, t);
+      return;
+    }
+
+    if (kind === "blur") {
+      // crossfade with a blur that peaks mid-transition (4K-safe: capped px)
+      const blurPx = Math.sin(Math.PI * k) * Math.max(3, H * 0.012);
+      this.drawMainItem(ctx, a, 1, W, H, t, blurPx);
+      this.drawMainItem(ctx, b, k, W, H, t, blurPx);
+      return;
+    }
+
+    if (kind === "zoom") {
+      // outgoing clip pushes in while the incoming one pops out to full frame
+      this.drawMainItem(ctx, a, 1, W, H, t, 0, 1 + 0.22 * k);
+      this.drawMainItem(ctx, b, clamp01(k * 1.15), W, H, t, 0, 1.18 - 0.18 * k);
+      return;
+    }
+
+    // --- geometric transitions: draw A, then mask B in ---
+    this.drawMainItem(ctx, a, 1, W, H, t);
+    const e = k; // linear is what an edit feels like; keep it frame-accurate
+    ctx.save();
+    if (
+      kind === "slideleft" ||
+      kind === "slideright" ||
+      kind === "slideup" ||
+      kind === "slidedown"
+    ) {
+      let dx = 0;
+      let dy = 0;
+      if (kind === "slideleft") dx = W - W * e; // B comes from the right
+      if (kind === "slideright") dx = -(W - W * e);
+      if (kind === "slideup") dy = H - H * e;
+      if (kind === "slidedown") dy = -(H - H * e);
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.clip();
+      ctx.translate(dx, dy);
+      this.drawMainItem(ctx, b, 1, W, H, t);
+    } else {
+      // wipes: rectangular reveal growing from the side
+      const w = W * e;
+      const h = H * e;
+      ctx.beginPath();
+      if (kind === "wipeleft") ctx.rect(W - w, 0, w, H);
+      else if (kind === "wiperight") ctx.rect(0, 0, w, H);
+      else if (kind === "wipeup") ctx.rect(0, H - h, W, h);
+      else ctx.rect(0, 0, W, h);
+      ctx.clip();
+      this.drawMainItem(ctx, b, 1, W, H, t);
+      // a soft edge line sells the wipe
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = 0.5 * Math.sin(Math.PI * k);
+      ctx.fillStyle = "#fff";
+      if (kind === "wipeleft") ctx.fillRect(W - w - 1, 0, 2, H);
+      else if (kind === "wiperight") ctx.fillRect(w - 1, 0, 2, H);
+      else if (kind === "wipeup") ctx.fillRect(0, H - h - 1, W, 2);
+      else ctx.fillRect(0, h - 1, W, 2);
+    }
+    ctx.restore();
+  }
+
   private drawMainItem(
     ctx: CanvasRenderingContext2D,
     s: { clip: MainClip; start: number; end: number },
@@ -1159,6 +1433,8 @@ export class Engine {
     W: number,
     H: number,
     t: number,
+    blurPx = 0,
+    scaleMul = 1,
   ) {
     const c = s.clip;
     const rec = this.els.get(c.mediaId);
@@ -1181,7 +1457,10 @@ export class Engine {
       return;
     }
     const eff: EffectId = c.effect ?? "none";
-    const ef = this.effectTransform(c, localT, W, H, mainClipDuration(c));
+    // a frozen frame has no motion: hold it still regardless of effect
+    const ef = c.freeze
+      ? { tx: 0, ty: 0, scale: 1, rot: 0 }
+      : this.effectTransform(c, localT, W, H, mainClipDuration(c));
 
     ctx.save();
     ctx.globalAlpha = a;
@@ -1191,7 +1470,13 @@ export class Engine {
       const px = Math.round((1 - ramp) * H * 0.018 * 10) / 10;
       if (px > 0.05) filterCss = (filterCss + ` blur(${px}px)`).trim();
     }
-    ctx.filter = filterCss;
+    if (blurPx > 0.05) filterCss = (filterCss + ` blur(${blurPx.toFixed(2)}px)`).trim();
+    ctx.filter = filterCss || "none";
+    if (scaleMul !== 1) {
+      ctx.translate(W / 2, H / 2);
+      ctx.scale(scaleMul, scaleMul);
+      ctx.translate(-W / 2, -H / 2);
+    }
     if (anim.x !== 0 || anim.y !== 0 || anim.scale !== 1 || anim.rotation !== 0) {
       ctx.translate(W / 2 + anim.x * (W / 2), H / 2 + anim.y * (H / 2));
       ctx.rotate((anim.rotation * Math.PI) / 180);
@@ -1207,12 +1492,25 @@ export class Engine {
 
     const lut = c.lut ? this.lutCache.get(c.lut) : null;
     const glitching = eff === "glitch" && this.glitchWindow(localT);
-    if (lut) {
-      this.drawMainLut(ctx, el, W, H, lut);
+    // Pixel-space grade (temperature / tint / vignette / sharpen / split-tone)
+    // and LUTs need readback, so they render through the reduced offscreen pass.
+    const needsGrade = this.gradeActive(c.adjust);
+    if (lut || needsGrade) {
+      this.drawMainGrade(ctx, el, W, H, c, lut ?? null);
     } else if (glitching || eff === "vhs") {
       this.drawMainSliced(ctx, el, W, H, glitching, localT);
     } else {
-      this.drawImageCover(ctx, el, W, H);
+      this.drawImageFit(ctx, el, W, H, c.fit);
+    }
+
+    if (eff === "pulse-color") {
+      const pulse = 0.5 + 0.5 * Math.sin((localT / 0.7) * Math.PI * 2);
+      ctx.save();
+      ctx.globalCompositeOperation = "overlay";
+      ctx.globalAlpha = a * 0.22 * pulse;
+      ctx.fillStyle = "#ff5ea8";
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
     }
 
     if (eff === "flash-in") {
@@ -1280,6 +1578,34 @@ export class Engine {
       case "spin":
         r.rot = (localT / Math.max(0.001, dur)) * Math.PI * 2;
         break;
+      case "zoom-out":
+        r.scale = 1.16 - 0.16 * clamp01(localT / Math.max(0.6, dur * 0.6));
+        break;
+      case "pan-left":
+        r.tx = -(W * 0.05) * clamp01(localT / Math.max(0.6, dur));
+        r.scale = 1.08;
+        break;
+      case "pan-right":
+        r.tx = W * 0.05 * clamp01(localT / Math.max(0.6, dur));
+        r.scale = 1.08;
+        break;
+      case "tilt-up":
+        r.ty = H * 0.045 * (1 - clamp01(localT / Math.max(0.6, dur)));
+        r.scale = 1.06;
+        break;
+      case "kenburns": {
+        const k = clamp01(localT / Math.max(0.001, dur));
+        r.scale = 1.04 + 0.07 * k;
+        r.tx = (k - 0.5) * W * 0.035;
+        r.ty = (k - 0.5) * H * -0.02;
+        break;
+      }
+      case "sway": {
+        const seed = hashId(c.id);
+        r.rot = Math.sin(localT * 1.6 + seed) * 0.012;
+        r.tx = Math.sin(localT * 1.1 + seed) * W * 0.008;
+        break;
+      }
       default:
         break;
     }
@@ -1288,7 +1614,7 @@ export class Engine {
 
   /** Glitch bursts: ~70 ms window every ~500 ms, deterministic per clip. */
   private glitchWindow(localT: number): boolean {
-    const seed = (hashId("g") + (localT * 10) | 0);
+    const seed = (hashId("g") + localT * 10) | 0;
     void seed;
     const p = localT % 0.5;
     return p < 0.07 || (p > 0.31 && p < 0.36);
@@ -1464,6 +1790,190 @@ export class Engine {
     ctx.restore();
   }
 
+  /** Does this adjust need a pixel pass (anything CSS filters can't do)? */
+  private gradeActive(a: FilterAdjust): boolean {
+    return (
+      (a.temperature ?? 0) !== 0 ||
+      (a.tint ?? 0) !== 0 ||
+      (a.vignette ?? 0) > 0 ||
+      (a.sharpen ?? 0) > 0 ||
+      (a.splitTone ?? 0) > 0
+    );
+  }
+
+  /**
+   * Main-clip render with pixel grading and/or a LUT applied.
+   *
+   * The source is drawn (cover/contain/blur fit) to a reduced offscreen canvas
+   * (≤1280px long side), graded with one pass over the pixels, then upscaled in
+   * a single drawImage. That keeps 4K exports and phone previews affordable
+   * while filters, motion and transitions stay exact.
+   */
+  private drawMainGrade(
+    ctx: CanvasRenderingContext2D,
+    el: HTMLVideoElement | HTMLImageElement,
+    W: number,
+    H: number,
+    c: MainClip,
+    lut: LutTable | null,
+  ) {
+    const scale = Math.min(1, 1280 / Math.max(W, H));
+    const W2 = Math.max(4, Math.round(W * scale));
+    const H2 = Math.max(4, Math.round(H * scale));
+    if (!this.lutOff) this.lutOff = document.createElement("canvas");
+    const off = this.lutOff;
+    if (off.width !== W2 || off.height !== H2) {
+      off.width = W2;
+      off.height = H2;
+    }
+    const octx = off.getContext("2d", { willReadFrequently: true });
+    if (!octx) {
+      this.drawImageFit(ctx, el, W, H, c.fit);
+      return;
+    }
+    octx.filter = "none";
+    octx.globalAlpha = 1;
+    octx.clearRect(0, 0, W2, H2);
+    this.paintFit(octx, el, W2, H2, c.fit);
+    const img = octx.getImageData(0, 0, W2, H2);
+    this.gradePixels(img.data, W2, H2, c.adjust);
+    if (lut) applyLut(lut, img.data);
+    octx.putImageData(img, 0, 0);
+    ctx.drawImage(off, 0, 0, W, H);
+  }
+
+  /**
+   * One-pass colour grade over RGBA pixels:
+   *  • temperature — warm/cool channel push
+   *  • tint        — green↔magenta balance
+   *  • splitTone   — teal shadows, orange highlights
+   *  • sharpen     — 3×1 luma unsharp mask (cheap but effective)
+   *  • vignette    — radial darkening that follows the canvas aspect
+   */
+  private gradePixels(d: Uint8ClampedArray, W: number, H: number, a: FilterAdjust) {
+    const temp = (a.temperature ?? 0) / 100; // -1..1
+    const tint = (a.tint ?? 0) / 100;
+    const split = (a.splitTone ?? 0) / 100;
+    const sharp = (a.sharpen ?? 0) / 100;
+    const vig = (a.vignette ?? 0) / 100;
+
+    if (temp !== 0 || tint !== 0 || split > 0) {
+      const tr = temp * 26;
+      const tb = -temp * 26;
+      const tg = tint * 20;
+      for (let i = 0; i < d.length; i += 4) {
+        let r = d[i];
+        let g = d[i + 1];
+        let b = d[i + 2];
+        // temperature + tint (a slight green lift is what "tint" does in CapCut)
+        r += tr;
+        b += tb;
+        g += tg;
+        if (split > 0) {
+          // highlight lift (orange) / shadow push (teal), weighted by luma
+          const l = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+          const kHigh = Math.max(0, l - 0.5) * 2 * split;
+          const kLow = Math.max(0, 0.5 - l) * 2 * split;
+          r += 26 * kHigh - 10 * kLow;
+          g += 8 * kHigh + 12 * kLow;
+          b += -18 * kHigh + 30 * kLow;
+        }
+        d[i] = r < 0 ? 0 : r > 255 ? 255 : r;
+        d[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+        d[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+      }
+    }
+
+    if (sharp > 0) {
+      // luma unsharp: out = src + amount * (src - blur3)
+      const stride = W * 4;
+      const centre = new Uint8ClampedArray(d.length);
+      centre.set(d);
+      const amt = 0.85 * sharp;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = y * stride + x * 4;
+          if (x === 0 || y === 0 || x === W - 1 || y === H - 1) continue;
+          for (let ch = 0; ch < 3; ch++) {
+            const v = centre[i + ch];
+            const blur =
+              (centre[i + ch - 4] +
+                centre[i + ch + 4] +
+                centre[i + ch - stride] +
+                centre[i + ch + stride]) /
+              4;
+            d[i + ch] = v + (v - blur) * amt;
+          }
+        }
+      }
+    }
+
+    if (vig > 0) {
+      const cx = W / 2;
+      const cy = H / 2;
+      const maxD = Math.hypot(cx, cy);
+      // step over pixels coarsely for speed on big canvases; still per-pixel
+      for (let y = 0; y < H; y++) {
+        const dy = (y - cy) / maxD;
+        for (let x = 0; x < W; x++) {
+          const dx = (x - cx) / maxD;
+          const r = Math.hypot(dx, dy);
+          if (r < 0.55) continue;
+          const k = 1 - vig * 0.85 * Math.min(1, (r - 0.55) / 0.45) ** 1.4;
+          const i = (y * W + x) * 4;
+          d[i] *= k;
+          d[i + 1] *= k;
+          d[i + 2] *= k;
+        }
+      }
+    }
+  }
+
+  /** Frame-fit modes: cover (crop) · contain (letterbox) · blur (blurred fill). */
+  private drawImageFit(
+    ctx: CanvasRenderingContext2D,
+    src: CanvasImageSource,
+    W: number,
+    H: number,
+    fit: MainClip["fit"],
+  ) {
+    this.paintFit(ctx, src, W, H, fit);
+  }
+
+  private paintFit(
+    ctx: CanvasRenderingContext2D,
+    src: CanvasImageSource,
+    W: number,
+    H: number,
+    fit: MainClip["fit"],
+  ) {
+    const sw = srcW(src);
+    const sh = srcH(src);
+    if (!sw || !sh) return;
+    const mode = fit ?? "cover";
+    if (mode === "cover") {
+      const scale = Math.max(W / sw, H / sh);
+      const dw = sw * scale;
+      const dh = sh * scale;
+      ctx.drawImage(src, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      return;
+    }
+    const scale = Math.min(W / sw, H / sh);
+    const dw = sw * scale;
+    const dh = sh * scale;
+    const dx = (W - dw) / 2;
+    const dy = (H - dh) / 2;
+    if (mode === "blur") {
+      // fill the frame with a heavily blurred cover copy, then the sharp fit
+      ctx.save();
+      ctx.filter = `blur(${Math.max(6, Math.round(Math.min(W, H) * 0.035))}px)`;
+      const s2 = Math.max(W / sw, H / sh) * 1.12;
+      ctx.drawImage(src, (W - sw * s2) / 2, (H - sh * s2) / 2, sw * s2, sh * s2);
+      ctx.restore();
+    }
+    ctx.drawImage(src, dx, dy, dw, dh);
+  }
+
   private drawImageCover(
     ctx: CanvasRenderingContext2D,
     src: CanvasImageSource,
@@ -1541,13 +2051,15 @@ export class Engine {
     dur: number,
     anim: AnimValues,
   ) {
-    const text = c.text ?? "";
-    if (!text) return;
+    const rawText = c.text ?? "";
+    if (!rawText) return;
+    const text = c.upper ? rawText.toUpperCase() : rawText;
     const px = Math.max(4, (c.size ?? 64) * (H / 1080) * anim.scale);
     const weight = c.bold ? 700 : 500;
+    const italic = c.italic ? "italic " : "";
     const anim2 = c.anim ?? "none";
     ctx.save();
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = alpha * clamp01(c.opacity ?? 1);
 
     // Ken Burns: slow zoom + pan across the clip
     let kbScale = 1;
@@ -1559,12 +2071,26 @@ export class Engine {
     }
     // entrance offsets
     let yOff = 0;
+    let xOff = 0;
+    let popScale = 1;
+    let riseAlpha = 1;
     if (anim2 === "bounce") yOff = -px * 0.9 * (1 - easeOutBounce(clamp01(localT / 0.55)));
     if (anim2 === "slideup") yOff = (1 - clamp01(localT / 0.4)) * H * 0.03;
+    if (anim2 === "slideleft") xOff = (1 - clamp01(localT / 0.4)) * W * 0.06;
+    if (anim2 === "zoom-in") popScale = 0.72 + 0.28 * easeOutBounce(clamp01(localT / 0.5));
+    if (anim2 === "rise") {
+      const k = clamp01(localT / 0.55);
+      yOff = (1 - k) * H * 0.06;
+      riseAlpha = k;
+    }
+    if (anim2 === "wipe-in") riseAlpha = 1; // handled by the clip mask below
 
-    ctx.font = `${weight} ${Math.round(px)}px ${fontCss(c.font)}`;
+    ctx.font = `${italic}${weight} ${Math.round(px)}px ${fontCss(c.font)}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    const tracking = ((c.tracking ?? 0) * px) / 100;
+
+    ctx.globalAlpha = alpha * clamp01(c.opacity ?? 1) * riseAlpha;
 
     if (anim2 === "karaoke" && (c.words?.length ?? 0) > 0) {
       this.drawTextKaraoke(ctx, c, W, H, px, localT);
@@ -1584,8 +2110,11 @@ export class Engine {
     });
     const totalChars = text.length;
     const doneTyping = reveal >= totalChars;
-    const lineH = px * 1.18;
-    const maxW = Math.max(...rawLines.map((l) => ctx.measureText(l).width), 0);
+    const lineH = px * (c.leading ?? 1.18);
+    // letter tracking widens every line by (chars-1)*tracking
+    const measure = (l: string) => ctx.measureText(l).width + Math.max(0, l.length - 1) * tracking;
+    const maxW = Math.max(...lines.map((l) => measure(l)), 0);
+    const rawMaxW = Math.max(...rawLines.map((l) => measure(l)), 0);
     const totalH = lines.length * lineH;
     const pos: TextPos = c.pos ?? "mc";
     const mx = W * 0.08;
@@ -1593,33 +2122,69 @@ export class Engine {
     let x = W / 2;
     let y = H / 2;
     const col = pos[1] as "l" | "c" | "r";
-    if (col === "l") x = mx + maxW / 2 + px * 0.4;
-    if (col === "r") x = W - mx - maxW / 2 - px * 0.4;
+    const widest = Math.max(maxW, rawMaxW);
+    if (col === "l") x = mx + widest / 2 + px * 0.4;
+    if (col === "r") x = W - mx - widest / 2 - px * 0.4;
     const row = pos[0] as "t" | "m" | "b";
     if (row === "t") y = my + totalH / 2;
     if (row === "b") y = H - my - totalH / 2;
-    const xC = x + anim.x * (W / 2) + kbX;
+    const xC = x + anim.x * (W / 2) + kbX + xOff;
     const yC = y + anim.y * (H / 2) + yOff;
     this.overlayRects.push({
       clipId: c.id,
-      x: xC - maxW / 2 - px * 0.4,
+      x: xC - widest / 2 - px * 0.4,
       y: yC - totalH / 2 - px * 0.28,
-      w: maxW + px * 0.8,
+      w: widest + px * 0.8,
       h: totalH + px * 0.56,
     });
     ctx.translate(xC, yC);
     if (anim.rotation !== 0) ctx.rotate((anim.rotation * Math.PI) / 180);
-    if (kbScale !== 1) ctx.scale(kbScale, kbScale);
+    const sc = kbScale * popScale;
+    if (sc !== 1) ctx.scale(sc, sc);
     if (c.bg && (anim2 !== "typewriter" || doneTyping)) {
       ctx.fillStyle = c.bg;
       const padX = px * 0.5;
       const padY = px * 0.28;
-      const bw = maxW + padX * 2;
+      const bw = widest + padX * 2;
       const bh = totalH + padY * 2;
-      roundRectPath(ctx, -bw / 2, -bh / 2, bw, bh, Math.min(bh / 2, px * 0.4));
+      const radius = c.radius != null ? (c.radius * px) / 100 : Math.min(bh / 2, px * 0.4);
+      roundRectPath(ctx, -bw / 2, -bh / 2, bw, bh, Math.max(0, Math.min(bh / 2, radius)));
       ctx.fill();
     }
     const color = c.color ?? "#ffffff";
+    // Draw one line with optional letter-tracking, outline and underline.
+    const drawLine = (l: string, yy: number) => {
+      const startX = -measure(l) / 2;
+      if (tracking > 0.01) {
+        // manual glyph advance keeps tracking exact on every device
+        let cx = startX;
+        for (const ch of l) {
+          ctx.fillText(ch, cx + ctx.measureText(ch).width / 2, yy);
+          if (c.stroke && c.stroke > 0) ctx.strokeText(ch, cx + ctx.measureText(ch).width / 2, yy);
+          cx += ctx.measureText(ch).width + tracking;
+        }
+      } else {
+        ctx.fillText(l, 0, yy);
+        if (c.stroke && c.stroke > 0) ctx.strokeText(l, 0, yy);
+      }
+      if (c.underline) {
+        const w = measure(l);
+        const uy = yy + px * 0.58;
+        ctx.save();
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = ctx.globalAlpha * 0.95;
+        ctx.fillRect(-w / 2, uy, w, Math.max(1.5, px * 0.06));
+        ctx.restore();
+      }
+    };
+    const strokeW = c.stroke && c.stroke > 0 ? (c.stroke * px) / 100 : 0;
+    if (strokeW > 0) {
+      ctx.lineJoin = "round";
+      ctx.miterLimit = 2;
+      ctx.strokeStyle = c.strokeColor || "rgba(0,0,0,0.85)";
+      ctx.lineWidth = strokeW;
+    }
+    const shadowStrength = c.shadow ?? 0.55;
     if (anim2 === "neon") {
       ctx.shadowColor = color;
       ctx.shadowBlur = px * (0.3 + 0.14 * Math.sin(localT * 5));
@@ -1627,16 +2192,22 @@ export class Engine {
       ctx.fillStyle = color;
       lines.forEach((l, i) => {
         const yy = -totalH / 2 + lineH / 2 + i * lineH;
-        ctx.fillText(l, 0, yy);
-        ctx.fillText(l, 0, yy); // second pass for glow intensity
+        drawLine(l, yy);
+        drawLine(l, yy); // second pass for glow intensity
       });
     } else {
       ctx.fillStyle = color;
-      ctx.shadowColor = "rgba(0,0,0,0.55)";
-      ctx.shadowBlur = px * 0.12;
-      ctx.shadowOffsetY = px * 0.04;
+      if (shadowStrength > 0.02) {
+        ctx.shadowColor = `rgba(0,0,0,${Math.min(1, 0.75 * shadowStrength)})`;
+        ctx.shadowBlur = px * 0.12 * shadowStrength * (1 / 0.55);
+        ctx.shadowOffsetY = px * 0.04 * (shadowStrength / 0.55);
+      } else {
+        ctx.shadowColor = "transparent";
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+      }
       lines.forEach((l, i) => {
-        ctx.fillText(l, 0, -totalH / 2 + lineH / 2 + i * lineH);
+        drawLine(l, -totalH / 2 + lineH / 2 + i * lineH);
       });
       // typewriter caret
       if (anim2 === "typewriter" && !doneTyping && localT < dur - 0.1) {
@@ -1653,7 +2224,12 @@ export class Engine {
         if (blink) {
           ctx.fillStyle = color;
           ctx.shadowBlur = 0;
-          ctx.fillRect(caretX + 2, -totalH / 2 + lineH / 2 + caretLine * lineH - px * 0.4, px * 0.12, px * 0.8);
+          ctx.fillRect(
+            caretX + 2,
+            -totalH / 2 + lineH / 2 + caretLine * lineH - px * 0.4,
+            px * 0.12,
+            px * 0.8,
+          );
         }
       }
     }
@@ -1669,7 +2245,11 @@ export class Engine {
     px: number,
     localT: number,
   ) {
-    const words = (c.words ?? []).map((w) => ({ t: w.t, w: w.text, ws: ctx.measureText(w.text).width }));
+    const words = (c.words ?? []).map((w) => ({
+      t: w.t,
+      w: w.text,
+      ws: ctx.measureText(w.text).width,
+    }));
     const gap = px * 0.32;
     const maxLineW = W * 0.84;
     type Line = { items: { t: number; w: string; ws: number }[]; width: number };
@@ -1712,7 +2292,14 @@ export class Engine {
     ctx.translate(x, y);
     // background plate
     ctx.fillStyle = c.bg || "rgba(0,0,0,0.35)";
-    roundRectPath(ctx, -totalW / 2 - px * 0.4, -totalH / 2 - px * 0.18, totalW + px * 0.8, totalH + px * 0.36, px * 0.3);
+    roundRectPath(
+      ctx,
+      -totalW / 2 - px * 0.4,
+      -totalH / 2 - px * 0.18,
+      totalW + px * 0.8,
+      totalH + px * 0.36,
+      px * 0.3,
+    );
     ctx.fill();
     // words
     let activeIndex = -1;
@@ -1723,7 +2310,7 @@ export class Engine {
         const it = line.items[wi];
         const on = localT >= it.t;
         if (on) activeIndex = li * 1000 + wi;
-        ctx.fillStyle = on ? c.color ?? "#ffffff" : "rgba(255,255,255,0.38)";
+        ctx.fillStyle = on ? (c.color ?? "#ffffff") : "rgba(255,255,255,0.38)";
         ctx.shadowColor = on ? "rgba(0,0,0,0.6)" : "transparent";
         ctx.shadowBlur = on ? px * 0.1 : 0;
         ctx.fillText(it.w, cx + it.ws / 2, -totalH / 2 + lineH / 2 + li * lineH);
@@ -1740,7 +2327,12 @@ export class Engine {
         for (let i = 0; i < wi; i++) cx += line.items[i].ws + gap;
         const it = line.items[wi];
         ctx.fillStyle = c.color ?? "#ffffff";
-        ctx.fillRect(cx, -totalH / 2 + lineH / 2 + li * lineH + px * 0.62, it.ws, Math.max(2, px * 0.07));
+        ctx.fillRect(
+          cx,
+          -totalH / 2 + lineH / 2 + li * lineH + px * 0.62,
+          it.ws,
+          Math.max(2, px * 0.07),
+        );
       }
     }
   }
@@ -1755,9 +2347,9 @@ export class Engine {
   addMainClip(media: MediaItem, atEnd = true) {
     const dur =
       media.kind === "video"
-        ? media.duration ?? 5
+        ? (media.duration ?? 5)
         : media.kind === "audio"
-          ? media.duration ?? 3
+          ? (media.duration ?? 3)
           : 3;
     const clip: MainClip = {
       id: uid("mc"),
@@ -1793,7 +2385,9 @@ export class Engine {
       if (srcAt - c.in < 0.08 || c.out - srcAt < 0.08) return false;
       const local = t - s.start;
       const kfsA = c.keyframes?.filter((k) => k.at < local);
-      const kfsB = c.keyframes?.filter((k) => k.at >= local).map((k) => ({ at: k.at - local, v: { ...k.v } }));
+      const kfsB = c.keyframes
+        ?.filter((k) => k.at >= local)
+        .map((k) => ({ at: k.at - local, v: { ...k.v } }));
       const a: MainClip = {
         ...c,
         id: uid("mc"),
@@ -1842,11 +2436,13 @@ export class Engine {
   replaceMainClipMedia(id: string, media: MediaItem) {
     const c = this.project.main.find((x) => x.id === id);
     if (!c) return;
-    const maxOut = media.kind === "image" ? (media.duration ?? 3) : media.duration ?? c.out - c.in;
+    const maxOut =
+      media.kind === "image" ? (media.duration ?? 3) : (media.duration ?? c.out - c.in);
     const keepDur = c.out - c.in;
     c.mediaId = media.id;
     c.in = 0;
-    c.out = media.kind === "image" ? Math.min(3, keepDur || 3) : Math.min(maxOut, Math.max(0.5, keepDur));
+    c.out =
+      media.kind === "image" ? Math.min(3, keepDur || 3) : Math.min(maxOut, Math.max(0.5, keepDur));
     c.reverse = false;
     this.bump();
   }
@@ -1969,6 +2565,150 @@ export class Engine {
       transitionDur: 0,
     }));
     this.bump();
+  }
+
+  /**
+   * Freeze the frame under the playhead: splits the main clip at the playhead
+   * and inserts a held-frame clip (CapCut's Freeze). Returns the new clip.
+   */
+  freezeAt(t: number, hold = 3): MainClip | false {
+    const spans = mainSpans(this.project);
+    const idx = spans.findIndex((s) => t >= s.start && t < s.end);
+    if (idx === -1) return false;
+    const s = spans[idx];
+    const c = s.clip;
+    const srcAt = mainSrcAt(c, t - s.start);
+    const atEnd = t - s.start > s.end - s.start - 0.2;
+    if (atEnd) {
+      const f = freezeClipFrom(c, srcAt, hold);
+      this.project.main.splice(idx + 1, 0, f);
+      this.bump();
+      return f;
+    }
+    this.splitAt(t);
+    const spans2 = mainSpans(this.project);
+    const idx2 = spans2.findIndex((sp) => t >= sp.start - 0.001 && t < sp.start + 0.02);
+    const f = freezeClipFrom(c, srcAt, hold);
+    const insertAt = idx2 === -1 ? idx + 1 : idx2;
+    this.project.main.splice(insertAt, 0, f);
+    this.bump();
+    return f;
+  }
+
+  /** Apply a transition to a clip (also used by the batch "apply to all"). */
+  setTransition(clipId: string, kind: TransitionKind, dur: number) {
+    const c = this.project.main.find((x) => x.id === clipId);
+    if (!c) return;
+    c.transitionIn = kind;
+    c.transitionDur = kind === "none" ? 0 : Math.max(0.1, dur);
+    this.bump();
+  }
+
+  /** Apply one transition to every clip after the first (CapCut "apply to all"). */
+  setTransitionAll(kind: TransitionKind, dur: number) {
+    this.project.main.forEach((c, i) => {
+      if (i === 0) {
+        c.transitionIn = "none";
+        c.transitionDur = 0;
+        return;
+      }
+      c.transitionIn = kind;
+      c.transitionDur = kind === "none" ? 0 : Math.max(0.1, dur);
+    });
+    this.bump();
+  }
+
+  /** Duplicate every overlay clip on a track (CapCut "duplicate track"). */
+  duplicateTrack(trackId: string): number {
+    const tr = this.project.tracks.find((t) => t.id === trackId);
+    if (!tr || tr.clips.length === 0) return 0;
+    const copies = tr.clips.map((c) => ({
+      ...c,
+      id: uid("ov"),
+      start: c.start + 0.05,
+      keyframes: c.keyframes?.map((k) => ({ at: k.at, v: { ...k.v } })),
+    }));
+    tr.clips.push(...copies);
+    this.bump();
+    return copies.length;
+  }
+
+  /** Move an overlay clip to another track (CapCut drag between lanes). */
+  moveOverlayToTrack(clipId: string, trackId: string): boolean {
+    let found: OverlayClip | null = null;
+    let from: OverlayTrack | null = null;
+    for (const tr of this.project.tracks) {
+      const i = tr.clips.findIndex((c) => c.id === clipId);
+      if (i !== -1) {
+        found = tr.clips[i];
+        from = tr;
+        break;
+      }
+    }
+    const to = this.project.tracks.find((t) => t.id === trackId);
+    if (!found || !from || !to || from.id === to.id) return false;
+    // audio can't live on a visual track and text can't live on the audio lane
+    const wantsAudio = found.kind === "audio";
+    if (wantsAudio && to.id !== "t_audio") return false;
+    if (!wantsAudio && to.id === "t_audio") return false;
+    from.clips = from.clips.filter((c) => c.id !== clipId);
+    to.clips.push(found);
+    this.bump();
+    return true;
+  }
+
+  /**
+   * Drag-reorder on the main track: move a clip to a new index. Keeps
+   * transitions sane (a clip moved to the head can't fade in from nothing).
+   */
+  reorderMainClip(id: string, toIndex: number): boolean {
+    const from = this.project.main.findIndex((c) => c.id === id);
+    if (from === -1) return false;
+    const to = Math.max(0, Math.min(this.project.main.length - 1, toIndex));
+    if (to === from) return false;
+    const [c] = this.project.main.splice(from, 1);
+    this.project.main.splice(to, 0, c);
+    if (to === 0) {
+      c.transitionIn = "none";
+      c.transitionDur = 0;
+    }
+    this.bump();
+    return true;
+  }
+
+  /** Split the main track at every beat marker (whole-project beat sync). */
+  splitAtAllBeats(): number {
+    const beats = (this.project.beats ?? []).slice().sort((a, b) => a - b);
+    if (beats.length === 0) return 0;
+    let n = 0;
+    // walk backwards so earlier splits don't shift the beat times
+    for (let i = beats.length - 1; i >= 0; i--) {
+      if (this.splitAt(beats[i])) n++;
+    }
+    return n;
+  }
+
+  setBeats(beats: number[]) {
+    this.project.beats = beats.slice(0, 400).sort((a, b) => a - b);
+    this.bump();
+  }
+
+  /** Track mute/solo/hidden (visual tracks use hidden, audio ones mute/solo). */
+  setTrackFlag(trackId: string, patch: Partial<Pick<OverlayTrack, "muted" | "solo" | "hidden">>) {
+    const tr = this.project.tracks.find((t) => t.id === trackId);
+    if (!tr) return;
+    Object.assign(tr, patch);
+    this.bump();
+    this.draw();
+  }
+
+  /** Patch a clip wherever it lives (main or overlay). */
+  patchClip(clipId: string, patch: Partial<MainClip> & Partial<OverlayClip>): boolean {
+    const c = this.findClipAny(clipId);
+    if (!c) return false;
+    Object.assign(c, patch);
+    this.bump();
+    return true;
   }
 
   // ------------------------------------------------------------- keyframes
@@ -2130,10 +2870,12 @@ export class Engine {
 
   async exportMP4(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
     if (!this.canvas) throw new Error("Canvas not ready");
-    if (!mp4Supported()) throw new Error("MP4 export needs WebCodecs — use Chrome or Edge (WebM also works).");
+    if (!mp4Supported())
+      throw new Error("MP4 export needs WebCodecs — use Chrome or Edge (WebM also works).");
     const { w: W, h: H } = ASPECTS[this.project.aspect];
     const codec = await pickAvcCodec(W, H, opts.fps, opts.videoBitsPerSecond);
-    if (!codec) throw new Error("H.264 encoding is not supported at this resolution here — use WebM.");
+    if (!codec)
+      throw new Error("H.264 encoding is not supported at this resolution here — use WebM.");
     await this.ensureAudio();
     if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
     const prevScale = this.exportScale;
@@ -2258,7 +3000,9 @@ export class Engine {
         if (this.t >= targetT - 0.002) {
           try {
             const wantKey = frame - lastKeyFrame >= keyEvery;
-            const vf = new W_.VideoFrame(this.canvas, { timestamp: Math.round(frame * frameDurUs) });
+            const vf = new W_.VideoFrame(this.canvas, {
+              timestamp: Math.round(frame * frameDurUs),
+            });
             videoEncoder.encode(vf, { keyFrame: wantKey });
             if (wantKey) lastKeyFrame = frame;
             vf.close();
@@ -2313,7 +3057,10 @@ export class Engine {
         this.exporting = false;
         this.previewMaxSide = prevCap;
       }
-      if (encError) throw encError instanceof Error ? encError : new Error("Encoder failed: " + String(encError));
+      if (encError)
+        throw encError instanceof Error
+          ? encError
+          : new Error("Encoder failed: " + String(encError));
       muxer.finalize();
       const blob = new Blob([target.buffer], { type: "video/mp4" });
       if (blob.size < 1000) throw new Error("Export produced no data — try again");
@@ -2324,6 +3071,240 @@ export class Engine {
       this.exporting = false;
       this.previewMaxSide = prevCap;
     }
+  }
+
+  // ------------------------------------------------------------- export (GIF)
+
+  /**
+   * Animated GIF export (CapCut ships one; ours works fully offline).
+   * Renders the timeline at a reduced grid with a per-frame web-safe palette.
+   * Sizes are capped so a phone can actually finish the encode.
+   */
+  async exportGIF(
+    opts: { fps?: number; maxSide?: number; maxSeconds?: number; dither?: boolean },
+    onProgress: (p: number) => void,
+  ): Promise<Blob> {
+    if (!this.canvas) throw new Error("Canvas not ready");
+    const fps = Math.min(20, Math.max(6, opts.fps ?? 12));
+    const maxSide = Math.min(720, Math.max(160, opts.maxSide ?? 480));
+    const maxSeconds = Math.min(120, Math.max(1, opts.maxSeconds ?? 20));
+    const base = ASPECTS[this.project.aspect];
+    const k = maxSide / Math.max(base.w, base.h);
+    const W = Math.max(16, Math.round((base.w * k) / 2) * 2);
+    const H = Math.max(16, Math.round((base.h * k) / 2) * 2);
+    const dur = Math.min(maxSeconds, this.duration());
+    if (dur <= 0.05) throw new Error("Nothing to export — add media first");
+
+    const prevScale = this.exportScale;
+    const prevCap = this.previewMaxSide;
+    const wasLoop = this.loop;
+    const wasPlaying = this.playing;
+    this.exporting = true;
+    this.loop = false;
+    this.previewMaxSide = 0;
+    // Force the compositor to the GIF grid via exportScale (cap is disabled).
+    this.exportScale = W / base.w;
+    try {
+      if (wasPlaying) this.pause();
+      this.seek(0);
+      await this.ensureAudio();
+      // 256-colour web-safe-ish palette (6·6·6 cube = 216 + greys)
+      const palette: number[] = [];
+      for (let r = 0; r < 6; r++)
+        for (let g = 0; g < 6; g++)
+          for (let b = 0; b < 6; b++) palette.push(((r * 51) << 16) | ((g * 51) << 8) | (b * 51));
+      for (let i = 0; i < 40; i++) {
+        const v = Math.round((i / 39) * 255);
+        palette.push((v << 16) | (v << 8) | v);
+      }
+      const frames = Math.max(1, Math.floor(dur * fps));
+      const buf = new Uint8Array(W * H * frames + 1024 * 1024);
+      const writer = new GifWriter(buf, W, H, { loop: 0, palette });
+      const off = document.createElement("canvas");
+      off.width = W;
+      off.height = H;
+      const octx = off.getContext("2d", { willReadFrequently: true });
+      if (!octx) throw new Error("No 2D canvas context");
+      const delayCs = Math.max(2, Math.round(100 / fps));
+      const frameDur = dur / frames;
+      void this.play();
+      // stop playback the moment we've sampled every frame
+      for (let f = 0; f < frames; f++) {
+        const targetT = f * frameDur;
+        // let the clock reach targetT (bounded wait: 400 ms per frame)
+        const deadline = performance.now() + 400;
+        while (this.t < targetT && performance.now() < deadline) {
+          await new Promise((r) => requestAnimationFrame(() => r(null)));
+        }
+        this.draw();
+        octx.filter = "none";
+        octx.globalAlpha = 1;
+        octx.drawImage(this.canvas, 0, 0, W, H);
+        const img = octx.getImageData(0, 0, W, H);
+        writer.addFrame(0, 0, W, H, gifIndices(img.data, palette, opts.dither !== false), {
+          delay: delayCs,
+          disposal: 1,
+        });
+        onProgress(Math.min(1, (f + 1) / frames));
+      }
+      if (!wasPlaying) this.pause();
+      this.loop = wasLoop;
+      return new Blob([buf.subarray(0, writer.end())], { type: "image/gif" });
+    } finally {
+      if (!wasPlaying) this.pause();
+      this.loop = wasLoop;
+      this.exportScale = prevScale;
+      this.previewMaxSide = prevCap;
+      this.exporting = false;
+    }
+  }
+
+  /**
+   * Audio-only export: render the full mix offline through an
+   * OfflineAudioContext, then encode 16-bit WAV. Used for podcast / voiceover
+   * workflows and as the audio half of the WAV download option.
+   */
+  async exportAudioWav(
+    onProgress: (p: number) => void,
+    opts: { sampleRate?: number; seconds?: number } = {},
+  ): Promise<Blob> {
+    const sr = Math.min(48000, Math.max(22050, opts.sampleRate ?? 44100));
+    const dur = Math.min(opts.seconds ?? this.duration(), 60 * 30);
+    if (dur <= 0.05) throw new Error("Nothing to export — add media first");
+    const OCtor =
+      window.OfflineAudioContext ??
+      (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext })
+        .webkitOfflineAudioContext;
+    if (!OCtor) throw new Error("Offline audio rendering isn't available in this browser");
+    const frames = Math.ceil(dur * sr);
+    const off = new OCtor(2, frames, sr);
+    const master = off.createGain();
+    master.gain.value = this.project.masterGain ?? 1;
+    master.connect(off.destination);
+
+    // Resolve every distinct media blob to a decoded buffer once.
+    const bufs = new Map<string, AudioBuffer | null>();
+    const decode = async (mediaId: string) => {
+      if (bufs.has(mediaId)) return bufs.get(mediaId)!;
+      const rec = this.els.get(mediaId);
+      let buf: AudioBuffer | null = null;
+      try {
+        if (rec?.url) {
+          const blob = await fetch(rec.url).then((r) => r.blob());
+          buf = await off.decodeAudioData(await blob.arrayBuffer());
+        }
+      } catch {
+        buf = null;
+      }
+      bufs.set(mediaId, buf);
+      return buf;
+    };
+
+    const schedule = (
+      buf: AudioBuffer,
+      at: number,
+      srcStart: number,
+      length: number,
+      gain: number,
+      rate = 1,
+    ) => {
+      const s2 = off.createBufferSource();
+      s2.buffer = buf;
+      s2.playbackRate.value = rate;
+      const g = off.createGain();
+      g.gain.value = Math.max(0, Math.min(2, gain));
+      s2.connect(g);
+      g.connect(master);
+      const start = Math.max(0, at);
+      const offset = Math.max(0, srcStart);
+      const dur2 = Math.min(length, buf.duration - offset);
+      if (dur2 > 0.001) s2.start(start, offset, dur2 / rate);
+    };
+
+    const spans = mainSpans(this.project);
+    const hasSolo = this.project.tracks.some((t) => t.solo);
+    let done = 0;
+    const total = spans.length + this.project.tracks.reduce((a, t) => a + t.clips.length, 0);
+    const tick = () => onProgress(Math.min(0.95, ++done / Math.max(1, total)));
+
+    for (const s of spans) {
+      tick();
+      if (s.clip.freeze || s.clip.reverse) continue;
+      if (hasSolo) continue; // solos win; main sound goes quiet
+      const buf = await decode(s.clip.mediaId);
+      if (!buf) continue;
+      const dur2 = mainClipDuration(s.clip);
+      schedule(
+        buf,
+        s.start,
+        s.clip.in,
+        dur2,
+        s.clip.muted ? 0 : s.clip.volume,
+        Math.max(0.05, s.clip.speed),
+      );
+    }
+
+    for (const tr of this.project.tracks) {
+      const trackGain = hasSolo ? (tr.solo ? 1 : 0) : tr.muted ? 0 : 1;
+      for (const c of tr.clips) {
+        tick();
+        if (c.kind !== "audio" || !c.mediaId || trackGain === 0) continue;
+        const buf = await decode(c.mediaId);
+        if (!buf) continue;
+        schedule(buf, c.start, 0, c.duration, (c.volume ?? 1) * trackGain);
+      }
+    }
+
+    onProgress(0.96);
+    const rendered = await off.startRendering();
+    // interleave to stereo 16-bit PCM
+    const L = rendered.getChannelData(0);
+    const R = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : L;
+    const n = L.length;
+    const ab = new ArrayBuffer(44 + n * 4);
+    const v = new DataView(ab);
+    const tag = (o: number, t: string) => {
+      for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i));
+    };
+    tag(0, "RIFF");
+    v.setUint32(4, 36 + n * 4, true);
+    tag(8, "WAVE");
+    tag(12, "fmt ");
+    v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true);
+    v.setUint16(22, 2, true);
+    v.setUint32(24, sr, true);
+    v.setUint32(28, sr * 4, true);
+    v.setUint16(32, 4, true);
+    v.setUint16(34, 16, true);
+    tag(36, "data");
+    v.setUint32(40, n * 4, true);
+    let o = 44;
+    for (let i = 0; i < n; i++) {
+      v.setInt16(o, Math.max(-1, Math.min(1, L[i])) * 32767, true);
+      o += 2;
+      v.setInt16(o, Math.max(-1, Math.min(1, R[i])) * 32767, true);
+      o += 2;
+    }
+    onProgress(1);
+    return new Blob([ab], { type: "audio/wav" });
+  }
+
+  /** PNG still of the current frame — instant thumbnail/cover export. */
+  async exportStill(width = 1080): Promise<Blob> {
+    if (!this.canvas) throw new Error("Canvas not ready");
+    this.draw();
+    const base = ASPECTS[this.project.aspect];
+    const k = width / base.w;
+    const c = document.createElement("canvas");
+    c.width = Math.max(2, Math.round(base.w * k));
+    c.height = Math.max(2, Math.round(base.h * k));
+    const x = c.getContext("2d");
+    if (!x) throw new Error("No 2D canvas context");
+    x.drawImage(this.canvas, 0, 0, c.width, c.height);
+    return new Promise((resolve, reject) =>
+      c.toBlob((b) => (b ? resolve(b) : reject(new Error("PNG encode failed"))), "image/png"),
+    );
   }
 
   destroy() {
@@ -2346,4 +3327,50 @@ export class Engine {
     }
     this.audioCtx = null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// GIF palette mapping (nearest colour in a 256-entry palette)
+// ---------------------------------------------------------------------------
+
+function gifIndices(rgba: Uint8ClampedArray, palette: number[], dither: boolean): Uint8Array {
+  const px = rgba.length / 4;
+  const out = new Uint8Array(px);
+  const pal = palette.map((v) => [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff] as const);
+  // cache: 15-bit RGB key → palette index (big win on flat frames)
+  const cache = new Int16Array(32768).fill(-1);
+  for (let i = 0; i < px; i++) {
+    const o = i * 4;
+    const r = rgba[o];
+    const g = rgba[o + 1];
+    const b = rgba[o + 2];
+    const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+    let best = cache[key];
+    if (best < 0) {
+      best = 0;
+      let bd = Infinity;
+      for (let p = 0; p < pal.length; p++) {
+        const dr = r - pal[p][0];
+        const dg = g - pal[p][1];
+        const db = b - pal[p][2];
+        // luma-weighted distance looks better than raw RGB to the eye
+        const d = dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11;
+        if (d < bd) {
+          bd = d;
+          best = p;
+        }
+      }
+      cache[key] = best;
+    }
+    out[i] = best;
+    if (dither && i + 1 < px) {
+      // cheap 1-neighbour error diffusion on the green channel only (fast)
+      const o2 = o + 4;
+      const er = (r - pal[best][0]) * 0.5;
+      const eb = (b - pal[best][2]) * 0.5;
+      rgba[o2] = Math.max(0, Math.min(255, rgba[o2] + er));
+      rgba[o2 + 2] = Math.max(0, Math.min(255, rgba[o2 + 2] + eb));
+    }
+  }
+  return out;
 }

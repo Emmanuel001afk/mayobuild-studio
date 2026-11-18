@@ -66,8 +66,12 @@ function assetBase(): string {
 }
 
 class WhisperEngine {
-  private pipe: ((audio: Float32Array, opts: Record<string, unknown>) => Promise<{ text?: string; chunks?: RawChunk[] }>) | null =
-    null;
+  private pipe:
+    | ((
+        audio: Float32Array,
+        opts: Record<string, unknown>,
+      ) => Promise<{ text?: string; chunks?: RawChunk[] }>)
+    | null = null;
   model: string | null = null;
 
   get ready(): boolean {
@@ -94,20 +98,16 @@ class WhisperEngine {
       )) as unknown as typeof this.pipe;
       this.model = "local files";
     } else {
-      this.pipe = (await pipeline(
-        "automatic-speech-recognition",
-        modelId,
-        {
-          dtype: "q8",
-          progress_callback: (p: { status?: string; file?: string; progress?: number }) => {
-            if (p.status === "progress" && typeof p.progress === "number") {
-              onProgress?.(`Downloading ${p.file ?? "model"}…`, p.progress);
-            } else if (p.status === "done") {
-              onProgress?.("Model cached — offline from now on");
-            }
-          },
-        } as unknown as Parameters<typeof pipeline>[2],
-      )) as unknown as typeof this.pipe;
+      this.pipe = (await pipeline("automatic-speech-recognition", modelId, {
+        dtype: "q8",
+        progress_callback: (p: { status?: string; file?: string; progress?: number }) => {
+          if (p.status === "progress" && typeof p.progress === "number") {
+            onProgress?.(`Downloading ${p.file ?? "model"}…`, p.progress);
+          } else if (p.status === "done") {
+            onProgress?.("Model cached — offline from now on");
+          }
+        },
+      } as unknown as Parameters<typeof pipeline>[2])) as unknown as typeof this.pipe;
       this.model = modelId;
     }
     onProgress?.("Whisper ready");
@@ -171,7 +171,7 @@ class WhisperEngine {
         cur = { start: s, end: e, text: "", words: [] };
       } else {
         const c = cur;
-        if (s - c.end > 0.7 || c.text.length + text.length > 42 || /[\.\!\?\:]$/.test(c.text)) {
+        if (s - c.end > 0.7 || c.text.length + text.length > 42 || /[.!?:]$/.test(c.text)) {
           flush();
           cur = { start: s, end: e, text: "", words: [] };
         }
@@ -290,5 +290,7 @@ export function captionsToTextClips(
 export function captionSourceLabel(eng: Engine): string {
   const spans = eng.mainSpansPublic();
   const dur = spans.reduce((a, s) => a + (s.end - s.start), 0);
-  return dur > 0 ? `${spans.length} clip(s), ${Math.round(dur)} s of main-track audio` : "no audio on the main track";
+  return dur > 0
+    ? `${spans.length} clip(s), ${Math.round(dur)} s of main-track audio`
+    : "no audio on the main track";
 }

@@ -70,10 +70,7 @@ function probePlayable(el: HTMLVideoElement, timeoutMs = 4500): Promise<boolean>
   });
 }
 
-export async function makeThumb(
-  kind: MediaKind,
-  url: string,
-): Promise<string | undefined> {
+export async function makeThumb(kind: MediaKind, url: string): Promise<string | undefined> {
   try {
     if (kind === "image") {
       const img = await new Promise<HTMLImageElement>((res, rej) => {
@@ -215,7 +212,8 @@ export async function importFiles(
 export function decodeAudioToMono16(blob: Blob): Promise<Float32Array | null> {
   return new Promise((resolve) => {
     const Ctor =
-      window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!Ctor) return resolve(null);
     const ctx = new Ctor();
     blob
@@ -309,7 +307,8 @@ export function isGifFile(f: File): boolean {
 async function analyzeAudioFile(f: File): Promise<{ wave: number[]; rms: number } | undefined> {
   try {
     const Ctor =
-      window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new Ctor();
     try {
       const audio = await ctx.decodeAudioData(await f.arrayBuffer());

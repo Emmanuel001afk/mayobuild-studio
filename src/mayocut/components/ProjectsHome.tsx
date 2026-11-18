@@ -6,10 +6,13 @@ import {
   Download,
   FileJson,
   Film,
+  HardDrive,
+  ShieldCheck,
   Image as ImageIcon,
   Loader2,
   Music,
   PackageOpen,
+  Play,
   Pencil,
   Plus,
   RotateCcw,
@@ -31,6 +34,7 @@ import {
 import { device } from "../device";
 import { db } from "../idb";
 import {
+  ASPECT_ORDER,
   ASPECTS,
   newProject,
   projectDuration,
@@ -54,7 +58,9 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [userTpls, setUserTpls] = useState<UserTemplate[]>([]);
-  const [exports, setExports] = useState<{ id: string; name: string; size: number; createdAt: number; mime: string }[]>([]);
+  const [exports, setExports] = useState<
+    { id: string; name: string; size: number; createdAt: number; mime: string }[]
+  >([]);
   const [busyImport, setBusyImport] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -64,9 +70,39 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
   const [installing, setInstalling] = useState<string | null>(null);
   const [enhanceFor, setEnhanceFor] = useState<UserTemplate | null>(null);
   const [installedPacks, setInstalledPacks] = useState<Set<string>>(new Set());
+  const [storage, setStorage] = useState<{
+    used: number;
+    quota: number;
+    persisted: boolean;
+  } | null>(null);
+  const [previewing, setPreviewing] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  /** Inline playback of a finished export (CapCut's "watch before sharing"). */
+  async function togglePreviewExport(id: string) {
+    if (previewing === id) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+      setPreviewing(null);
+      return;
+    }
+    const blob = await db.getExportBlob(id);
+    if (!blob) {
+      toast.error("That export is no longer stored on this device");
+      return;
+    }
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(URL.createObjectURL(blob));
+    setPreviewing(id);
+  }
 
   async function refresh() {
-    const [m, p, t, e] = await Promise.all([db.listMedia(), db.listProjects(), db.listTemplates(), db.listExports()]);
+    const [m, p, t, e] = await Promise.all([
+      db.listMedia(),
+      db.listProjects(),
+      db.listTemplates(),
+      db.listExports(),
+    ]);
     setMedia(m.sort((a, b) => b.createdAt - a.createdAt));
     setProjects(p.sort((a, b) => b.updatedAt - a.updatedAt));
     setUserTpls(t.sort((a, b) => b.createdAt - a.createdAt));
@@ -77,7 +113,19 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
 
   useEffect(() => {
     void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void (async () => {
+      try {
+        const est = await navigator.storage?.estimate?.();
+        if (!est) return;
+        setStorage({
+          used: est.usage ?? 0,
+          quota: est.quota ?? 0,
+          persisted: (await navigator.storage?.persisted?.()) ?? false,
+        });
+      } catch {
+        /* storage API unavailable — the meter simply hides */
+      }
+    })();
   }, []);
 
   async function onFiles(files: FileList | null) {
@@ -192,7 +240,9 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
         await db.saveProject(project);
         nav.onOpenProject(project.id);
         if (project.missingMedia?.length) {
-          toast.warning(`Opened from template. Missing on this device: ${project.missingMedia.join(", ")} — use Replace on those clips`);
+          toast.warning(
+            `Opened from template. Missing on this device: ${project.missingMedia.join(", ")} — use Replace on those clips`,
+          );
         }
       }
     } catch (e) {
@@ -209,7 +259,13 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
   }
 
   async function dupProject(p: Project) {
-    const copy: Project = { ...p, id: uid("prj"), name: `${p.name} copy`, createdAt: Date.now(), updatedAt: Date.now() };
+    const copy: Project = {
+      ...p,
+      id: uid("prj"),
+      name: `${p.name} copy`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
     await db.saveProject(copy);
     await refresh();
   }
@@ -265,22 +321,39 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
             {!desktop && (
               <>
                 {nav.onGetApp && (
-                  <button className="mb-btn-ghost text-xs px-2 hidden sm:inline-flex" onClick={nav.onGetApp}>
+                  <button
+                    className="mb-btn-ghost text-xs px-2 hidden sm:inline-flex"
+                    onClick={nav.onGetApp}
+                  >
                     <Download className="h-4 w-4" /> Get the app
                   </button>
                 )}
                 {nav.onBackToPlatform && (
-                  <button className="mb-btn-ghost text-xs px-2 hidden sm:inline-flex" onClick={nav.onBackToPlatform}>
+                  <button
+                    className="mb-btn-ghost text-xs px-2 hidden sm:inline-flex"
+                    onClick={nav.onBackToPlatform}
+                  >
                     ← Mayobuild
                   </button>
                 )}
               </>
             )}
-            <button className="mb-btn text-xs px-2.5 sm:text-sm sm:px-4" onClick={() => fileRef.current?.click()} disabled={busyImport}>
-              {busyImport ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            <button
+              className="mb-btn text-xs px-2.5 sm:text-sm sm:px-4"
+              onClick={() => fileRef.current?.click()}
+              disabled={busyImport}
+            >
+              {busyImport ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4" />
+              )}
               <span>Import media</span>
             </button>
-            <button className="mb-btn text-xs px-2.5 sm:text-sm sm:px-4 bg-primary" onClick={() => setNewOpen(true)}>
+            <button
+              className="mb-btn text-xs px-2.5 sm:text-sm sm:px-4 bg-primary"
+              onClick={() => setNewOpen(true)}
+            >
               <Plus className="h-4 w-4" />
               <span>New project</span>
             </button>
@@ -293,8 +366,9 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
           <div className="max-w-6xl mx-auto px-4 py-2 flex items-center gap-2 text-[12px] text-amber-200">
             <Cpu className="h-4 w-4 shrink-0" />
             <span>
-              <b>Low-power device detected</b> ({dev.cores} cores{dev.memoryGB ? `, ${dev.memoryGB} GB RAM` : ""}, {dev.gpu}).
-              Text-to-speech, audio denoise, local AI and auto captions are switched off so editing stays smooth — they
+              <b>Low-power device detected</b> ({dev.cores} cores
+              {dev.memoryGB ? `, ${dev.memoryGB} GB RAM` : ""}, {dev.gpu}). Text-to-speech, audio
+              denoise, local AI and auto captions are switched off so editing stays smooth — they
               turn on automatically on a faster device. Full editing and export still work.
             </span>
           </div>
@@ -327,7 +401,11 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
                   <div className="p-3">
                     <div className="font-semibold text-sm flex items-center gap-1.5">
                       {bp.name}
-                      {installed && <span className="text-[10px] text-emerald-300 border border-emerald-400/40 rounded px-1">installed</span>}
+                      {installed && (
+                        <span className="text-[10px] text-emerald-300 border border-emerald-400/40 rounded px-1">
+                          installed
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{bp.desc}</p>
                     <button
@@ -335,8 +413,16 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
                       disabled={installing === bp.file || installed}
                       onClick={() => void installBundled(bp.file)}
                     >
-                      {installing === bp.file ? <Loader2 className="h-3.5 w-3.5 animate-spin inline" /> : <Download className="h-3.5 w-3.5 inline" />}
-                      {installed ? "Installed" : installing === bp.file ? "Installing…" : "Install pack (on-device)"}
+                      {installing === bp.file ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin inline" />
+                      ) : (
+                        <Download className="h-3.5 w-3.5 inline" />
+                      )}
+                      {installed
+                        ? "Installed"
+                        : installing === bp.file
+                          ? "Installing…"
+                          : "Install pack (on-device)"}
                     </button>
                   </div>
                 </div>
@@ -349,8 +435,8 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
               <div className="p-3 flex-1 flex flex-col">
                 <div className="font-semibold text-sm">Shared .json packs</div>
                 <p className="text-xs text-muted-foreground mt-1 line-clamp-2 flex-1">
-                  Import a pack someone shared with you — or export your own project as one from the editor (“Export
-                  pack”).
+                  Import a pack someone shared with you — or export your own project as one from the
+                  editor (“Export pack”).
                 </p>
                 <button
                   className="mb-btn-ghost w-full h-7 mt-2 text-[11px]"
@@ -372,7 +458,11 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
 
         {/* Templates */}
         <section>
-          <SectionTitle icon={<Sparkles className="h-4 w-4" />} title="Start from a template" sub="Built from your own media — nothing is downloaded, nothing leaves this device." />
+          <SectionTitle
+            icon={<Sparkles className="h-4 w-4" />}
+            title="Start from a template"
+            sub="Built from your own media — nothing is downloaded, nothing leaves this device."
+          />
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
             {BUILT_IN_TEMPLATES.map((t) => (
               <button
@@ -384,7 +474,9 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
                 <div className="p-3">
                   <div className="font-semibold text-sm flex items-center gap-1.5">
                     {t.name}
-                    <span className="text-[10px] text-muted-foreground border border-border rounded px-1">{t.aspect}</span>
+                    <span className="text-[10px] text-muted-foreground border border-border rounded px-1">
+                      {t.aspect}
+                    </span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{t.desc}</p>
                 </div>
@@ -411,16 +503,23 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
                     <div className="font-semibold text-sm flex items-center gap-1.5">
                       {t.name}
                       {t.kind === "enhance" ? (
-                        <span className="text-[10px] text-amber-300 border border-amber-400/40 rounded px-1">treatment</span>
+                        <span className="text-[10px] text-amber-300 border border-amber-400/40 rounded px-1">
+                          treatment
+                        </span>
                       ) : t.packName ? (
-                        <span className="text-[10px] text-cyan-300 border border-cyan-400/40 rounded px-1" title={`from pack ${t.packName}`}>
+                        <span
+                          className="text-[10px] text-cyan-300 border border-cyan-400/40 rounded px-1"
+                          title={`from pack ${t.packName}`}
+                        >
                           pack
                         </span>
                       ) : (
                         <span className="text-[10px] text-fuchsia-300">yours</span>
                       )}
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{t.desc || "Your own template"}</p>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                      {t.desc || "Your own template"}
+                    </p>
                   </div>
                 </button>
                 <div className="px-3 pb-2 flex justify-end opacity-0 group-hover:opacity-100 transition-opacity">
@@ -441,9 +540,64 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
           </div>
         </section>
 
+        {/* Storage — the device is the database, so show what it is using */}
+        {storage && storage.quota > 0 && (
+          <section className="mb-card p-3 sm:p-4">
+            <div className="flex items-center gap-2 text-xs sm:text-sm">
+              <HardDrive className="h-4 w-4 text-cyan-300 shrink-0" />
+              <span className="font-medium">On-device storage</span>
+              <span className="text-muted-foreground">
+                {fmtBytes(storage.used)} of {fmtBytes(storage.quota)} used
+              </span>
+              <button
+                className="ml-auto mb-btn-ghost h-7 text-[11px]"
+                title={
+                  storage.persisted
+                    ? "This origin is marked persistent — the browser won't evict it"
+                    : "Ask the browser to keep your media from being evicted"
+                }
+                onClick={async () => {
+                  try {
+                    const ok = await navigator.storage?.persist?.();
+                    setStorage({ ...storage, persisted: !!ok });
+                    toast[ok ? "success" : "info"](
+                      ok
+                        ? "Persistent storage granted — your media is protected"
+                        : "The browser declined; free up space and try again",
+                    );
+                  } catch {
+                    toast.error("This browser can't mark storage persistent");
+                  }
+                }}
+              >
+                <ShieldCheck className="h-3 w-3" />{" "}
+                {storage.persisted ? "Protected" : "Protect my media"}
+              </button>
+            </div>
+            <div className="mt-2 h-1.5 rounded bg-secondary overflow-hidden">
+              <div
+                className={`h-full ${storage.used / storage.quota > 0.85 ? "bg-red-400" : "bg-cyan-400"}`}
+                style={{
+                  width: `${Math.min(100, (storage.used / Math.max(1, storage.quota)) * 100)}%`,
+                }}
+              />
+            </div>
+            {storage.used / storage.quota > 0.85 && (
+              <p className="text-[11px] text-amber-300 mt-1.5">
+                Storage is nearly full — delete unused media or exports below, or export finished
+                videos and remove them from the library.
+              </p>
+            )}
+          </section>
+        )}
+
         {/* Projects */}
         <section>
-          <SectionTitle icon={<Film className="h-4 w-4" />} title="Your projects" sub="Saved on this device only (IndexedDB). Open, edit, export — fully offline." />
+          <SectionTitle
+            icon={<Film className="h-4 w-4" />}
+            title="Your projects"
+            sub="Saved on this device only (IndexedDB). Open, edit, export — fully offline."
+          />
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-4">
             {projects.length === 0 && (
               <div className="col-span-full mb-card p-8 text-center text-muted-foreground text-sm">
@@ -463,7 +617,9 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
                   <div className="p-3">
                     <div className="font-semibold text-sm truncate">{p.name}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">
-                      {fmtTime(projectDuration(p))} · {p.main.length} clip{p.main.length === 1 ? "" : "s"} · {new Date(p.updatedAt).toLocaleDateString()}
+                      {fmtTime(projectDuration(p))} · {p.main.length} clip
+                      {p.main.length === 1 ? "" : "s"} ·{" "}
+                      {new Date(p.updatedAt).toLocaleDateString()}
                     </div>
                   </div>
                 </button>
@@ -490,7 +646,8 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-7 gap-3 mt-4">
             {media.length === 0 && (
               <div className="col-span-full mb-card p-6 text-center text-muted-foreground text-sm">
-                Your library is empty. Use <b>Import media</b> — files are stored only on this device.
+                Your library is empty. Use <b>Import media</b> — files are stored only on this
+                device.
               </div>
             )}
             {media.map((m) => (
@@ -507,7 +664,12 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
                 <div className="p-2">
                   <div className="text-[11px] truncate">{m.name}</div>
                   <div className="text-[10px] text-muted-foreground">
-                    {m.kind === "video" && m.duration ? fmtTime(m.duration) : m.kind === "audio" && m.duration ? fmtTime(m.duration) : m.kind} · {fmtBytes(m.size)}
+                    {m.kind === "video" && m.duration
+                      ? fmtTime(m.duration)
+                      : m.kind === "audio" && m.duration
+                        ? fmtTime(m.duration)
+                        : m.kind}{" "}
+                    · {fmtBytes(m.size)}
                   </div>
                 </div>
                 <button
@@ -525,23 +687,65 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
         {/* Exports */}
         {exports.length > 0 && (
           <section>
-            <SectionTitle icon={<Download className="h-4 w-4" />} title="Your exports" sub="Rendered videos saved on this device. Re-download anytime." />
+            <SectionTitle
+              icon={<Download className="h-4 w-4" />}
+              title="Your exports"
+              sub="Rendered videos saved on this device. Re-download anytime."
+            />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
               {exports.map((e) => (
-                <div key={e.id} className="mb-card p-4 flex items-center gap-3">
-                  <Clapperboard className="h-6 w-6 text-primary shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium truncate">{e.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {fmtBytes(e.size)} · {new Date(e.createdAt).toLocaleString()}
+                <div key={e.id} className="mb-card p-3">
+                  <div className="flex items-center gap-3">
+                    {e.mime.startsWith("image/") ? (
+                      <ImageIcon className="h-6 w-6 text-fuchsia-300 shrink-0" />
+                    ) : e.mime.startsWith("audio/") ? (
+                      <Music className="h-6 w-6 text-emerald-300 shrink-0" />
+                    ) : (
+                      <Clapperboard className="h-6 w-6 text-primary shrink-0" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium truncate">{e.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {fmtBytes(e.size)} · {new Date(e.createdAt).toLocaleString()} ·{" "}
+                        {exportKind(e.name, e.mime)}
+                      </div>
                     </div>
+                    <button
+                      className="mb-btn-ghost text-xs"
+                      title="Play / view it here before saving"
+                      onClick={() => void togglePreviewExport(e.id)}
+                    >
+                      <Play className="h-3.5 w-3.5" /> {previewing === e.id ? "Close" : "Preview"}
+                    </button>
+                    <button
+                      className="mb-btn-ghost text-xs"
+                      onClick={() => void downloadExport(e.id, e.name, e.mime)}
+                    >
+                      <Download className="h-3.5 w-3.5" /> Download
+                    </button>
+                    <button
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() => void delExport(e.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
-                  <button className="mb-btn-ghost text-xs" onClick={() => void downloadExport(e.id, e.name, e.mime)}>
-                    <Download className="h-3.5 w-3.5" /> Download
-                  </button>
-                  <button className="text-muted-foreground hover:text-destructive" onClick={() => void delExport(e.id)}>
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  {previewing === e.id && previewUrl && (
+                    <div className="mt-2 rounded overflow-hidden bg-black flex items-center justify-center">
+                      {e.mime.startsWith("image/") ? (
+                        <img src={previewUrl} alt={e.name} className="max-h-[50vh] w-auto" />
+                      ) : e.mime.startsWith("audio/") ? (
+                        <audio src={previewUrl} controls className="w-full" />
+                      ) : (
+                        <video
+                          src={previewUrl}
+                          controls
+                          playsInline
+                          className="max-h-[50vh] w-full"
+                        />
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -552,7 +756,8 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
           <div className="flex items-center justify-center gap-2">
             <Pencil className="h-3 w-3" />
             <span>
-              AI assistance is <b>optional and off by default</b> — every feature of MayoCut works with zero internet, zero accounts, zero servers.
+              AI assistance is <b>optional and off by default</b> — every feature of MayoCut works
+              with zero internet, zero accounts, zero servers.
             </span>
           </div>
           <div>MayoCut v0.1 · part of the Mayobuild Studio platform</div>
@@ -567,17 +772,24 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
       )}
 
       {enhanceFor && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setEnhanceFor(null)}>
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setEnhanceFor(null)}
+        >
           <div className="mb-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2">
               <Wand2 className="h-5 w-5 text-amber-300" />
               <h3 className="font-bold text-lg">{enhanceFor.name}</h3>
-              <button className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => setEnhanceFor(null)}>
+              <button
+                className="ml-auto text-muted-foreground hover:text-foreground"
+                onClick={() => setEnhanceFor(null)}
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
             <p className="text-sm text-muted-foreground mt-2">
-              This treatment restyles a copy of one of your projects (your original stays untouched). Which project?
+              This treatment restyles a copy of one of your projects (your original stays
+              untouched). Which project?
             </p>
             <div className="mt-3 space-y-1.5 max-h-64 overflow-y-auto">
               {projects.map((p) => (
@@ -587,18 +799,25 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
                   onClick={() => void openEnhanceFrom(enhanceFor, p.id)}
                 >
                   <div className="w-14 h-9 bg-slate-900 rounded overflow-hidden shrink-0 flex items-center justify-center">
-                    {p.thumb ? <img src={p.thumb} alt="" className="w-full h-full object-cover" /> : <Film className="h-4 w-4 text-muted-foreground" />}
+                    {p.thumb ? (
+                      <img src={p.thumb} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <Film className="h-4 w-4 text-muted-foreground" />
+                    )}
                   </div>
                   <div className="min-w-0">
                     <div className="text-sm truncate">{p.name}</div>
                     <div className="text-[11px] text-muted-foreground">
-                      {fmtTime(projectDuration(p))} · {p.main.length} clip{p.main.length === 1 ? "" : "s"}
+                      {fmtTime(projectDuration(p))} · {p.main.length} clip
+                      {p.main.length === 1 ? "" : "s"}
                     </div>
                   </div>
                 </button>
               ))}
               {projects.length === 0 && (
-                <div className="text-sm text-muted-foreground py-4 text-center">No projects yet.</div>
+                <div className="text-sm text-muted-foreground py-4 text-center">
+                  No projects yet.
+                </div>
               )}
             </div>
           </div>
@@ -612,6 +831,17 @@ function userTemplatePackNames(tpls: UserTemplate[]): string[] {
   return tpls.filter((t) => t.packName).map((t) => t.packName!);
 }
 
+/** Short human label for an export's container/codec. */
+function exportKind(name: string, mime: string): string {
+  const ext = name.split(".").pop()?.toUpperCase() ?? "FILE";
+  if (mime.includes("mp4")) return "MP4 · H.264";
+  if (mime.includes("webm")) return "WebM · VP9";
+  if (mime === "image/gif") return "GIF · animated";
+  if (mime === "image/png") return "PNG · still";
+  if (mime.includes("wav")) return "WAV · audio";
+  return ext;
+}
+
 function SectionTitle({ icon, title, sub }: { icon: React.ReactNode; title: string; sub: string }) {
   return (
     <div>
@@ -623,9 +853,21 @@ function SectionTitle({ icon, title, sub }: { icon: React.ReactNode; title: stri
   );
 }
 
-function IconBtn({ children, title, onClick }: { children: React.ReactNode; title: string; onClick: () => void }) {
+function IconBtn({
+  children,
+  title,
+  onClick,
+}: {
+  children: React.ReactNode;
+  title: string;
+  onClick: () => void;
+}) {
   return (
-    <button className="bg-black/60 rounded p-1.5 hover:text-destructive" title={title} onClick={onClick}>
+    <button
+      className="bg-black/60 rounded p-1.5 hover:text-destructive"
+      title={title}
+      onClick={onClick}
+    >
       {children}
     </button>
   );
@@ -641,37 +883,48 @@ function NewProjectModal({
   const [name, setName] = useState("Untitled project");
   const [aspect, setAspect] = useState<AspectId>("9:16");
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
       <div className="mb-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
         <h3 className="font-bold text-lg">New project</h3>
         <p className="text-sm text-muted-foreground mt-1">
           Pick a format. The project lives only on this device.
         </p>
-        <div className="mt-4 space-y-2">
-          {Object.entries(ASPECTS).map(([id, a]) => (
-            <label
-              key={id}
-              className={`flex items-center gap-3 border rounded-lg p-3 cursor-pointer transition-colors ${
-                aspect === id ? "border-primary bg-primary/10" : "border-border hover:border-muted-foreground/50"
-              }`}
-            >
-              <input
-                type="radio"
-                name="aspect"
-                checked={aspect === id}
-                onChange={() => setAspect(id as AspectId)}
-                className="accent-cyan-400"
-              />
-              <div
-                className="border border-border bg-slate-900"
-                style={{
-                  width: 26,
-                  height: id === "16:9" ? 26 : id === "1:1" ? 26 : id === "4:5" ? 32 : 40,
-                }}
-              />
-              <span className="text-sm">{a.label}</span>
-            </label>
-          ))}
+        <div className="mt-4 grid grid-cols-2 gap-2 max-h-[46vh] overflow-y-auto pr-1">
+          {ASPECT_ORDER.map((id) => {
+            const a = ASPECTS[id];
+            return (
+              <label
+                key={id}
+                className={`flex items-center gap-3 border rounded-lg p-3 cursor-pointer transition-colors ${
+                  aspect === id
+                    ? "border-primary bg-primary/10"
+                    : "border-border hover:border-muted-foreground/50"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="aspect"
+                  checked={aspect === id}
+                  onChange={() => setAspect(id as AspectId)}
+                  className="accent-cyan-400"
+                />
+                <div
+                  className="border border-border bg-slate-900 shrink-0"
+                  style={{
+                    width: Math.max(10, Math.round(26 * Math.min(1, a.w / a.h)) + 8),
+                    height: Math.max(10, Math.round(26 * Math.min(1, a.h / a.w)) + 8),
+                  }}
+                />
+                <span className="text-xs leading-tight">
+                  {id}
+                  <span className="block text-[10px] text-muted-foreground">{a.hint}</span>
+                </span>
+              </label>
+            );
+          })}
         </div>
         <input
           className="mt-4 w-full bg-slate-900 border border-border rounded-lg px-3 py-2 text-sm"
@@ -683,7 +936,10 @@ function NewProjectModal({
           <button className="mb-btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button className="mb-btn" onClick={() => onCreate(aspect, name.trim() || "Untitled project")}>
+          <button
+            className="mb-btn"
+            onClick={() => onCreate(aspect, name.trim() || "Untitled project")}
+          >
             Create
           </button>
         </div>
@@ -706,7 +962,8 @@ export function remapTemplate(tpl: UserTemplate, media: MediaItem[]): Project {
     if (!id) return id;
     const src = media.find((m) => m.id === id);
     if (src) return id;
-    const original = (tpl.project as any).__mediaNames?.[id] as string | undefined;
+    const original = (tpl.project as Project & { __mediaNames?: Record<string, string> })
+      .__mediaNames?.[id];
     const match = byName.get(original ?? "");
     if (match) {
       used.add(match.id);
@@ -732,8 +989,7 @@ export function remapTemplate(tpl: UserTemplate, media: MediaItem[]): Project {
       c.mediaId = remap(c.mediaId);
       check(c.mediaId);
     }
-  (p as any).missingMedia = missing;
+  p.missingMedia = missing;
   void used;
   return p;
 }
-

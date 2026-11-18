@@ -17,9 +17,18 @@ function MayoCutEditorRoute() {
     // no project id — send the user home
     return (
       <div className="min-h-screen flex items-center justify-center text-muted-foreground text-sm">
-        No project selected — <button className="underline" onClick={() => navigate({ to: "/mayocut" })}>go to MayoCut</button>
+        No project selected —{" "}
+        <button className="underline" onClick={() => navigate({ to: "/mayocut" })}>
+          go to MayoCut
+        </button>
       </div>
     );
   }
-  return <Editor desktop={isShellApp() || undefined} projectId={p} onExit={() => navigate({ to: "/mayocut" })} />;
+  return (
+    <Editor
+      desktop={isShellApp() || undefined}
+      projectId={p}
+      onExit={() => navigate({ to: "/mayocut" })}
+    />
+  );
 }

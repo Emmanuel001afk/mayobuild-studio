@@ -98,7 +98,9 @@ export function Assist({
   const [ttsBusy, setTtsBusy] = useState<"load" | "gen" | null>(null);
   const [ttsText, setTtsText] = useState("");
   const [ttsSpeed, setTtsSpeed] = useState(1);
-  const [ttsResult, setTtsResult] = useState<{ audio: TtsAudio; url: string; name: string } | null>(null);
+  const [ttsResult, setTtsResult] = useState<{ audio: TtsAudio; url: string; name: string } | null>(
+    null,
+  );
 
   async function loadCapModel(files?: File[]) {
     setCapBusy("load");
@@ -116,7 +118,9 @@ export function Assist({
 
   async function generateCaptions() {
     if (!whisper.ready) {
-      toast.info("Get the model first (one-time download) — or keep editing, captions are optional");
+      toast.info(
+        "Get the model first (one-time download) — or keep editing, captions are optional",
+      );
       return;
     }
     setCapBusy("gen");
@@ -128,7 +132,9 @@ export function Assist({
         toast.error("No audio found on the main track");
         return;
       }
-      const segs = await whisper.transcribe(audio.samples, capLang, (m) => setCapStatus({ msg: m }));
+      const segs = await whisper.transcribe(audio.samples, capLang, (m) =>
+        setCapStatus({ msg: m }),
+      );
       if (segs.length === 0) {
         toast.info("No speech detected in that audio");
         return;
@@ -152,7 +158,11 @@ export function Assist({
       for (const c of clips) tr.clips.push({ ...c, id: uid("cap") } as OverlayClip);
     });
     setCapSegs(null);
-    toast.success(karaoke ? "Karaoke captions added — tweak them on the Text track" : "Captions added — tweak them on the Text track");
+    toast.success(
+      karaoke
+        ? "Karaoke captions added — tweak them on the Text track"
+        : "Captions added — tweak them on the Text track",
+    );
   }
 
   // --- TTS handlers ---
@@ -202,8 +212,6 @@ export function Assist({
       return null;
     });
   }
-
-
 
   useEffect(() => {
     if (!beatMediaId && audioMedia[0]) setBeatMediaId(audioMedia[0].id);
@@ -268,7 +276,11 @@ export function Assist({
             for (const c of tr.clips) if (c.kind === "audio" && c.mediaId === m.id) c.volume = gain;
         }
       });
-      toast.success(gain >= 0.98 ? "Audio is already loud — nothing to boost" : `Volume set to ${Math.round(gain * 100)}% for an even level`);
+      toast.success(
+        gain >= 0.98
+          ? "Audio is already loud — nothing to boost"
+          : `Volume set to ${Math.round(gain * 100)}% for an even level`,
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Normalize failed");
     } finally {
@@ -287,7 +299,10 @@ export function Assist({
       if (target === "selected" && selectedClip) {
         const c = eng.getClip(selectedClip.id);
         if (c && "adjust" in c) {
-          c.adjust = { ...(c.adjust ?? { brightness: 100, contrast: 100, saturation: 100, hue: 0 }), ...sc.adjust };
+          c.adjust = {
+            ...(c.adjust ?? { brightness: 100, contrast: 100, saturation: 100, hue: 0 }),
+            ...sc.adjust,
+          };
           c.filter = sc.filter;
         }
       } else {
@@ -311,7 +326,8 @@ export function Assist({
       const edges = silenceEdges(peaks, duration);
       setSilence(edges);
       if (!apply) {
-        if (edges.lead + edges.trail < 0.4) toast.info("No significant leading/trailing silence found");
+        if (edges.lead + edges.trail < 0.4)
+          toast.info("No significant leading/trailing silence found");
         return;
       }
       if (edges.lead + edges.trail < 0.4) {
@@ -327,7 +343,9 @@ export function Assist({
           c.duration = Math.max(0.3, c.duration - edges.lead - edges.trail);
         }
       });
-      toast.success(`Trimmed ${edges.lead.toFixed(1)}s lead + ${edges.trail.toFixed(1)}s tail silence`);
+      toast.success(
+        `Trimmed ${edges.lead.toFixed(1)}s lead + ${edges.trail.toFixed(1)}s tail silence`,
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Silence detection failed");
     } finally {
@@ -374,12 +392,23 @@ export function Assist({
               <Select value={beatMediaId} onChange={setBeatMediaId} options={audioMedia} />
               <div className="mt-2 flex items-center gap-2 text-[11px]">
                 <span className="text-muted-foreground w-14">Beats: {beatCount}</span>
-                <input type="range" min={3} max={14} step={1} value={beatCount} onChange={(e) => setBeatCount(Number(e.target.value))} className="flex-1 accent-cyan-400" />
+                <input
+                  type="range"
+                  min={3}
+                  max={14}
+                  step={1}
+                  value={beatCount}
+                  onChange={(e) => setBeatCount(Number(e.target.value))}
+                  className="flex-1 accent-cyan-400"
+                />
               </div>
               {beats && (
                 <div className="mt-2 text-[10px] text-muted-foreground leading-relaxed">
                   {beats.map((b) => (
-                    <span key={b} className="inline-block mr-1 mb-1 border border-border rounded px-1">
+                    <span
+                      key={b}
+                      className="inline-block mr-1 mb-1 border border-border rounded px-1"
+                    >
                       {fmtTime(b)}
                     </span>
                   ))}
@@ -395,11 +424,21 @@ export function Assist({
               </div>
             </Tool>
 
-            <Tool icon={<Timer className="h-4 w-4" />} title="Even out loudness" desc="Measures a track's true level and sets clip volume so it sits evenly in the mix.">
+            <Tool
+              icon={<Timer className="h-4 w-4" />}
+              title="Even out loudness"
+              desc="Measures a track's true level and sets clip volume so it sits evenly in the mix."
+            >
               {selectedClip?.mediaId && selectedClip.kind !== "image" ? (
-                <div className="text-[11px] text-muted-foreground">Applies to: the selected clip</div>
+                <div className="text-[11px] text-muted-foreground">
+                  Applies to: the selected clip
+                </div>
               ) : (
-                <Select value={audioOnly.find((m) => m.id === silenceMediaId)?.id ?? ""} onChange={() => undefined} options={audioOnly} />
+                <Select
+                  value={audioOnly.find((m) => m.id === silenceMediaId)?.id ?? ""}
+                  onChange={() => undefined}
+                  options={audioOnly}
+                />
               )}
               <div className="mt-2">
                 <ToolBtn busy={busy === "norm"} onClick={runNormalize} primary>
@@ -408,18 +447,24 @@ export function Assist({
               </div>
             </Tool>
 
-            <Tool icon={<Palette className="h-4 w-4" />} title="Smart color" desc="Samples the current frame and suggests a filter + adjust that fits what's on screen.">
+            <Tool
+              icon={<Palette className="h-4 w-4" />}
+              title="Smart color"
+              desc="Samples the current frame and suggests a filter + adjust that fits what's on screen."
+            >
               <div className="grid grid-cols-1 gap-1.5">
                 <ToolBtn onClick={() => runSmartColor("selected")} disabled={!selectedClip}>
                   Apply to selected clip
                 </ToolBtn>
-                <ToolBtn onClick={() => runSmartColor("all")}>
-                  Apply to all main clips
-                </ToolBtn>
+                <ToolBtn onClick={() => runSmartColor("all")}>Apply to all main clips</ToolBtn>
               </div>
             </Tool>
 
-            <Tool icon={<Scissors className="h-4 w-4" />} title="Trim silence" desc="Finds leading and trailing silence in an audio file and trims your clips to the music.">
+            <Tool
+              icon={<Scissors className="h-4 w-4" />}
+              title="Trim silence"
+              desc="Finds leading and trailing silence in an audio file and trims your clips to the music."
+            >
               <Select value={silenceMediaId} onChange={setSilenceMediaId} options={audioOnly} />
               {silence && (
                 <div className="mt-2 text-[11px] text-muted-foreground">
@@ -438,8 +483,9 @@ export function Assist({
             </Tool>
 
             <p className="text-[10px] text-muted-foreground leading-relaxed border-t border-border pt-3">
-              These tools run entirely on this device with the WebAudio API — no model, no download, no network. They
-              suggest and apply edits you can undo with <kbd className="px-1 border border-border rounded bg-slate-900">Ctrl+Z</kbd>.
+              These tools run entirely on this device with the WebAudio API — no model, no download,
+              no network. They suggest and apply edits you can undo with{" "}
+              <kbd className="px-1 border border-border rounded bg-slate-900">Ctrl+Z</kbd>.
             </p>
           </>
         ) : tab === "captions" ? (
@@ -490,19 +536,29 @@ export function Assist({
                     }}
                   />
                 </label>
-                {whisper.ready && <span className="text-[10px] text-emerald-300">● ready — {whisper.model}</span>}
+                {whisper.ready && (
+                  <span className="text-[10px] text-emerald-300">● ready — {whisper.model}</span>
+                )}
               </div>
               {capStatus && (
                 <div className="text-[10px] text-muted-foreground">
                   {capStatus.msg}
                   {typeof capStatus.pct === "number" && (
                     <div className="h-1 bg-slate-800 rounded mt-1 overflow-hidden">
-                      <div className="h-full bg-primary" style={{ width: `${Math.round(capStatus.pct * 100)}%` }} />
+                      <div
+                        className="h-full bg-primary"
+                        style={{ width: `${Math.round(capStatus.pct * 100)}%` }}
+                      />
                     </div>
                   )}
                 </div>
               )}
-              <ToolBtn primary busy={capBusy === "gen"} disabled={!whisper.ready} onClick={() => void generateCaptions()}>
+              <ToolBtn
+                primary
+                busy={capBusy === "gen"}
+                disabled={!whisper.ready}
+                onClick={() => void generateCaptions()}
+              >
                 Generate captions · {captionSourceLabel(engine)}
               </ToolBtn>
               {capSegs && (
@@ -517,7 +573,9 @@ export function Assist({
                       </div>
                     ))}
                     {capSegs.length > 40 && (
-                      <div className="text-[10px] text-muted-foreground">…and {capSegs.length - 40} more lines</div>
+                      <div className="text-[10px] text-muted-foreground">
+                        …and {capSegs.length - 40} more lines
+                      </div>
                     )}
                   </div>
                   <div className="flex gap-1.5 mt-2">
@@ -530,8 +588,9 @@ export function Assist({
               )}
             </Tool>
             <p className="text-[10px] text-muted-foreground leading-relaxed">
-              Assistive only: nothing touches your timeline until you press a button, and every caption is a normal text
-              clip you can edit, restyle, delete or keyframe. No audio ever leaves this device.
+              Assistive only: nothing touches your timeline until you press a button, and every
+              caption is a normal text clip you can edit, restyle, delete or keyframe. No audio ever
+              leaves this device.
             </p>
           </FeatureGate>
         ) : tab === "voice" ? (
@@ -583,7 +642,10 @@ export function Assist({
                   {ttsStatus.msg}
                   {typeof ttsStatus.pct === "number" && ttsStatus.pct < 1 && (
                     <div className="h-1 bg-slate-800 rounded mt-1 overflow-hidden">
-                      <div className="h-full bg-primary" style={{ width: `${Math.round(ttsStatus.pct * 100)}%` }} />
+                      <div
+                        className="h-full bg-primary"
+                        style={{ width: `${Math.round(ttsStatus.pct * 100)}%` }}
+                      />
                     </div>
                   )}
                 </div>
@@ -592,7 +654,8 @@ export function Assist({
                 <div className="mt-1 space-y-2">
                   <audio controls src={ttsResult.url} className="w-full h-9" />
                   <div className="text-[10px] text-muted-foreground">
-                    {ttsResult.audio.duration.toFixed(1)} s · {ttsResult.audio.sampleRate} Hz · “{ttsResult.name}”
+                    {ttsResult.audio.duration.toFixed(1)} s · {ttsResult.audio.sampleRate} Hz · “
+                    {ttsResult.name}”
                   </div>
                   <div className="flex gap-1.5">
                     <ToolBtn primary onClick={addTtsToTimeline}>
@@ -613,9 +676,9 @@ export function Assist({
               )}
             </Tool>
             <p className="text-[10px] text-muted-foreground leading-relaxed">
-              Assistive only: the clip is added at the playhead — you can move, trim, fade, denoise or FX it like any
-              audio. Generation is single-threaded CPU: a few seconds per 10 s of speech on desktop, slower on phones.
-              Nothing leaves this device.
+              Assistive only: the clip is added at the playhead — you can move, trim, fade, denoise
+              or FX it like any audio. Generation is single-threaded CPU: a few seconds per 10 s of
+              speech on desktop, slower on phones. Nothing leaves this device.
             </p>
           </FeatureGate>
         ) : tab === "cloud" ? (
@@ -639,8 +702,12 @@ export function Assist({
  */
 function CloudAiPanel() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [saved, setSaved] = useState<Record<string, boolean>>(() => Object.fromEntries(Object.keys(aiKeys.all()).map((k) => [k, true])));
-  const [res, setRes] = useState<Record<string, { ok: boolean; message: string; busy?: boolean }>>({});
+  const [saved, setSaved] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(Object.keys(aiKeys.all()).map((k) => [k, true])),
+  );
+  const [res, setRes] = useState<Record<string, { ok: boolean; message: string; busy?: boolean }>>(
+    {},
+  );
 
   function save(id: string) {
     const v = (drafts[id] ?? "").trim();
@@ -676,13 +743,14 @@ function CloudAiPanel() {
           <Globe className="h-4 w-4 text-primary" /> Cloud AI — your own keys
         </div>
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          MayoCut's AI is on-device by default. For anything that needs a cloud model (longer context, better writing),
-          paste one of <b>your</b> provider keys below. It is stored <b>only on this device</b> and sent only to that
-          provider — no Mayobuild server is in the loop. The rest of the editor works with no key at all.
+          MayoCut's AI is on-device by default. For anything that needs a cloud model (longer
+          context, better writing), paste one of <b>your</b> provider keys below. It is stored{" "}
+          <b>only on this device</b> and sent only to that provider — no Mayobuild server is in the
+          loop. The rest of the editor works with no key at all.
         </p>
         <p className="text-[10px] text-muted-foreground">
-          The AI writer uses the first working key automatically (failover). Free tiers: Gemini, Groq, Cerebras,
-          DeepSeek, OpenRouter.
+          The AI writer uses the first working key automatically (failover). Free tiers: Gemini,
+          Groq, Cerebras, DeepSeek, OpenRouter.
         </p>
       </div>
       {AI_PROVIDERS.map((p) => (
@@ -690,7 +758,9 @@ function CloudAiPanel() {
           <div className="flex items-center gap-2 text-[11px]">
             <span className="font-medium">{p.name}</span>
             <span className="text-muted-foreground text-[10px] truncate">{p.model}</span>
-            {saved[p.id] && <span className="ml-auto shrink-0 text-[10px] text-emerald-400">● stored</span>}
+            {saved[p.id] && (
+              <span className="ml-auto shrink-0 text-[10px] text-emerald-400">● stored</span>
+            )}
           </div>
           <div className="flex gap-1">
             <input
@@ -705,7 +775,11 @@ function CloudAiPanel() {
             <ToolBtn onClick={() => save(p.id)} disabled={!(drafts[p.id] ?? "").trim()}>
               Save
             </ToolBtn>
-            <ToolBtn busy={!!res[p.id]?.busy} onClick={() => void test(p.id)} disabled={!saved[p.id] && !(drafts[p.id] ?? "").trim()}>
+            <ToolBtn
+              busy={!!res[p.id]?.busy}
+              onClick={() => void test(p.id)}
+              disabled={!saved[p.id] && !(drafts[p.id] ?? "").trim()}
+            >
               Test
             </ToolBtn>
             {saved[p.id] && (
@@ -715,7 +789,9 @@ function CloudAiPanel() {
             )}
           </div>
           {res[p.id] && (
-            <div className={`text-[10px] ${res[p.id].ok ? "text-emerald-400" : "text-amber-300/90"}`}>
+            <div
+              className={`text-[10px] ${res[p.id].ok ? "text-emerald-400" : "text-amber-300/90"}`}
+            >
               {res[p.id].message}
             </div>
           )}
@@ -756,7 +832,10 @@ function DevicePanel() {
   const tier = dev.tier;
   const badge =
     tier === "high"
-      ? { cls: "border-emerald-400/40 text-emerald-300 bg-emerald-400/10", label: "High performance" }
+      ? {
+          cls: "border-emerald-400/40 text-emerald-300 bg-emerald-400/10",
+          label: "High performance",
+        }
       : tier === "medium"
         ? { cls: "border-amber-400/40 text-amber-300 bg-amber-400/10", label: "Balanced" }
         : { cls: "border-red-400/40 text-red-300 bg-red-400/10", label: "Low power" };
@@ -765,9 +844,15 @@ function DevicePanel() {
     setPrefs(setFeaturePref(id, on));
 
   return (
-    <Tool icon={<Cpu className="h-4 w-4" />} title="This device" desc="How much muscle was detected — and which heavy engines are allowed to run.">
+    <Tool
+      icon={<Cpu className="h-4 w-4" />}
+      title="This device"
+      desc="How much muscle was detected — and which heavy engines are allowed to run."
+    >
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-        <span className={`inline-flex items-center gap-1 border rounded-full px-2 py-0.5 text-[10px] font-medium ${badge.cls}`}>
+        <span
+          className={`inline-flex items-center gap-1 border rounded-full px-2 py-0.5 text-[10px] font-medium ${badge.cls}`}
+        >
           {badge.label}
         </span>
         <span className="text-muted-foreground">{dev.cores} cores</span>
@@ -778,14 +863,15 @@ function DevicePanel() {
 
       {tier === "low" ? (
         <p className="text-[11px] text-amber-300/90 mt-2 leading-relaxed">
-          This device is running the <b>low-power profile</b>. Text-to-speech, audio denoise, local AI and auto
-          captions are switched off so the editor stays smooth. On a faster device (4+ cores, 4 GB+ RAM) they turn on
-          automatically.
+          This device is running the <b>low-power profile</b>. Text-to-speech, audio denoise, local
+          AI and auto captions are switched off so the editor stays smooth. On a faster device (4+
+          cores, 4 GB+ RAM) they turn on automatically.
         </p>
       ) : (
         <>
           <div className="text-[10px] text-muted-foreground mt-2 mb-1">
-            You can also switch any of these off here (they start {tier === "medium" ? "on" : "on"} for this profile).
+            You can also switch any of these off here (they start {tier === "medium" ? "on" : "on"}{" "}
+            for this profile).
           </div>
           <div className="space-y-1">
             {HEAVY_FEATURES.map((f) => {
@@ -795,7 +881,9 @@ function DevicePanel() {
                 <label
                   key={f.id}
                   className={`flex items-center gap-2 text-[11px] rounded px-2 py-1 border border-border ${
-                    deviceOk ? "cursor-pointer hover:border-cyan-400/60" : "opacity-40 cursor-not-allowed"
+                    deviceOk
+                      ? "cursor-pointer hover:border-cyan-400/60"
+                      : "opacity-40 cursor-not-allowed"
                   }`}
                 >
                   <input
@@ -879,7 +967,9 @@ function AIWriter({ project }: { project: Project }) {
     const localReady = llmRef.current.ready;
     const cloudReady = keysPresent;
     if (!localReady && !cloudReady) {
-      toast.info("No local model and no cloud key — AI is optional, keep editing (see Cloud AI tab)");
+      toast.info(
+        "No local model and no cloud key — AI is optional, keep editing (see Cloud AI tab)",
+      );
       return;
     }
     setThinking(true);
@@ -927,8 +1017,8 @@ function AIWriter({ project }: { project: Project }) {
           <BrainCircuit className="h-4 w-4 text-primary" /> Local AI model
         </div>
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          Optional and private: a small language model runs <b>only on this device</b>. No model = everything in
-          MayoCut still works, this tab is just idle.
+          Optional and private: a small language model runs <b>only on this device</b>. No model =
+          everything in MayoCut still works, this tab is just idle.
         </p>
         {status && <div className="text-[11px] text-cyan-300">{status}</div>}
         {llmRef.current.ready ? (
@@ -937,7 +1027,9 @@ function AIWriter({ project }: { project: Project }) {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-1.5">
-            <ToolBtn onClick={() => fileRef.current?.click()}>Load a .gguf file from this device…</ToolBtn>
+            <ToolBtn onClick={() => fileRef.current?.click()}>
+              Load a .gguf file from this device…
+            </ToolBtn>
             <ToolBtn onClick={() => void loadPlatformModel()}>Use Mayobuild's stored model</ToolBtn>
             <input
               ref={fileRef}
@@ -950,7 +1042,8 @@ function AIWriter({ project }: { project: Project }) {
           </div>
         )}
         <p className="text-[10px] text-muted-foreground">
-          Tip: small models (7–13B, Q4) are the sweet spot. Loading a 4 GB file can take a couple of minutes.
+          Tip: small models (7–13B, Q4) are the sweet spot. Loading a 4 GB file can take a couple of
+          minutes.
         </p>
       </div>
 
@@ -994,7 +1087,12 @@ function AIWriter({ project }: { project: Project }) {
           onChange={(e) => setPrompt(e.target.value)}
         />
         <div className="flex gap-1.5">
-          <ToolBtn primary busy={thinking} onClick={() => void ask(prompt)} disabled={!prompt.trim()}>
+          <ToolBtn
+            primary
+            busy={thinking}
+            onClick={() => void ask(prompt)}
+            disabled={!prompt.trim()}
+          >
             Generate
           </ToolBtn>
           {out && (
@@ -1009,7 +1107,9 @@ function AIWriter({ project }: { project: Project }) {
           )}
         </div>
         {out && (
-          <pre className="text-[11px] whitespace-pre-wrap bg-slate-900 border border-border rounded p-2 leading-relaxed">{out}</pre>
+          <pre className="text-[11px] whitespace-pre-wrap bg-slate-900 border border-border rounded p-2 leading-relaxed">
+            {out}
+          </pre>
         )}
       </div>
     </>
@@ -1018,7 +1118,17 @@ function AIWriter({ project }: { project: Project }) {
 
 // ---------------------------------------------------------------------------
 
-function Tool({ icon, title, desc, children }: { icon: React.ReactNode; title: string; desc: string; children: React.ReactNode }) {
+function Tool({
+  icon,
+  title,
+  desc,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  desc: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="border border-border rounded-lg p-3 space-y-2">
       <div className="text-xs font-medium flex items-center gap-2">
@@ -1030,10 +1140,23 @@ function Tool({ icon, title, desc, children }: { icon: React.ReactNode; title: s
   );
 }
 
-function Select({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: MediaItem[] }) {
-  if (!options.length) return <div className="text-[11px] text-muted-foreground">Import audio or video first.</div>;
+function Select({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: MediaItem[];
+}) {
+  if (!options.length)
+    return <div className="text-[11px] text-muted-foreground">Import audio or video first.</div>;
   return (
-    <select className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-[11px]" value={value} onChange={(e) => onChange(e.target.value)}>
+    <select
+      className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-[11px]"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
       {options.map((m) => (
         <option key={m.id} value={m.id}>
           {m.name}
@@ -1067,17 +1190,29 @@ function ToolBtn({
       disabled={busy || disabled}
       title={title}
     >
-      {busy && <span className="inline-block h-3 w-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+      {busy && (
+        <span className="inline-block h-3 w-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+      )}
       {children}
     </button>
   );
 }
 
-function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function TabBtn({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       className={`flex-1 h-9 flex items-center justify-center gap-1.5 border-b-2 -mb-px ${
-        active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
+        active
+          ? "border-primary text-foreground"
+          : "border-transparent text-muted-foreground hover:text-foreground"
       }`}
       onClick={onClick}
     >
@@ -1085,5 +1220,3 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
     </button>
   );
 }
-
-

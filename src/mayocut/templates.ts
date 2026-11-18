@@ -24,11 +24,8 @@ export interface BuiltInTemplate {
   build: (media: MediaItem[]) => Project | null;
 }
 
-function clip(
-  media: MediaItem,
-  patch: Partial<MainClip> = {},
-): MainClip {
-  const dur = media.kind === "video" ? media.duration ?? 5 : 3;
+function clip(media: MediaItem, patch: Partial<MainClip> = {}): MainClip {
+  const dur = media.kind === "video" ? (media.duration ?? 5) : 3;
   return {
     id: uid("mc"),
     mediaId: media.id,

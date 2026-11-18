@@ -22,7 +22,8 @@ let probeCtx: AudioContext | null = null;
 function getProbeCtx(): AudioContext {
   if (!probeCtx) {
     const Ctor =
-      window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     probeCtx = new Ctor();
   }
   return probeCtx;
@@ -69,13 +70,24 @@ export async function analyzeAudioBlob(
  * Beat detection: local energy maxima above the running mean, sorted by
  * strength, with a minimum gap between cuts. Returns source seconds.
  */
-export function detectBeats(peaks: Float32Array, duration: number, count: number, minGap = 0.35): number[] {
+export function detectBeats(
+  peaks: Float32Array,
+  duration: number,
+  count: number,
+  minGap = 0.35,
+): number[] {
   const hop = duration / Math.max(1, peaks.length);
   const mean = Array.from(peaks).reduce((a, b) => a + b, 0) / Math.max(1, peaks.length);
   const candidates: { at: number; score: number }[] = [];
   for (let i = 2; i < peaks.length - 2; i++) {
     const v = peaks[i];
-    if (v >= mean * 1.05 && v >= peaks[i - 1] && v >= peaks[i + 1] && v > peaks[i - 2] + 0.01 && v > peaks[i + 2] + 0.01) {
+    if (
+      v >= mean * 1.05 &&
+      v >= peaks[i - 1] &&
+      v >= peaks[i + 1] &&
+      v > peaks[i - 2] + 0.01 &&
+      v > peaks[i + 2] + 0.01
+    ) {
       candidates.push({ at: i * hop, score: v });
     }
   }
@@ -92,7 +104,11 @@ export function detectBeats(peaks: Float32Array, duration: number, count: number
 }
 
 /** Longest leading/trailing silent stretch (below threshold), in seconds. */
-export function silenceEdges(peaks: Float32Array, duration: number, threshold = 0.06): { lead: number; trail: number } {
+export function silenceEdges(
+  peaks: Float32Array,
+  duration: number,
+  threshold = 0.06,
+): { lead: number; trail: number } {
   const hop = duration / Math.max(1, peaks.length);
   let lead = 0;
   for (let i = 0; i < peaks.length; i++) {
@@ -223,8 +239,13 @@ export async function loadBundledPack(file: string): Promise<TemplatePack> {
 
 export function validatePack(raw: unknown): TemplatePack {
   const p = raw as TemplatePack;
-  if (!p || p.format !== "mayocut-pack" || !Array.isArray(p.templates) || p.templates.length === 0) {
-    throw new Error("Not a valid MayoCut template pack (.json with format \"mayocut-pack\")");
+  if (
+    !p ||
+    p.format !== "mayocut-pack" ||
+    !Array.isArray(p.templates) ||
+    p.templates.length === 0
+  ) {
+    throw new Error('Not a valid MayoCut template pack (.json with format "mayocut-pack")');
   }
   if (p.version !== 1) {
     throw new Error(`Unsupported pack version ${String(p.version)} — this build reads version 1`);
@@ -233,8 +254,10 @@ export function validatePack(raw: unknown): TemplatePack {
     if (!t.id || !t.name || (t.kind !== "project" && t.kind !== "enhance")) {
       throw new Error(`Pack template "${t?.name ?? "?"}" is malformed`);
     }
-    if (t.kind === "project" && !t.project) throw new Error(`Pack template "${t.name}" has no project data`);
-    if (t.kind === "enhance" && !Array.isArray(t.enhance)) throw new Error(`Pack template "${t.name}" has no ops`);
+    if (t.kind === "project" && !t.project)
+      throw new Error(`Pack template "${t.name}" has no project data`);
+    if (t.kind === "enhance" && !Array.isArray(t.enhance))
+      throw new Error(`Pack template "${t.name}" has no ops`);
   }
   return p;
 }
@@ -341,7 +364,10 @@ export function downloadJson(filename: string, data: unknown) {
 
 type WllamaCtor = new (opts: { default: string }) => {
   loadModel: (files: File[] | Blob[], opts?: { n_ctx?: number }) => Promise<unknown>;
-  loadModelFromUrl: (url: string, opts?: { n_ctx?: number; progressCallback?: (p: { loaded: number; total: number }) => void }) => Promise<unknown>;
+  loadModelFromUrl: (
+    url: string,
+    opts?: { n_ctx?: number; progressCallback?: (p: { loaded: number; total: number }) => void },
+  ) => Promise<unknown>;
   createChatCompletion: (req: {
     messages: { role: string; content: string }[];
     temperature?: number;
@@ -397,7 +423,9 @@ export class LocalLLM {
       temperature: 0.7,
       max_tokens: 320,
     });
-    return completion.choices?.[0]?.message?.content?.trim() || "(the model returned an empty answer)";
+    return (
+      completion.choices?.[0]?.message?.content?.trim() || "(the model returned an empty answer)"
+    );
   }
 
   dispose() {
@@ -459,7 +487,10 @@ export function startMicRecording(
         if (e.data.size > 0) chunks.push(e.data);
       };
       rec.start(250);
-      timer = window.setInterval(() => onElapsed(Math.floor((performance.now() - startTs) / 1000)), 500);
+      timer = window.setInterval(
+        () => onElapsed(Math.floor((performance.now() - startTs) / 1000)),
+        500,
+      );
     })
     .catch((e) => finish(e instanceof Error ? e.message : "Microphone unavailable"));
   if (!navigator.mediaDevices?.getUserMedia) finish("Microphone not available in this browser");
@@ -468,7 +499,11 @@ export function startMicRecording(
 }
 
 /** Current interpolated animation values for display in the inspector. */
-export function displayAnim(clip: { keyframes?: { at: number; v: AnimValues }[] }, base: AnimValues, localT: number): AnimValues {
+export function displayAnim(
+  clip: { keyframes?: { at: number; v: AnimValues }[] },
+  base: AnimValues,
+  localT: number,
+): AnimValues {
   if (!clip.keyframes || clip.keyframes.length === 0) return base;
   if (localT < clip.keyframes[0].at) return base;
   const last = clip.keyframes[clip.keyframes.length - 1];

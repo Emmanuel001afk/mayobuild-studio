@@ -22,7 +22,10 @@ export interface LutRecord {
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 /** Build an N³ table from a per-pixel function (inputs 0..1, outputs 0..1). */
-function genTable(size: number, fn: (r: number, g: number, b: number) => [number, number, number]): Float32Array {
+function genTable(
+  size: number,
+  fn: (r: number, g: number, b: number) => [number, number, number],
+): Float32Array {
   const out = new Float32Array(size * size * size * 3);
   let i = 0;
   for (let b = 0; b < size; b++)
@@ -36,7 +39,8 @@ function genTable(size: number, fn: (r: number, g: number, b: number) => [number
   return out;
 }
 
-const sCurve = (v: number, amt: number) => clamp01(v + amt * Math.sin(Math.PI * v) * (v < 0.5 ? 1 : -1) * 0.5);
+const sCurve = (v: number, amt: number) =>
+  clamp01(v + amt * Math.sin(Math.PI * v) * (v < 0.5 ? 1 : -1) * 0.5);
 
 function satMix(r: number, g: number, b: number, sat: number): [number, number, number] {
   const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -44,7 +48,11 @@ function satMix(r: number, g: number, b: number, sat: number): [number, number, 
 }
 
 /** Analytic built-in looks (17³ — small, generated in a few ms). */
-export const BUILTIN_LUTS: { name: string; desc: string; build: () => { size: number; data: Float32Array } }[] = [
+export const BUILTIN_LUTS: {
+  name: string;
+  desc: string;
+  build: () => { size: number; data: Float32Array };
+}[] = [
   {
     name: "teal-orange",
     desc: "Teal shadows, orange highlights, contrast S-curve",
@@ -54,9 +62,9 @@ export const BUILTIN_LUTS: { name: string; desc: string; build: () => { size: nu
         const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
         // shadows toward teal (down r, up g/b), highlights toward orange (up r, down b)
         const sh = 1 - l;
-        let rr = r + 0.10 * l * l - 0.10 * sh * sh;
+        let rr = r + 0.1 * l * l - 0.1 * sh * sh;
         let gg = g + 0.05 * sh - 0.03 * l;
-        let bb = b + 0.12 * sh * sh - 0.10 * l * l;
+        let bb = b + 0.12 * sh * sh - 0.1 * l * l;
         [rr, gg, bb] = satMix(rr, gg, bb, 1.08);
         rr = sCurve(rr, 0.12);
         gg = sCurve(gg, 0.12);
@@ -73,7 +81,7 @@ export const BUILTIN_LUTS: { name: string; desc: string; build: () => { size: nu
       data: genTable(17, (r, g, b) => {
         let rr = 0.04 + 0.98 * r + 0.08 * (1 - b);
         let gg = 0.02 + 0.99 * g + 0.02 * r;
-        let bb = 0.10 + 0.88 * b;
+        let bb = 0.1 + 0.88 * b;
         [rr, gg, bb] = satMix(rr, gg, bb, 1.15);
         return [rr, gg, bb];
       }),
@@ -119,7 +127,7 @@ export const BUILTIN_LUTS: { name: string; desc: string; build: () => { size: nu
   },
 ];
 
-let builtinCache = new Map<string, LutTable>();
+const builtinCache = new Map<string, LutTable>();
 export function builtinLut(name: string): LutTable | null {
   let t = builtinCache.get(name);
   if (!t) {
@@ -239,7 +247,13 @@ export async function importLut(name: string, blob: Blob): Promise<LutTable> {
   const text = await blob.text();
   const { size, data } = parseCube(text);
   const { db } = await import("./idb");
-  await db.saveLut({ id: name, name, size, data: data.buffer as ArrayBuffer, createdAt: Date.now() });
+  await db.saveLut({
+    id: name,
+    name,
+    size,
+    data: data.buffer as ArrayBuffer,
+    createdAt: Date.now(),
+  });
   return { name, size, data };
 }
 

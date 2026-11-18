@@ -1,9 +1,10 @@
-import { useState } from "react";
-import { Copy, Diamond, Scissors, SlidersHorizontal, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { Clock, Copy, Diamond, Scissors, SlidersHorizontal, Spline, Trash2 } from "lucide-react";
 import type {
   AnimValues,
   AspectId,
   EffectId,
+  FrameFit,
   Keyframe,
   MainClip,
   MediaItem,
@@ -11,15 +12,27 @@ import type {
   Project,
   TextAnim,
   TextPos,
+  SpeedPoint,
+  TextWord,
   TransitionKind,
 } from "../types";
-import { EFFECTS, FONTS, TEXT_ANIMS } from "../types";
+import {
+  ASPECT_ORDER,
+  ASPECTS,
+  EFFECTS,
+  FONTS,
+  SPEED_PRESETS,
+  TEXT_ANIMS,
+  TEXT_PRESETS,
+  TRANSITIONS,
+  mainClipDuration,
+  nudgeWord,
+  respaceWords,
+  shiftWords,
+} from "../types";
 
 interface Props {
-  selection:
-    | { lane: "main"; id: string }
-    | { lane: "overlay"; trackId: string; id: string }
-    | null;
+  selection: { lane: "main"; id: string } | { lane: "overlay"; trackId: string; id: string } | null;
   clip: MainClip | OverlayClip | null;
   project: Project;
   media: MediaItem[];
@@ -47,6 +60,19 @@ interface Props {
   denoiseGate: { ok: boolean; reason?: string };
   onExtractAudio?: () => void;
   extracting?: boolean;
+  onFreeze?: () => void;
+  onDuplicateToNext?: () => void;
+  onApplyTransitionAll?: (kind: TransitionKind, dur: number) => void;
+  onSetBackground?: (color: string) => void;
+  onPatchProject?: (patch: Partial<Project>) => void;
+  onSplitAtBeats?: () => void;
+  onMatchColor?: (clipId: string) => void;
+  onImportFont?: (f: File) => void;
+  projectFonts?: { id: string; family: string; name: string }[];
+  onTrackFlag?: (
+    trackId: string,
+    patch: { muted?: boolean; solo?: boolean; hidden?: boolean },
+  ) => void;
 }
 
 function DenoiseRow({
@@ -61,6 +87,19 @@ function DenoiseRow({
   denoiseGate: { ok: boolean; reason?: string };
   onExtractAudio?: () => void;
   extracting?: boolean;
+  onFreeze?: () => void;
+  onDuplicateToNext?: () => void;
+  onApplyTransitionAll?: (kind: TransitionKind, dur: number) => void;
+  onSetBackground?: (color: string) => void;
+  onPatchProject?: (patch: Partial<Project>) => void;
+  onSplitAtBeats?: () => void;
+  onMatchColor?: (clipId: string) => void;
+  onImportFont?: (f: File) => void;
+  projectFonts?: { id: string; family: string; name: string }[];
+  onTrackFlag?: (
+    trackId: string,
+    patch: { muted?: boolean; solo?: boolean; hidden?: boolean },
+  ) => void;
 }) {
   if (!media || media.kind !== "audio") return null;
   if (denoise && denoise.mediaId === media.id) {
@@ -72,20 +111,29 @@ function DenoiseRow({
           <span>{pct}%</span>
         </div>
         <div className="h-1.5 rounded bg-secondary overflow-hidden">
-          <div className="h-full bg-cyan-400 transition-all duration-150" style={{ width: `${pct}%` }} />
+          <div
+            className="h-full bg-cyan-400 transition-all duration-150"
+            style={{ width: `${pct}%` }}
+          />
         </div>
       </div>
     );
   }
   if (media.denoised) {
-    return <p className="text-[10px] text-emerald-400 mt-2">✓ Denoised with RNNoise (100% local)</p>;
+    return (
+      <p className="text-[10px] text-emerald-400 mt-2">✓ Denoised with RNNoise (100% local)</p>
+    );
   }
   return (
     <button
       className={`mb-btn-ghost w-full text-xs h-7 mt-2 ${denoiseGate.ok ? "" : "opacity-40 cursor-not-allowed"}`}
       onClick={denoiseGate.ok ? onDenoise : undefined}
       disabled={!denoiseGate.ok}
-      title={denoiseGate.ok ? "Speech denoise — runs the RNNoise model in the browser, replaces this clip's audio with a denoised copy" : denoiseGate.reason ?? "Unavailable on this device"}
+      title={
+        denoiseGate.ok
+          ? "Speech denoise — runs the RNNoise model in the browser, replaces this clip's audio with a denoised copy"
+          : (denoiseGate.reason ?? "Unavailable on this device")
+      }
     >
       🎙️ Denoise (RNNoise, local){!denoiseGate.ok && " — off on this device"}
     </button>
@@ -103,30 +151,131 @@ export function Inspector(p: Props) {
           <SlidersHorizontal className="h-4 w-4 text-primary" /> Inspector
         </h3>
         <p className="text-xs text-muted-foreground">
-          Select a clip on the timeline to edit its filters, motion, keyframes, text, position and audio.
+          Select a clip on the timeline to edit its filters, motion, keyframes, text, position and
+          audio.
         </p>
         <div className="border-t border-border pt-3 space-y-2">
           <div className="text-xs font-medium">Canvas format</div>
-          <select
-            className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
-            value={p.project.aspect}
-            onChange={(e) => p.onSetAspect(e.target.value as AspectId)}
+          <div className="grid grid-cols-4 gap-1">
+            {ASPECT_ORDER.map((id) => {
+              const a = ASPECTS[id];
+              const active = p.project.aspect === id;
+              return (
+                <button
+                  key={id}
+                  className={`border rounded px-1 py-1.5 text-[10px] flex flex-col items-center gap-1 ${
+                    active
+                      ? "border-cyan-400 bg-cyan-400/10"
+                      : "border-border hover:border-white/40"
+                  }`}
+                  title={a.hint}
+                  onClick={() => p.onSetAspect(id)}
+                >
+                  <span
+                    className="border border-current opacity-60 rounded-[2px]"
+                    style={{ width: 14, height: Math.max(8, Math.round((14 * a.h) / a.w)) }}
+                  />
+                  {id}
+                </button>
+              );
+            })}
+          </div>
+          <div className="text-[10px] text-muted-foreground mt-1">
+            {ASPECTS[p.project.aspect].w}×{ASPECTS[p.project.aspect].h} ·{" "}
+            {ASPECTS[p.project.aspect].hint}
+          </div>
+          <div className="text-xs font-medium mt-3">Background (letterbox colour)</div>
+          <div className="flex gap-1 mt-1">
+            {[
+              "#000000",
+              "#ffffff",
+              "#0f172a",
+              "#111827",
+              "#f5f5f4",
+              "#7c3aed",
+              "#0ea5e9",
+              "#22c55e",
+            ].map((c) => (
+              <button
+                key={c}
+                className={`h-6 w-6 rounded border ${
+                  (p.project.background ?? "#000000").toLowerCase() === c
+                    ? "border-cyan-400 ring-1 ring-cyan-400"
+                    : "border-border"
+                }`}
+                style={{ background: c }}
+                title={c}
+                onClick={() => p.onSetBackground?.(c)}
+              />
+            ))}
+            <label
+              className="h-6 w-6 rounded border border-border flex items-center justify-center text-[10px] cursor-pointer"
+              title="Custom colour"
+            >
+              +
+              <input
+                type="color"
+                className="sr-only"
+                value={p.project.background ?? "#000000"}
+                onChange={(e) => p.onSetBackground?.(e.target.value)}
+              />
+            </label>
+          </div>
+        </div>
+        <div className="border-t border-border pt-3">
+          <div className="text-xs font-medium mb-1">Mix</div>
+          <Slider
+            label="Master volume"
+            min={0}
+            max={2}
+            step={0.05}
+            value={p.project.masterGain ?? 1}
+            onChange={(v) => p.onPatchProject?.({ masterGain: v })}
+          />
+          <Slider
+            label="Auto-duck strength"
+            min={0}
+            max={1}
+            step={0.05}
+            value={p.project.duckAmount ?? 0.7}
+            onChange={(v) => p.onPatchProject?.({ duckAmount: v })}
+          />
+          <p className="text-[10px] text-muted-foreground leading-snug">
+            Ducking lowers music automatically under any clip with «Duck music» enabled.
+          </p>
+          <button
+            className="mb-btn-ghost w-full h-7 mt-2 text-[11px]"
+            onClick={p.onSplitAtBeats}
+            title="Split every main clip at each beat marker"
           >
-            <option value="9:16">9:16 · Reels / Shorts / TikTok</option>
-            <option value="1:1">1:1 · Square (Instagram)</option>
-            <option value="4:5">4:5 · Feed</option>
-            <option value="16:9">16:9 · YouTube / Desktop</option>
-          </select>
+            ⚡ Split at beat markers
+          </button>
         </div>
         <div className="border-t border-border pt-3">
           <div className="text-xs font-medium mb-2">Shortcuts</div>
           <ul className="text-[11px] text-muted-foreground space-y-1">
-            <li><Kbd>Space</Kbd> play / pause</li>
-            <li><Kbd>S</Kbd> or double-click — split at playhead</li>
-            <li><Kbd>←</Kbd> <Kbd>→</Kbd> step one frame</li>
-            <li><Kbd>Del</Kbd> delete selected clip</li>
-            <li><Kbd>Ctrl</Kbd>+<Kbd>Z</Kbd> undo</li>
-            <li>Drag clip edges to trim</li>
+            <li>
+              <Kbd>Space</Kbd> play / pause
+            </li>
+            <li>
+              <Kbd>S</Kbd> or double-click — split at playhead
+            </li>
+            <li>
+              <Kbd>←</Kbd> <Kbd>→</Kbd> step one frame
+            </li>
+            <li>
+              <Kbd>Del</Kbd> delete selected clip
+            </li>
+            <li>
+              <Kbd>Ctrl</Kbd>+<Kbd>Z</Kbd> undo · <Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>Z</Kbd> redo
+            </li>
+            <li>
+              <Kbd>Ctrl</Kbd>+<Kbd>D</Kbd> duplicate · <Kbd>F</Kbd> freeze frame
+            </li>
+            <li>
+              <Kbd>Ctrl</Kbd>+wheel zoom the timeline
+            </li>
+            <li>Drag clip edges to trim · drag a clip body to reorder</li>
           </ul>
         </div>
         <div className="border-t border-border pt-3 text-[11px] text-muted-foreground">
@@ -150,10 +299,20 @@ export function Inspector(p: Props) {
     <div className="p-3 space-y-4">
       <div className="flex items-center gap-2">
         <h3 className="font-semibold text-sm">
-          {main ? "Clip" : over?.kind === "text" ? "Text" : over?.kind === "image" ? "Image overlay" : over?.kind === "video" ? "Video overlay" : "Audio"}
+          {main
+            ? "Clip"
+            : over?.kind === "text"
+              ? "Text"
+              : over?.kind === "image"
+                ? "Image overlay"
+                : over?.kind === "video"
+                  ? "Video overlay"
+                  : "Audio"}
         </h3>
         {main?.reverse && (
-          <span className="text-[10px] text-fuchsia-300 border border-fuchsia-400/40 rounded px-1">reverse</span>
+          <span className="text-[10px] text-fuchsia-300 border border-fuchsia-400/40 rounded px-1">
+            reverse
+          </span>
         )}
         <div className="ml-auto flex gap-1">
           <button className="mb-btn-ghost h-7 px-2" title="Duplicate" onClick={p.onDuplicate}>
@@ -164,7 +323,11 @@ export function Inspector(p: Props) {
               <Scissors className="h-3.5 w-3.5" />
             </button>
           )}
-          <button className="mb-btn-ghost h-7 px-2 hover:text-destructive" title="Delete" onClick={p.onDelete}>
+          <button
+            className="mb-btn-ghost h-7 px-2 hover:text-destructive"
+            title="Delete"
+            onClick={p.onDelete}
+          >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -186,12 +349,32 @@ export function Inspector(p: Props) {
               value={main.speed}
               onChange={(v) => p.onPatchMain({ speed: v })}
             />
-            <div className="flex justify-between text-[10px] text-muted-foreground -mt-1">
-              {[0.5, 1, 1.5, 2, 3, 4].map((s) => (
-                <button key={s} className={main.speed === s ? "text-cyan-300" : ""} onClick={() => p.onPatchMain({ speed: s })}>
+            <div className="flex flex-wrap gap-1 text-[10px] text-muted-foreground -mt-1">
+              {SPEED_PRESETS.map((s) => (
+                <button
+                  key={s}
+                  className={`border rounded px-1 py-0.5 ${main.speed === s ? "border-cyan-400 text-cyan-300" : "border-border"}`}
+                  onClick={() => p.onPatchMain({ speed: s })}
+                >
                   {s}×
                 </button>
               ))}
+            </div>
+            <div className="grid grid-cols-2 gap-1 mt-2">
+              <button
+                className="mb-btn-ghost h-7 text-[11px]"
+                onClick={p.onFreeze}
+                title="Hold this exact frame for 3 seconds (CapCut Freeze)"
+              >
+                ❄ Freeze frame
+              </button>
+              <button
+                className="mb-btn-ghost h-7 text-[11px]"
+                onClick={() => p.onPatchMain({ freeze: !main.freeze })}
+                title="Turn this clip into a held frame (or back into motion)"
+              >
+                {main.freeze ? "▶ Un-freeze" : "❄ Hold whole clip"}
+              </button>
             </div>
             <label className="flex items-center gap-2 text-xs mt-2">
               <input
@@ -201,7 +384,10 @@ export function Inspector(p: Props) {
                 onChange={(e) => p.onPatchMain({ reverse: e.target.checked })}
               />
               <span>
-                Play backwards <span className="text-muted-foreground text-[10px]">(audio muted, frame-stepped)</span>
+                Play backwards{" "}
+                <span className="text-muted-foreground text-[10px]">
+                  (audio muted, frame-stepped)
+                </span>
               </span>
             </label>
             <label className="flex items-center gap-2 text-xs mt-2">
@@ -209,10 +395,15 @@ export function Inspector(p: Props) {
                 type="checkbox"
                 className="accent-cyan-400"
                 checked={main.rampTo != null}
-                onChange={(e) => p.onPatchMain(e.target.checked ? { rampTo: main.speed } : { rampTo: undefined })}
+                onChange={(e) =>
+                  p.onPatchMain(e.target.checked ? { rampTo: main.speed } : { rampTo: undefined })
+                }
               />
               <span>
-                Speed ramp <span className="text-muted-foreground text-[10px]">(ease the speed across the clip)</span>
+                Speed ramp{" "}
+                <span className="text-muted-foreground text-[10px]">
+                  (ease the speed across the clip)
+                </span>
               </span>
             </label>
             {main.rampTo != null && (
@@ -225,6 +416,11 @@ export function Inspector(p: Props) {
                 onChange={(v) => p.onPatchMain({ rampTo: v })}
               />
             )}
+            <SpeedCurve
+              clip={main}
+              onChange={(curve) => p.onPatchMain({ curve })}
+              playhead={p.playheadLocal}
+            />
           </Section>
 
           <Section label="Effect">
@@ -239,6 +435,31 @@ export function Inspector(p: Props) {
                 </option>
               ))}
             </select>
+          </Section>
+
+          <Section label="Framing">
+            <div className="grid grid-cols-3 gap-1">
+              {(["cover", "contain", "blur"] as FrameFit[]).map((f) => (
+                <button
+                  key={f}
+                  className={`h-7 border rounded text-[10px] capitalize ${
+                    (main.fit ?? "cover") === f
+                      ? "border-cyan-400 bg-cyan-400/10"
+                      : "border-border hover:border-white/40"
+                  }`}
+                  onClick={() => p.onPatchMain({ fit: f })}
+                  title={
+                    f === "cover"
+                      ? "Fill the frame, cropping the edges"
+                      : f === "contain"
+                        ? "Fit the whole picture, letterboxing the rest"
+                        : "Fit the picture over a blurred fill"
+                  }
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
           </Section>
 
           <Section label="Color LUT">
@@ -272,13 +493,41 @@ export function Inspector(p: Props) {
 
           <Section label="Motion & keyframes">
             <p className="text-[10px] text-muted-foreground mb-2 leading-snug">
-              Move the playhead, then drag a value — a keyframe is written where a ◆ already sits nearby, otherwise the
-              clip starts a new animation from here.
+              Move the playhead, then drag a value — a keyframe is written where a ◆ already sits
+              nearby, otherwise the clip starts a new animation from here.
             </p>
-            <Slider label="X position" min={-1} max={1} step={0.01} value={p.anim.x} onChange={(v) => setAnim({ x: v })} />
-            <Slider label="Y position" min={-1} max={1} step={0.01} value={p.anim.y} onChange={(v) => setAnim({ y: v })} />
-            <Slider label="Scale (zoom)" min={0.4} max={2.2} step={0.01} value={p.anim.scale} onChange={(v) => setAnim({ scale: v })} />
-            <Slider label="Rotation" min={-180} max={180} step={1} value={p.anim.rotation} onChange={(v) => setAnim({ rotation: v })} />
+            <Slider
+              label="X position"
+              min={-1}
+              max={1}
+              step={0.01}
+              value={p.anim.x}
+              onChange={(v) => setAnim({ x: v })}
+            />
+            <Slider
+              label="Y position"
+              min={-1}
+              max={1}
+              step={0.01}
+              value={p.anim.y}
+              onChange={(v) => setAnim({ y: v })}
+            />
+            <Slider
+              label="Scale (zoom)"
+              min={0.4}
+              max={2.2}
+              step={0.01}
+              value={p.anim.scale}
+              onChange={(v) => setAnim({ scale: v })}
+            />
+            <Slider
+              label="Rotation"
+              min={-180}
+              max={180}
+              step={1}
+              value={p.anim.rotation}
+              onChange={(v) => setAnim({ rotation: v })}
+            />
             <Slider
               label="Opacity"
               min={0}
@@ -303,7 +552,9 @@ export function Inspector(p: Props) {
                 <button
                   key={f.id}
                   className={`text-[11px] border rounded px-2 py-1 text-left ${
-                    main.filter === f.id ? "border-cyan-400 bg-cyan-400/10" : "border-border hover:border-white/40"
+                    main.filter === f.id
+                      ? "border-cyan-400 bg-cyan-400/10"
+                      : "border-border hover:border-white/40"
                   }`}
                   onClick={() => p.onPatchMain({ filter: f.id })}
                 >
@@ -314,31 +565,173 @@ export function Inspector(p: Props) {
           </Section>
 
           <Section label="Adjust">
-            <Slider label="Brightness" min={50} max={160} value={main.adjust.brightness} onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, brightness: v } })} />
-            <Slider label="Contrast" min={50} max={160} value={main.adjust.contrast} onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, contrast: v } })} />
-            <Slider label="Saturation" min={0} max={200} value={main.adjust.saturation} onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, saturation: v } })} />
-            <Slider label="Hue" min={-180} max={180} value={main.adjust.hue} onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, hue: v } })} />
+            <Slider
+              label="Brightness"
+              min={50}
+              max={160}
+              value={main.adjust.brightness}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, brightness: v } })}
+            />
+            <Slider
+              label="Contrast"
+              min={50}
+              max={160}
+              value={main.adjust.contrast}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, contrast: v } })}
+            />
+            <Slider
+              label="Saturation"
+              min={0}
+              max={200}
+              value={main.adjust.saturation}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, saturation: v } })}
+            />
+            <Slider
+              label="Hue"
+              min={-180}
+              max={180}
+              value={main.adjust.hue}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, hue: v } })}
+            />
+            <Slider
+              label="Temperature"
+              min={-100}
+              max={100}
+              step={1}
+              value={main.adjust.temperature ?? 0}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, temperature: v } })}
+            />
+            <Slider
+              label="Tint"
+              min={-100}
+              max={100}
+              step={1}
+              value={main.adjust.tint ?? 0}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, tint: v } })}
+            />
+            <Slider
+              label="Fade"
+              min={0}
+              max={100}
+              step={1}
+              value={main.adjust.fade ?? 0}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, fade: v } })}
+            />
+            <Slider
+              label="Sharpen"
+              min={0}
+              max={100}
+              step={1}
+              value={main.adjust.sharpen ?? 0}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, sharpen: v } })}
+            />
+            <Slider
+              label="Vignette"
+              min={0}
+              max={100}
+              step={1}
+              value={main.adjust.vignette ?? 0}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, vignette: v } })}
+            />
+            <Slider
+              label="Split tone"
+              min={0}
+              max={100}
+              step={1}
+              value={main.adjust.splitTone ?? 0}
+              onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, splitTone: v } })}
+            />
+            <div className="flex gap-1 mt-1">
+              <button
+                className="mb-btn-ghost flex-1 h-6 text-[10px]"
+                onClick={() =>
+                  p.onPatchMain({
+                    adjust: {
+                      brightness: 100,
+                      contrast: 100,
+                      saturation: 100,
+                      hue: 0,
+                      temperature: 0,
+                      tint: 0,
+                      fade: 0,
+                      sharpen: 0,
+                      vignette: 0,
+                      splitTone: 0,
+                    },
+                  })
+                }
+              >
+                Reset adjust
+              </button>
+              <button
+                className="mb-btn-ghost flex-1 h-6 text-[10px]"
+                onClick={() => p.onMatchColor?.(main.id)}
+                title="Copy this clip's colour grade to every other main clip (match colours)"
+              >
+                Match all clips
+              </button>
+            </div>
           </Section>
 
           <Section label="Transition in">
-            <select
-              className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
-              value={main.transitionIn}
-              onChange={(e) => p.onPatchMain({ transitionIn: e.target.value as TransitionKind })}
-            >
-              <option value="none">None</option>
-              <option value="crossfade">Crossfade</option>
-              <option value="fadeblack">Dip to black</option>
-            </select>
+            <div className="grid grid-cols-2 gap-1">
+              {TRANSITIONS.map((tr) => (
+                <button
+                  key={tr.id}
+                  className={`text-[10px] border rounded px-1 py-1 text-left truncate ${
+                    main.transitionIn === tr.id
+                      ? "border-cyan-400 bg-cyan-400/10"
+                      : "border-border hover:border-white/40"
+                  }`}
+                  onClick={() =>
+                    p.onPatchMain({
+                      transitionIn: tr.id,
+                      transitionDur: tr.id === "none" ? 0 : main.transitionDur || 0.5,
+                    })
+                  }
+                  title={tr.name}
+                >
+                  {tr.name}
+                </button>
+              ))}
+            </div>
             {main.transitionIn !== "none" && (
-              <Slider label="Duration" min={0.1} max={1.5} step={0.1} value={main.transitionDur} onChange={(v) => p.onPatchMain({ transitionDur: v })} />
+              <>
+                <Slider
+                  label="Duration"
+                  min={0.1}
+                  max={2}
+                  step={0.1}
+                  value={main.transitionDur}
+                  onChange={(v) => p.onPatchMain({ transitionDur: v })}
+                />
+                <button
+                  className="mb-btn-ghost w-full h-6 text-[10px]"
+                  onClick={() => p.onApplyTransitionAll?.(main.transitionIn, main.transitionDur)}
+                  title="Use this transition between every clip on the main track"
+                >
+                  Apply to every cut
+                </button>
+              </>
             )}
           </Section>
 
           <Section label="Audio">
-            <Slider label="Volume" min={0} max={1} step={0.05} value={main.volume} onChange={(v) => p.onPatchMain({ volume: v })} />
+            <Slider
+              label="Volume"
+              min={0}
+              max={1}
+              step={0.05}
+              value={main.volume}
+              onChange={(v) => p.onPatchMain({ volume: v })}
+            />
             <label className="flex items-center gap-2 text-xs mt-1">
-              <input type="checkbox" className="accent-cyan-400" checked={main.muted} onChange={(e) => p.onPatchMain({ muted: e.target.checked })} />
+              <input
+                type="checkbox"
+                className="accent-cyan-400"
+                checked={main.muted}
+                onChange={(e) => p.onPatchMain({ muted: e.target.checked })}
+              />
               Mute original sound
             </label>
             {mainMedia?.kind === "video" && p.onExtractAudio && (
@@ -351,17 +744,73 @@ export function Inspector(p: Props) {
                 {p.extracting ? "Extracting audio…" : "🎵 Extract audio to Audio track"}
               </button>
             )}
-            <DenoiseRow media={mainMedia} denoise={p.denoise} onDenoise={p.onDenoise} denoiseGate={p.denoiseGate} />
+            <DenoiseRow
+              media={mainMedia}
+              denoise={p.denoise}
+              onDenoise={p.onDenoise}
+              denoiseGate={p.denoiseGate}
+            />
+          </Section>
+
+          <Section label="Voice shaping">
+            <p className="text-[10px] text-muted-foreground mb-2 leading-snug">
+              Bass / mid / treble shaping on this clip's own sound — the quick fix for thin or boomy
+              voices.
+            </p>
+            <Slider
+              label="Bass"
+              min={-1}
+              max={1}
+              step={0.05}
+              value={main.voice?.low ?? 0}
+              onChange={(v) => p.onPatchMain({ voice: { ...main.voice, low: v } })}
+            />
+            <Slider
+              label="Clarity (mid)"
+              min={-1}
+              max={1}
+              step={0.05}
+              value={main.voice?.mid ?? 0}
+              onChange={(v) => p.onPatchMain({ voice: { ...main.voice, mid: v } })}
+            />
+            <Slider
+              label="Air (treble)"
+              min={-1}
+              max={1}
+              step={0.05}
+              value={main.voice?.high ?? 0}
+              onChange={(v) => p.onPatchMain({ voice: { ...main.voice, high: v } })}
+            />
+            <div className="flex gap-1 mt-1">
+              <button
+                className="mb-btn-ghost flex-1 h-6 text-[10px]"
+                onClick={() => p.onPatchMain({ voice: { low: 0.25, mid: 0.35, high: 0.3 } })}
+                title="Podcast-style voice enhance"
+              >
+                Voice enhance
+              </button>
+              <button
+                className="mb-btn-ghost h-6 text-[10px] px-2"
+                onClick={() => p.onPatchMain({ voice: undefined })}
+              >
+                Reset
+              </button>
+            </div>
           </Section>
 
           <Section label="Replace media">
-            <button className="mb-btn-ghost w-full text-xs h-7" onClick={() => setReplaceOpen((v) => !v)}>
+            <button
+              className="mb-btn-ghost w-full text-xs h-7"
+              onClick={() => setReplaceOpen((v) => !v)}
+            >
               Swap in a different file…
             </button>
             {replaceOpen && (
               <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
                 {p.media
-                  .filter((m) => m.kind === (p.media.find((x) => x.id === main.mediaId)?.kind ?? "video"))
+                  .filter(
+                    (m) => m.kind === (p.media.find((x) => x.id === main.mediaId)?.kind ?? "video"),
+                  )
                   .map((m) => (
                     <button
                       key={m.id}
@@ -390,12 +839,36 @@ export function Inspector(p: Props) {
               onChange={(e) => p.onPatchOverlay(trackId, { text: e.target.value })}
             />
           </Section>
+          <Section label="Text presets">
+            <div className="grid grid-cols-2 gap-1">
+              {TEXT_PRESETS.map((tp) => (
+                <button
+                  key={tp.name}
+                  className="border border-border rounded px-1.5 py-1 text-[10px] hover:border-cyan-400 text-left truncate"
+                  onClick={() => p.onPatchOverlay(trackId, tp.patch)}
+                  title={tp.name}
+                >
+                  {tp.name}
+                </button>
+              ))}
+            </div>
+          </Section>
           <Section label="Style">
-            <Slider label="Size" min={24} max={220} value={over.size ?? 72} onChange={(v) => p.onPatchOverlay(trackId, { size: v })} />
+            <Slider
+              label="Size"
+              min={24}
+              max={220}
+              value={over.size ?? 72}
+              onChange={(v) => p.onPatchOverlay(trackId, { size: v })}
+            />
             <div className="flex items-center gap-2 mt-2">
               <label className="text-xs flex items-center gap-1">
                 Color
-                <input type="color" value={over.color ?? "#ffffff"} onChange={(e) => p.onPatchOverlay(trackId, { color: e.target.value })} />
+                <input
+                  type="color"
+                  value={over.color ?? "#ffffff"}
+                  onChange={(e) => p.onPatchOverlay(trackId, { color: e.target.value })}
+                />
               </label>
               <label className="text-xs flex items-center gap-1">
                 Background
@@ -412,7 +885,12 @@ export function Inspector(p: Props) {
                 </select>
               </label>
               <label className="text-xs flex items-center gap-1 ml-auto">
-                <input type="checkbox" className="accent-cyan-400" checked={over.bold ?? false} onChange={(e) => p.onPatchOverlay(trackId, { bold: e.target.checked })} />
+                <input
+                  type="checkbox"
+                  className="accent-cyan-400"
+                  checked={over.bold ?? false}
+                  onChange={(e) => p.onPatchOverlay(trackId, { bold: e.target.checked })}
+                />
                 B
               </label>
             </div>
@@ -422,7 +900,9 @@ export function Inspector(p: Props) {
                 <button
                   key={pos}
                   className={`h-6 border text-[10px] ${
-                    (over.pos ?? "mc") === pos ? "border-cyan-400 bg-cyan-400/20" : "border-border hover:border-white/40"
+                    (over.pos ?? "mc") === pos
+                      ? "border-cyan-400 bg-cyan-400/20"
+                      : "border-border hover:border-white/40"
                   }`}
                   onClick={() => p.onPatchOverlay(trackId, { pos })}
                   title={pos}
@@ -435,8 +915,22 @@ export function Inspector(p: Props) {
               Fine position <span className="opacity-70">(or drag the text on the preview)</span>
             </div>
             <div className="grid grid-cols-2 gap-1">
-              <Slider label="X offset" min={-1.5} max={1.5} step={0.01} value={over.x ?? 0} onChange={(v) => p.onPatchOverlay(trackId, { x: v })} />
-              <Slider label="Y offset" min={-1.5} max={1.5} step={0.01} value={over.y ?? 0} onChange={(v) => p.onPatchOverlay(trackId, { y: v })} />
+              <Slider
+                label="X offset"
+                min={-1.5}
+                max={1.5}
+                step={0.01}
+                value={over.x ?? 0}
+                onChange={(v) => p.onPatchOverlay(trackId, { x: v })}
+              />
+              <Slider
+                label="Y offset"
+                min={-1.5}
+                max={1.5}
+                step={0.01}
+                value={over.y ?? 0}
+                onChange={(v) => p.onPatchOverlay(trackId, { y: v })}
+              />
             </div>
             <div className="text-xs mt-2 mb-1">Font</div>
             <select
@@ -449,7 +943,117 @@ export function Inspector(p: Props) {
                   {f.name}
                 </option>
               ))}
+              {(p.projectFonts ?? []).map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name} (imported)
+                </option>
+              ))}
             </select>
+            {p.onImportFont && (
+              <label className="block text-[10px] text-muted-foreground mt-1">
+                Import a font (.ttf / .otf / .woff)…
+                <input
+                  type="file"
+                  accept=".ttf,.otf,.woff,.woff2,font/*"
+                  className="block mt-1 text-[10px] file:mb-btn-ghost file:mr-2 file:text-xs file:cursor-pointer"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) p.onImportFont?.(f);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            )}
+            <div className="grid grid-cols-3 gap-1 mt-2">
+              {(["left", "center", "right"] as const).map((al) => (
+                <button
+                  key={al}
+                  className={`h-6 border rounded text-[10px] capitalize ${
+                    (over.align ?? "center") === al
+                      ? "border-cyan-400 bg-cyan-400/10"
+                      : "border-border"
+                  }`}
+                  onClick={() => p.onPatchOverlay(trackId, { align: al })}
+                >
+                  {al}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-1 mt-2">
+              {(
+                [
+                  ["I", "italic", over.italic],
+                  ["U", "underline", over.underline],
+                  ["AA", "upper", over.upper],
+                ] as [string, "italic" | "underline" | "upper", boolean | undefined][]
+              ).map(([label, key]) => (
+                <button
+                  key={key}
+                  className={`h-6 px-2 border rounded text-[10px] ${over[key] ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
+                  onClick={() => p.onPatchOverlay(trackId, { [key]: !over[key] })}
+                  title={key}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <Slider
+              label="Letter spacing"
+              min={-10}
+              max={40}
+              step={1}
+              value={over.tracking ?? 0}
+              onChange={(v) => p.onPatchOverlay(trackId, { tracking: v })}
+            />
+            <Slider
+              label="Line height"
+              min={0.9}
+              max={2}
+              step={0.02}
+              value={over.leading ?? 1.18}
+              onChange={(v) => p.onPatchOverlay(trackId, { leading: v })}
+            />
+            <Slider
+              label="Opacity"
+              min={0}
+              max={1}
+              step={0.01}
+              value={over.opacity ?? 1}
+              onChange={(v) => p.onPatchOverlay(trackId, { opacity: v })}
+            />
+            <div className="text-[10px] text-muted-foreground mt-1 mb-0.5">Outline</div>
+            <div className="flex items-center gap-1">
+              <Slider
+                label=""
+                min={0}
+                max={20}
+                step={1}
+                value={over.stroke ?? 0}
+                onChange={(v) => p.onPatchOverlay(trackId, { stroke: v })}
+              />
+              <input
+                type="color"
+                value={over.strokeColor ?? "#000000"}
+                onChange={(e) => p.onPatchOverlay(trackId, { strokeColor: e.target.value })}
+                title="Outline colour"
+              />
+            </div>
+            <Slider
+              label="Shadow"
+              min={0}
+              max={1}
+              step={0.05}
+              value={over.shadow ?? 0.55}
+              onChange={(v) => p.onPatchOverlay(trackId, { shadow: v })}
+            />
+            <Slider
+              label="Pill radius"
+              min={0}
+              max={100}
+              step={1}
+              value={over.radius ?? 40}
+              onChange={(v) => p.onPatchOverlay(trackId, { radius: v })}
+            />
           </Section>
           <Section label="Animation">
             <select
@@ -470,7 +1074,23 @@ export function Inspector(p: Props) {
                   : "Karaoke needs word timing — generate captions in Assist (it fills this automatically), or use another animation."}
               </p>
             )}
-            <Slider label="Opacity (keyframable)" min={0} max={1} step={0.01} value={p.anim.opacity} onChange={(v) => setAnim({ opacity: v })} />
+            {(over.words?.length ?? 0) > 0 && (
+              <WordTiming
+                words={over.words ?? []}
+                duration={over.duration}
+                playhead={p.playheadLocal ?? 0}
+                onChange={(words) => p.onPatchOverlay(trackId, { words })}
+                onSeek={(t) => p.onSeek(p.clipStart + t)}
+              />
+            )}
+            <Slider
+              label="Opacity (keyframable)"
+              min={0}
+              max={1}
+              step={0.01}
+              value={p.anim.opacity}
+              onChange={(v) => setAnim({ opacity: v })}
+            />
             <KeyframeSection
               clip={over}
               clipStart={p.clipStart}
@@ -488,11 +1108,46 @@ export function Inspector(p: Props) {
       {(over?.kind === "image" || over?.kind === "video") && (
         <>
           <Section label="Transform & keyframes">
-            <Slider label="Scale" min={0.05} max={1.2} step={0.01} value={p.anim.scale} onChange={(v) => setAnim({ scale: v })} />
-            <Slider label="X" min={-1} max={1} step={0.01} value={p.anim.x} onChange={(v) => setAnim({ x: v })} />
-            <Slider label="Y" min={-1} max={1} step={0.01} value={p.anim.y} onChange={(v) => setAnim({ y: v })} />
-            <Slider label="Rotation" min={-180} max={180} step={1} value={p.anim.rotation} onChange={(v) => setAnim({ rotation: v })} />
-            <Slider label="Opacity (keyframable)" min={0} max={1} step={0.01} value={p.anim.opacity} onChange={(v) => setAnim({ opacity: v })} />
+            <Slider
+              label="Scale"
+              min={0.05}
+              max={1.2}
+              step={0.01}
+              value={p.anim.scale}
+              onChange={(v) => setAnim({ scale: v })}
+            />
+            <Slider
+              label="X"
+              min={-1}
+              max={1}
+              step={0.01}
+              value={p.anim.x}
+              onChange={(v) => setAnim({ x: v })}
+            />
+            <Slider
+              label="Y"
+              min={-1}
+              max={1}
+              step={0.01}
+              value={p.anim.y}
+              onChange={(v) => setAnim({ y: v })}
+            />
+            <Slider
+              label="Rotation"
+              min={-180}
+              max={180}
+              step={1}
+              value={p.anim.rotation}
+              onChange={(v) => setAnim({ rotation: v })}
+            />
+            <Slider
+              label="Opacity (keyframable)"
+              min={0}
+              max={1}
+              step={0.01}
+              value={p.anim.opacity}
+              onChange={(v) => setAnim({ opacity: v })}
+            />
             <KeyframeSection
               clip={over}
               clipStart={p.clipStart}
@@ -501,6 +1156,83 @@ export function Inspector(p: Props) {
               onDelete={(at) => p.onKeyframeDelete(clipId, at)}
               onSeek={p.onSeek}
             />
+          </Section>
+          <Section label="Framing & motion">
+            <div className="grid grid-cols-3 gap-1">
+              {(["cover", "contain", "blur"] as FrameFit[]).map((f) => (
+                <button
+                  key={f}
+                  className={`h-7 border rounded text-[10px] capitalize ${
+                    (over.fit ?? "cover") === f
+                      ? "border-cyan-400 bg-cyan-400/10"
+                      : "border-border hover:border-white/40"
+                  }`}
+                  onClick={() => p.onPatchOverlay(trackId, { fit: f })}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+            {over.kind === "video" && (
+              <>
+                <Slider
+                  label="Sticker speed"
+                  min={0.25}
+                  max={3}
+                  step={0.05}
+                  value={over.speed ?? 1}
+                  onChange={(v) => p.onPatchOverlay(trackId, { speed: v })}
+                />
+                <label className="flex items-center gap-2 text-xs mt-1">
+                  <input
+                    type="checkbox"
+                    className="accent-cyan-400"
+                    checked={!!over.loop}
+                    onChange={(e) => p.onPatchOverlay(trackId, { loop: e.target.checked })}
+                  />
+                  Loop the footage
+                </label>
+              </>
+            )}
+          </Section>
+          <Section label="Sticker filter">
+            <div className="grid grid-cols-2 gap-1">
+              <button
+                className={`text-[10px] border rounded px-1 py-1 text-left ${!over.filter || over.filter === "none" ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
+                onClick={() => p.onPatchOverlay(trackId, { filter: "none" })}
+              >
+                Original
+              </button>
+              {p.filters
+                .filter((f) => f.id !== "none")
+                .map((f) => (
+                  <button
+                    key={f.id}
+                    className={`text-[10px] border rounded px-1 py-1 text-left truncate ${
+                      over.filter === f.id
+                        ? "border-cyan-400 bg-cyan-400/10"
+                        : "border-border hover:border-white/40"
+                    }`}
+                    onClick={() => p.onPatchOverlay(trackId, { filter: f.id })}
+                  >
+                    {f.name}
+                  </button>
+                ))}
+            </div>
+          </Section>
+          <Section label="Audio ducking">
+            <Slider
+              label="Duck music under this clip"
+              min={0}
+              max={1}
+              step={0.05}
+              value={over.duck ?? 0}
+              onChange={(v) => p.onPatchOverlay(trackId, { duck: v })}
+            />
+            <p className="text-[10px] text-muted-foreground leading-snug">
+              Lowers every other audio clip while this one plays — the standard way to keep a
+              voiceover clear over music.
+            </p>
           </Section>
           <Section label="Green screen">
             <label className="flex items-center gap-2 text-xs">
@@ -514,9 +1246,17 @@ export function Inspector(p: Props) {
             </label>
             {over.chroma && (
               <div className="mt-2">
-                <Slider label="Tolerance" min={10} max={200} step={5} value={over.chromaTol ?? 90} onChange={(v) => p.onPatchOverlay(trackId, { chromaTol: v })} />
+                <Slider
+                  label="Tolerance"
+                  min={10}
+                  max={200}
+                  step={5}
+                  value={over.chromaTol ?? 90}
+                  onChange={(v) => p.onPatchOverlay(trackId, { chromaTol: v })}
+                />
                 <p className="text-[10px] text-muted-foreground leading-snug">
-                  The key color is sampled from the corners of the footage. Works on green, blue or any solid backdrop.
+                  The key color is sampled from the corners of the footage. Works on green, blue or
+                  any solid backdrop.
                 </p>
               </div>
             )}
@@ -526,13 +1266,17 @@ export function Inspector(p: Props) {
             <select
               className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
               value={over.blend ?? "normal"}
-              onChange={(e) => p.onPatchOverlay(trackId, { blend: e.target.value as OverlayClip["blend"] })}
+              onChange={(e) =>
+                p.onPatchOverlay(trackId, { blend: e.target.value as OverlayClip["blend"] })
+              }
             >
-              {["normal", "multiply", "screen", "overlay", "lighten", "darken", "difference"].map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
+              {["normal", "multiply", "screen", "overlay", "lighten", "darken", "difference"].map(
+                (b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ),
+              )}
             </select>
             <div className="text-xs mb-1 mt-2">Mask</div>
             <div className="grid grid-cols-4 gap-1">
@@ -540,7 +1284,9 @@ export function Inspector(p: Props) {
                 <button
                   key={m}
                   className={`h-7 border text-[10px] capitalize ${
-                    (over.mask ?? "none") === m ? "border-cyan-400 bg-cyan-400/20" : "border-border hover:border-white/40"
+                    (over.mask ?? "none") === m
+                      ? "border-cyan-400 bg-cyan-400/20"
+                      : "border-border hover:border-white/40"
                   }`}
                   onClick={() => p.onPatchOverlay(trackId, { mask: m })}
                 >
@@ -549,7 +1295,8 @@ export function Inspector(p: Props) {
               ))}
             </div>
             <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
-              Spotlight = round window, bar = horizontal band, line = half-plane (rotate the clip to aim it).
+              Spotlight = round window, bar = horizontal band, line = half-plane (rotate the clip to
+              aim it).
             </p>
           </Section>
           <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />
@@ -560,9 +1307,30 @@ export function Inspector(p: Props) {
       {over?.kind === "audio" && (
         <>
           <Section label="Audio">
-            <Slider label="Volume" min={0} max={1} step={0.05} value={over.volume ?? 1} onChange={(v) => p.onPatchOverlay(trackId, { volume: v })} />
-            <Slider label="Fade in" min={0} max={3} step={0.05} value={over.fadeIn ?? 0.15} onChange={(v) => p.onPatchOverlay(trackId, { fadeIn: v })} />
-            <Slider label="Fade out" min={0} max={3} step={0.05} value={over.fadeOut ?? 0.15} onChange={(v) => p.onPatchOverlay(trackId, { fadeOut: v })} />
+            <Slider
+              label="Volume"
+              min={0}
+              max={1}
+              step={0.05}
+              value={over.volume ?? 1}
+              onChange={(v) => p.onPatchOverlay(trackId, { volume: v })}
+            />
+            <Slider
+              label="Fade in"
+              min={0}
+              max={3}
+              step={0.05}
+              value={over.fadeIn ?? 0.15}
+              onChange={(v) => p.onPatchOverlay(trackId, { fadeIn: v })}
+            />
+            <Slider
+              label="Fade out"
+              min={0}
+              max={3}
+              step={0.05}
+              value={over.fadeOut ?? 0.15}
+              onChange={(v) => p.onPatchOverlay(trackId, { fadeOut: v })}
+            />
           </Section>
           <Section label="Audio FX">
             <Slider
@@ -591,17 +1359,21 @@ export function Inspector(p: Props) {
             />
             <div className="text-[10px] text-muted-foreground mt-1 mb-1">Voice presets</div>
             <div className="flex flex-wrap gap-1">
-              {([
-                ["Normal", 0],
-                ["Slightly higher", 3],
-                ["Chipmunk", 7],
-                ["Lower", -5],
-                ["Deep", -10],
-              ] as [string, number][]).map(([label, semis]) => (
+              {(
+                [
+                  ["Normal", 0],
+                  ["Slightly higher", 3],
+                  ["Chipmunk", 7],
+                  ["Lower", -5],
+                  ["Deep", -10],
+                ] as [string, number][]
+              ).map(([label, semis]) => (
                 <button
                   key={label}
                   className={`text-[10px] border rounded px-1.5 py-0.5 ${
-                    (over.fx?.pitch ?? 0) === semis ? "border-cyan-400 bg-cyan-400/10" : "border-border hover:border-white/40"
+                    (over.fx?.pitch ?? 0) === semis
+                      ? "border-cyan-400 bg-cyan-400/10"
+                      : "border-border hover:border-white/40"
                   }`}
                   onClick={() => p.onPatchOverlay(trackId, { fx: { ...over.fx, pitch: semis } })}
                 >
@@ -609,11 +1381,16 @@ export function Inspector(p: Props) {
                 </button>
               ))}
             </div>
-            <DenoiseRow media={overMedia} denoise={p.denoise} onDenoise={p.onDenoise} denoiseGate={p.denoiseGate} />
+            <DenoiseRow
+              media={overMedia}
+              denoise={p.denoise}
+              onDenoise={p.onDenoise}
+              denoiseGate={p.denoiseGate}
+            />
             <p className="text-[10px] text-muted-foreground leading-snug">
-              Pitch-shifts clips up to 2 minutes (chipmuck / deep-voice). Reverb and echo apply to any length. Denoise
-              runs the RNNoise speech model in the browser and swaps in a clean copy of the audio. All local — included
-              in exports.
+              Pitch-shifts clips up to 2 minutes (chipmuck / deep-voice). Reverb and echo apply to
+              any length. Denoise runs the RNNoise speech model in the browser and swaps in a clean
+              copy of the audio. All local — included in exports.
             </p>
           </Section>
           <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />
@@ -621,6 +1398,330 @@ export function Inspector(p: Props) {
       )}
     </div>
   );
+}
+
+/**
+ * Word-level caption re-timing.
+ *
+ * Captions arrive with a start time per word but no editable end, so a
+ * mis-timed word stays mis-timed forever. This nudge editor is the CapCut
+ * "click a word and fix it" flow: tap a word to jump the playhead to it, then
+ * shift it earlier/later. Everything is stored clip-local, so trimming the
+ * caption afterwards keeps the words aligned.
+ */
+function WordTiming({
+  words,
+  duration,
+  playhead,
+  onChange,
+  onSeek,
+}: {
+  words: TextWord[];
+  duration: number;
+  playhead: number;
+  onChange: (words: TextWord[]) => void;
+  onSeek: (t: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const STEP = 0.05;
+
+  const nudge = (i: number, delta: number) => onChange(nudgeWord(words, i, delta, duration, STEP));
+  const respace = () => onChange(respaceWords(words, duration));
+  const shiftAll = (delta: number) => onChange(shiftWords(words, delta, duration));
+
+  const active = words.reduce((acc, w, i) => (playhead >= w.t ? i : acc), -1);
+
+  return (
+    <div className="mt-2 border border-border rounded-lg overflow-hidden">
+      <button
+        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] hover:bg-secondary/60"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Clock className="h-3 w-3" />
+        <span className="font-medium">Word timing</span>
+        <span className="text-muted-foreground">
+          {words.length} words{active >= 0 ? ` · now “${words[active].text}”` : ""}
+        </span>
+        <span className="ml-auto text-muted-foreground">{open ? "hide" : "fix"}</span>
+      </button>
+      {open && (
+        <div className="p-2 border-t border-border space-y-1">
+          <div className="flex items-center gap-1 pb-1">
+            <button className="mb-btn-ghost h-6 text-[10px] px-1.5" onClick={() => shiftAll(-STEP)}>
+              All −{Math.round(STEP * 1000)}ms
+            </button>
+            <button className="mb-btn-ghost h-6 text-[10px] px-1.5" onClick={() => shiftAll(STEP)}>
+              All +{Math.round(STEP * 1000)}ms
+            </button>
+            <button
+              className="mb-btn-ghost h-6 text-[10px] px-1.5 ml-auto"
+              title="Spread the words evenly across this caption"
+              onClick={respace}
+            >
+              Re-space evenly
+            </button>
+          </div>
+          <div className="max-h-40 overflow-y-auto space-y-0.5">
+            {words.map((w, i) => (
+              <div
+                key={`${i}-${w.text}`}
+                className={`flex items-center gap-1 rounded px-1 py-0.5 text-[11px] ${
+                  i === active ? "bg-primary/15 text-foreground" : "text-muted-foreground"
+                }`}
+              >
+                <button
+                  className="flex-1 text-left truncate hover:text-foreground"
+                  title="Jump the playhead to this word"
+                  onClick={() => onSeek(w.t)}
+                >
+                  {w.text}
+                </button>
+                <span className="tabular-nums text-[10px] opacity-70">{w.t.toFixed(2)}</span>
+                <button
+                  className="w-4 hover:text-foreground"
+                  title="Earlier"
+                  onClick={() => nudge(i, -STEP)}
+                >
+                  ◀
+                </button>
+                <button
+                  className="w-4 hover:text-foreground"
+                  title="Later"
+                  onClick={() => nudge(i, STEP)}
+                >
+                  ▶
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Drawable speed curve (CapCut's custom speed curve).
+ *
+ * Drag a point up/down to change speed there, drag sideways to move it through
+ * the clip. Double-click the graph to add a point, double-click a point to
+ * remove it (always keeping at least two). Since the engine integrates the
+ * curve in closed form, the timeline length and the source position stay exact
+ * at any point count — preview and export agree frame for frame.
+ */
+function SpeedCurve({
+  clip,
+  onChange,
+  playhead,
+}: {
+  clip: MainClip;
+  onChange: (curve: SpeedPoint[] | undefined) => void;
+  playhead: number | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [drag, setDrag] = useState<number | null>(null);
+  const MIN = 0.05;
+  const MAX = 8;
+
+  // The graph always shows a concrete curve, materialising the linear ramp if
+  // the clip only has `speed` / `rampTo` — so the handle is never invisible.
+  const pts: SpeedPoint[] =
+    clip.curve && clip.curve.length >= 2
+      ? clip.curve
+      : [
+          { at: 0, v: clip.speed },
+          { at: 1, v: clip.rampTo ?? clip.speed },
+        ];
+
+  const W = 100;
+  const H = 46;
+  const PAD = 3;
+  const toY = (v: number) =>
+    H -
+    PAD -
+    ((Math.log(clamp01(v, MIN, MAX)) - Math.log(MIN)) / (Math.log(MAX) - Math.log(MIN))) *
+      (H - PAD * 2);
+  const fromY = (y: number) =>
+    Math.exp(Math.log(MIN) + ((H - PAD - y) / (H - PAD * 2)) * (Math.log(MAX) - Math.log(MIN)));
+  const toX = (at: number) => PAD + clamp01(at, 0, 1) * (W - PAD * 2);
+  const fromX = (x: number) => clamp01((x - PAD) / (W - PAD * 2), 0, 1);
+
+  /** pointer position in graph units, from a React pointer event */
+  function point(ev: React.PointerEvent) {
+    const box = svgRef.current?.getBoundingClientRect();
+    if (!box) return { x: 0, y: 0 };
+    // preserveAspectRatio="none" → a straight linear map is correct
+    return {
+      x: fromX(((ev.clientX - box.left) / box.width) * W),
+      y: ((ev.clientY - box.top) / box.height) * H,
+    };
+  }
+
+  function move(index: number, ev: React.PointerEvent) {
+    const { x, y } = point(ev);
+    const next = pts.map((q) => ({ ...q }));
+    const lo = index === 0 ? 0 : next[index - 1].at + 0.02;
+    const hi = index === pts.length - 1 ? 1 : next[index + 1].at - 0.02;
+    next[index] = {
+      at: index === 0 ? 0 : index === pts.length - 1 ? 1 : Math.min(hi, Math.max(lo, x)),
+      v: Math.round(fromY(y) * 100) / 100,
+    };
+    onChange(next);
+  }
+
+  function addPoint(ev: React.PointerEvent) {
+    const { x, y } = point(ev);
+    const next = [...pts, { at: Math.min(0.98, Math.max(0.02, x)), v: fromY(y) }].sort(
+      (a, b) => a.at - b.at,
+    );
+    onChange(next.map((q) => ({ ...q, v: Math.round(q.v * 100) / 100 })));
+  }
+
+  function removePoint(i: number) {
+    if (pts.length <= 2) return;
+    onChange(pts.filter((_, j) => j !== i));
+  }
+
+  /** A one-tap S-curve: fast → slow → fast, the classic jump-cut smoothy. */
+  function presetS() {
+    onChange([
+      { at: 0, v: 0.5 },
+      { at: 0.35, v: 0.2 },
+      { at: 0.65, v: 0.2 },
+      { at: 1, v: 0.5 },
+    ]);
+  }
+  function presetBullet() {
+    onChange([
+      { at: 0, v: 0.25 },
+      { at: 0.5, v: 4 },
+      { at: 1, v: 0.25 },
+    ]);
+  }
+
+  const path = pts.map((q, i) => `${i ? "L" : "M"}${toX(q.at)},${toY(q.v)}`).join(" ");
+  const dur = mainClipDurationLength(clip);
+
+  return (
+    <div className="mt-2 border border-border rounded-lg overflow-hidden">
+      <button
+        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] hover:bg-secondary/60"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Spline className="h-3 w-3" />
+        <span className="font-medium">Speed curve</span>
+        <span className="text-muted-foreground">
+          {pts.length} pts · {dur.toFixed(2)}s
+        </span>
+        <span className="ml-auto text-muted-foreground">{open ? "hide" : "draw"}</span>
+      </button>
+      {open && (
+        <div className="p-2 border-t border-border">
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${W} ${H}`}
+            preserveAspectRatio="none"
+            className="w-full h-24 rounded bg-slate-950 touch-none cursor-crosshair"
+            onDoubleClick={(e) => addPoint(e as unknown as React.PointerEvent)}
+            onPointerMove={(e) => drag != null && move(drag, e)}
+            onPointerUp={() => setDrag(null)}
+            onPointerLeave={() => setDrag(null)}
+          >
+            {/* speed gridlines at 0.25 / 1 / 4 */}
+            {[0.25, 1, 4].map((v) => (
+              <g key={v}>
+                <line
+                  x1={PAD}
+                  x2={W - PAD}
+                  y1={toY(v)}
+                  y2={toY(v)}
+                  stroke="rgba(148,163,184,0.2)"
+                  strokeWidth={0.4}
+                  strokeDasharray="1.5 1.5"
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+            ))}
+            {/* playhead */}
+            {playhead != null && dur > 0 && (
+              <line
+                x1={toX(playhead / dur)}
+                x2={toX(playhead / dur)}
+                y1={PAD}
+                y2={H - PAD}
+                stroke="rgba(244,114,182,0.8)"
+                strokeWidth={0.5}
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+            <path
+              d={`${path} L${toX(1)},${H - PAD} L${toX(0)},${H - PAD} Z`}
+              fill="rgba(34,211,238,0.12)"
+            />
+            <path
+              d={path}
+              fill="none"
+              stroke="#22d3ee"
+              strokeWidth={1.4}
+              vectorEffect="non-scaling-stroke"
+            />
+            {pts.map((q, i) => (
+              <circle
+                key={i}
+                cx={toX(q.at)}
+                cy={toY(q.v)}
+                r={2.4}
+                fill="#0f172a"
+                stroke="#22d3ee"
+                strokeWidth={1.2}
+                vectorEffect="non-scaling-stroke"
+                className="cursor-grab"
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  (e.target as Element).setPointerCapture?.(e.pointerId);
+                  setDrag(i);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  removePoint(i);
+                }}
+              >
+                <title>{`${q.v.toFixed(2)}× at ${Math.round(q.at * 100)}%`}</title>
+              </circle>
+            ))}
+          </svg>
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-1">
+            <span>0.05×</span>
+            <span>double-click the graph to add · a point to remove</span>
+            <span>8×</span>
+          </div>
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            <button className="mb-btn-ghost h-6 px-1.5 text-[10px]" onClick={presetS}>
+              Slow in / out
+            </button>
+            <button className="mb-btn-ghost h-6 px-1.5 text-[10px]" onClick={presetBullet}>
+              Bullet time
+            </button>
+            <button
+              className="mb-btn-ghost h-6 px-1.5 text-[10px]"
+              title="Back to a constant speed"
+              onClick={() => onChange(undefined)}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const clamp01 = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+
+/** Local copy of the clip length so this panel never imports the engine. */
+function mainClipDurationLength(c: MainClip): number {
+  return mainClipDuration(c);
 }
 
 function KeyframeSection({
@@ -645,15 +1746,24 @@ function KeyframeSection({
         className="mb-btn-ghost w-full h-7 text-[11px] text-fuchsia-300 border border-fuchsia-400/40"
         onClick={onAdd}
         disabled={playheadLocal == null}
-        title={playheadLocal == null ? "Put the playhead inside this clip first" : "Write all motion values at the playhead"}
+        title={
+          playheadLocal == null
+            ? "Put the playhead inside this clip first"
+            : "Write all motion values at the playhead"
+        }
       >
         <Diamond className="h-3 w-3 inline -mt-0.5" /> Add keyframe at playhead
-        {playheadLocal != null && <span className="text-muted-foreground">({playheadLocal.toFixed(2)}s in)</span>}
+        {playheadLocal != null && (
+          <span className="text-muted-foreground">({playheadLocal.toFixed(2)}s in)</span>
+        )}
       </button>
       {kfs.length > 0 ? (
         <div className="mt-1.5 space-y-1">
           {kfs.map((k) => (
-            <div key={k.at} className="flex items-center gap-1.5 text-[10px] bg-slate-900/70 border border-border rounded px-1.5 py-1">
+            <div
+              key={k.at}
+              className="flex items-center gap-1.5 text-[10px] bg-slate-900/70 border border-border rounded px-1.5 py-1"
+            >
               <button
                 className="text-fuchsia-300 hover:scale-125 transition-transform"
                 title="Jump playhead here"
@@ -667,7 +1777,11 @@ function KeyframeSection({
                 {(k.v.x !== 0 || k.v.y !== 0 || k.v.rotation !== 0) &&
                   ` · ${k.v.x.toFixed(2)},${k.v.y.toFixed(2)} ${Math.round(k.v.rotation)}°`}
               </span>
-              <button className="text-muted-foreground hover:text-destructive" title="Delete keyframe" onClick={() => onDelete(k.at)}>
+              <button
+                className="text-muted-foreground hover:text-destructive"
+                title="Delete keyframe"
+                onClick={() => onDelete(k.at)}
+              >
                 <Trash2 className="h-3 w-3" />
               </button>
             </div>
@@ -675,18 +1789,39 @@ function KeyframeSection({
         </div>
       ) : (
         <p className="text-[10px] text-muted-foreground mt-1.5 leading-snug">
-          No keyframes yet — motion holds its current values. Add one, then keep adjusting to shape the animation.
+          No keyframes yet — motion holds its current values. Add one, then keep adjusting to shape
+          the animation.
         </p>
       )}
     </div>
   );
 }
 
-function TimingSection({ over, onPatch }: { over: OverlayClip; onPatch: (p: Partial<OverlayClip>) => void }) {
+function TimingSection({
+  over,
+  onPatch,
+}: {
+  over: OverlayClip;
+  onPatch: (p: Partial<OverlayClip>) => void;
+}) {
   return (
     <Section label="Timing">
-      <Slider label="Start" min={0} max={Math.max(1, over.start + over.duration)} step={0.1} value={over.start} onChange={(v) => onPatch({ start: v })} />
-      <Slider label="Duration" min={0.2} max={60} step={0.1} value={over.duration} onChange={(v) => onPatch({ duration: v })} />
+      <Slider
+        label="Start"
+        min={0}
+        max={Math.max(1, over.start + over.duration)}
+        step={0.1}
+        value={over.start}
+        onChange={(v) => onPatch({ start: v })}
+      />
+      <Slider
+        label="Duration"
+        min={0.2}
+        max={60}
+        step={0.1}
+        value={over.duration}
+        onChange={(v) => onPatch({ duration: v })}
+      />
     </Section>
   );
 }
@@ -715,7 +1850,12 @@ function Slider({
   value: number;
   onChange: (v: number) => void;
 }) {
-  const shown = step < 1 ? (value >= 10 && step >= 0.5 ? Math.round(value).toString() : value.toFixed(2)) : Math.round(value).toString();
+  const shown =
+    step < 1
+      ? value >= 10 && step >= 0.5
+        ? Math.round(value).toString()
+        : value.toFixed(2)
+      : Math.round(value).toString();
   return (
     <div className="mb-2">
       <div className="flex justify-between text-[11px] mb-0.5">
@@ -736,5 +1876,7 @@ function Slider({
 }
 
 function Kbd({ children }: { children: React.ReactNode }) {
-  return <kbd className="px-1 border border-border rounded bg-slate-900 text-[10px]">{children}</kbd>;
+  return (
+    <kbd className="px-1 border border-border rounded bg-slate-900 text-[10px]">{children}</kbd>
+  );
 }
