@@ -4,10 +4,6 @@ import * as ort from "onnxruntime-web";
 const MODEL_REVISION = "1630fe9ce1a780c85c1f7ca1f919379ee1480e1a";
 const MODEL_URL = `https://huggingface.co/Xenova/modnet/resolve/${MODEL_REVISION}/onnx/model.onnx`;
 
-ort.env.wasm.numThreads = 1;
-ort.env.wasm.proxy = false;
-ort.env.wasm.wasmPaths = new URL("../node_modules/onnxruntime-web/dist/", import.meta.url).href;
-
 console.log("Downloading pinned MODNet ONNX model…");
 const response = await fetch(MODEL_URL);
 assert.ok(response.ok, `Model download failed: HTTP ${response.status}`);
