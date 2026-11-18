@@ -14,15 +14,14 @@ on:
     branches: ["main"]
     paths:
       - "package.json"
+    tags:
+      - "mc-*"
   workflow_dispatch:
     inputs:
       release:
         description: "GitHub release tag to attach the binaries to"
         required: true
         default: "v0.1.0"
-  push:
-    tags:
-      - "mc-*"
 
 permissions:
   contents: write
