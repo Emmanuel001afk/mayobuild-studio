@@ -60,12 +60,14 @@ export function Timeline(p: Props) {
   }, [project, dur]);
   const total = Math.max(20, maxEnd + 2);
   const width = total * pps;
-  const snapPoints = [
+  const snapPointsFor = (clipId: string) => [
     t,
     ...beatsForSnap(project.beats ?? []),
     ...spans.flatMap((s) => [s.start, s.end]),
     ...project.tracks.flatMap((tr) =>
-      tr.clips.flatMap((clip) => [clip.start, clip.start + clip.duration]),
+      tr.clips
+        .filter((clip) => clip.id !== clipId)
+        .flatMap((clip) => [clip.start, clip.start + clip.duration]),
     ),
   ];
   const fitTimeline = () => {
@@ -512,9 +514,7 @@ export function Timeline(p: Props) {
                     denoised={c.kind === "audio" ? mediaById(c.mediaId)?.denoised : undefined}
                     lanes={project.tracks.map((x) => ({ id: x.id, name: x.name }))}
                     snapEnabled={snapEnabled}
-                    snapPoints={snapPoints.filter(
-                      (point) => point < c.start - 0.001 || point > c.start + c.duration + 0.001,
-                    )}
+                    snapPoints={snapPointsFor(c.id)}
                     onSelect={() => p.onSelect({ lane: "overlay", trackId: tr.id, id: c.id })}
                     onPatch={(patch) => p.onOverlayPatch(tr.id, c.id, patch)}
                     onMoveTrack={(tid) => p.onOverlayMoveTrack?.(c.id, tid)}
