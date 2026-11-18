@@ -1541,8 +1541,21 @@ export function Editor({
   const mediaPanel = (
     <div className="w-52 md:w-60 border-r border-border flex flex-col shrink-0">
       <div className="p-2 border-b border-border">
-        <button className="mb-btn w-full h-8 text-xs" onClick={() => fileRef.current?.click()}>
-          <Upload className="h-3.5 w-3.5" /> Import media
+        <button
+          className="mb-btn w-full h-8 text-xs"
+          onClick={() => fileRef.current?.click()}
+          disabled={importing}
+        >
+          {importing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Upload className="h-3.5 w-3.5" />
+          )}
+          {importing && importProgress
+            ? `Checking ${importProgress.done}/${importProgress.total}…`
+            : importing
+              ? "Importing…"
+              : "Import media"}
         </button>
         <input
           ref={fileRef}
@@ -1965,8 +1978,18 @@ export function Editor({
               <button
                 className="mb-btn w-full h-8 text-xs"
                 onClick={() => fileRef.current?.click()}
+                disabled={importing}
               >
-                <Upload className="h-3.5 w-3.5" /> Import media
+                {importing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Upload className="h-3.5 w-3.5" />
+                )}
+                {importing && importProgress
+                  ? `Checking ${importProgress.done}/${importProgress.total}…`
+                  : importing
+                    ? "Importing…"
+                    : "Import media"}
               </button>
               <input
                 ref={fileRef}
