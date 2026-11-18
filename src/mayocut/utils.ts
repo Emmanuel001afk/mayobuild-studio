@@ -50,7 +50,7 @@ export function kindFromMime(mime: string, name: string): MediaKind | null {
   )
     return "video";
   if (["mp3", "wav", "ogg", "m4a", "aac", "flac"].includes(ext)) return "audio";
-  if (["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(ext)) return "image";
+  if (["bmp", "jpg", "jpeg", "png", "webp", "gif", "heic", "heif"].includes(ext)) return "image";
   return null;
 }
 
