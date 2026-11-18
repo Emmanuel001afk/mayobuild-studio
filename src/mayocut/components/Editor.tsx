@@ -1832,6 +1832,7 @@ export function Editor({
         )}
         {workspaceTab === "stickers" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <p className="text-[10px] text-muted-foreground mb-2">Sticker library</p>
             <div className="flex gap-1 flex-wrap mb-2" role="group" aria-label="Sticker categories">
               {stickerGroups.map((group) => (
                 <button
