@@ -148,6 +148,7 @@ export function Editor({
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [assistOpen, setAssistOpen] = useState(false);
+  const [assistInitialTab, setAssistInitialTab] = useState<"tools" | "ai" | "cloud" | "captions" | "voice">("tools");
   const isMobile = useIsMobile();
   const landscape = useOrientationLandscape();
   // Rotated (landscape) phones: compact the fixed chrome so the preview stays
@@ -155,7 +156,7 @@ export function Editor({
   const compact = isMobile && landscape;
   const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
   const [workspaceTab, setWorkspaceTab] = useState<
-    "media" | "audio" | "text" | "stickers" | "effects" | "filters" | "transitions" | "ai"
+    "media" | "audio" | "text" | "stickers" | "effects" | "filters" | "transitions" | "captions" | "ai"
   >("media");
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
@@ -1608,7 +1609,8 @@ export function Editor({
     { id: "effects", label: "Effects", icon: Sparkles },
     { id: "filters", label: "Filters", icon: SlidersHorizontal },
     { id: "transitions", label: "Transitions", icon: Scissors },
-    { id: "ai", label: "AI Studio", icon: Clapperboard },
+    { id: "captions", label: "Captions", icon: Clapperboard },
+    { id: "ai", label: "AI Studio", icon: Sparkles },
   ] as const;
   const mediaPanel = (
     <div className="w-52 md:w-60 border-r border-border flex shrink-0 min-h-0">
@@ -1635,7 +1637,7 @@ export function Editor({
             {workspaceTabs.find((tab) => tab.id === workspaceTab)?.label}
           </span>
           {workspaceTab === "ai" && (
-            <button className="mb-btn h-6 px-2 text-[10px]" onClick={() => setAssistOpen(true)}>
+            <button className="mb-btn h-6 px-2 text-[10px]" onClick={() => { setAssistInitialTab("tools"); setAssistOpen(true); }}>
               Open
             </button>
           )}
@@ -1831,6 +1833,24 @@ export function Editor({
                 {transition.name}
               </button>
             ))}
+          </div>
+        )}
+        {workspaceTab === "captions" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+            <Clapperboard className="h-7 w-7 text-primary" />
+            <p className="text-xs font-semibold">Auto captions</p>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Generate editable, timed subtitles from your main-track audio using the on-device Whisper workflow.
+            </p>
+            <button
+              className="mb-btn w-full h-8 text-xs"
+              onClick={() => {
+                setAssistInitialTab("captions");
+                setAssistOpen(true);
+              }}
+            >
+              <Clapperboard className="h-3.5 w-3.5" /> Open caption tools
+            </button>
           </div>
         )}
         {workspaceTab === "ai" && (
