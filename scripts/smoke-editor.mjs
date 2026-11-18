@@ -245,6 +245,12 @@ if (assistButton) {
   console.log("  FAIL Assist drawer button missing");
   failed++;
 }
+// Assist replaces the right-side tool panel. Re-open Stickers before checking
+// its category interaction, just as a user would when switching tools.
+if (stickersTool) {
+  stickersTool.click();
+  await wait(250);
+}
 const lifestyleTab = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Lifestyle");
 if (lifestyleTab) {
   lifestyleTab.click();
