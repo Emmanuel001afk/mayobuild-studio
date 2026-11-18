@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import * as ortModule from "onnxruntime-node";
 const ort = ortModule.default?.default ?? ortModule.default ?? ortModule;
 console.log("Native ONNX Runtime configured for CPU inference.");
@@ -71,7 +72,7 @@ const webModule = await import("onnxruntime-web");
 const webRuntime = webModule.default ?? webModule;
 webRuntime.env.wasm.numThreads = 1;
 webRuntime.env.wasm.proxy = false;
-webRuntime.env.wasm.wasmPaths = new URL("../node_modules/onnxruntime-web/dist/", import.meta.url).href;
+webRuntime.env.wasm.wasmPaths = fileURLToPath(new URL("../node_modules/onnxruntime-web/dist/", import.meta.url));
 const webSession = await webRuntime.InferenceSession.create(model, {
   executionProviders: ["wasm"],
   graphOptimizationLevel: "all",
