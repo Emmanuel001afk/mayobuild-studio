@@ -1372,6 +1372,7 @@ export class Engine {
             }
             ctx.translate(cx, cy);
             ctx.rotate(rot);
+            if (c.flipX || c.flipY) ctx.scale(c.flipX ? -1 : 1, c.flipY ? -1 : 1);
             if (c.mask && c.mask !== "none") this.applyMask(ctx, c.mask, size, ar);
             const dw = size;
             const dh = size / ar;
@@ -1560,6 +1561,11 @@ export class Engine {
       ctx.translate(W / 2 + anim.x * (W / 2), H / 2 + anim.y * (H / 2));
       ctx.rotate((anim.rotation * Math.PI) / 180);
       ctx.scale(anim.scale, anim.scale);
+      ctx.translate(-W / 2, -H / 2);
+    }
+    if (c.flipX || c.flipY) {
+      ctx.translate(W / 2, H / 2);
+      ctx.scale(c.flipX ? -1 : 1, c.flipY ? -1 : 1);
       ctx.translate(-W / 2, -H / 2);
     }
     if (ef.scale !== 1 || ef.rot !== 0 || ef.tx !== 0 || ef.ty !== 0) {
