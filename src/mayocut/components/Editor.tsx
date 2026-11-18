@@ -69,18 +69,40 @@ const EMPTY_PROJECT: Project = {
 
 
 /** Phones get a CapCut-style layout (dominant preview + bottom tab bar);
- *  tablets/desktop keep the three-panel studio. */
+ *  tablets/desktop keep the three-panel studio.
+ *
+ *  `(max-height: 500px)` is the auto-rotate fix: a phone turned landscape
+ *  often crosses the 768px width breakpoint but only has ~380px of height —
+ *  the three-panel desktop layout used to squeeze the preview into a sliver
+ *  (or off-screen), leaving only the editing area visible. Short viewports
+ *  always get the mobile layout, with a compact timeline/tab bar in landscape.
+ */
 function useIsMobile() {
   const [m, setM] = useState(() =>
-    typeof window !== "undefined" ? window.matchMedia("(max-width: 767px)").matches : false,
+    typeof window !== "undefined"
+      ? window.matchMedia("(max-width: 767px), (max-height: 500px)").matches
+      : false,
   );
   useEffect(() => {
-    const q = window.matchMedia("(max-width: 767px)");
+    const q = window.matchMedia("(max-width: 767px), (max-height: 500px)");
     const fn = (e: MediaQueryListEvent) => setM(e.matches);
     q.addEventListener("change", fn);
     return () => q.removeEventListener("change", fn);
   }, []);
   return m;
+}
+
+function useOrientationLandscape() {
+  const [l, setL] = useState(
+    () => (typeof window !== "undefined" ? window.matchMedia("(orientation: landscape)").matches : false),
+  );
+  useEffect(() => {
+    const q = window.matchMedia("(orientation: landscape)");
+    const fn = (e: MediaQueryListEvent) => setL(e.matches);
+    q.addEventListener("change", fn);
+    return () => q.removeEventListener("change", fn);
+  }, []);
+  return l;
 }
 
 export function Editor({
@@ -114,6 +136,10 @@ export function Editor({
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [assistOpen, setAssistOpen] = useState(false);
   const isMobile = useIsMobile();
+  const landscape = useOrientationLandscape();
+  // Rotated (landscape) phones: compact the fixed chrome so the preview stays
+  // visible instead of being squeezed out by the timeline + tab bar.
+  const compact = isMobile && landscape;
   const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
@@ -343,6 +369,43 @@ export function Editor({
     });
     if (ok) setSelection(null);
   }, [selection, mutateVoid]);
+
+  const doDuplicate = useCallback(() => {
+    if (!selection) return;
+    mutateVoid((eng) => {
+      if (selection.lane === "main") {
+        eng.duplicateMainClip(selection.id);
+      } else {
+        const tr = eng.project.tracks.find((x) => x.id === selection.trackId);
+        const c = tr?.clips.find((x) => x.id === selection.id);
+        if (c) tr!.clips.push({ ...c, id: uid("dup"), start: c.start + c.duration * 0.5 });
+      }
+    });
+  }, [selection, mutateVoid]);
+
+  // ------------------------------------------------------------- drag-to-move
+  // Dragging a text/sticker directly on the preview repositions it (the
+  // CapCut way). One undo snapshot per drag gesture.
+  const onOverlayDragStart = useCallback((clipId: string) => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    const trackId = eng.overlayTrackOf(clipId);
+    if (!trackId) return;
+    pushUndo();
+    setSelection({ lane: "overlay", trackId, id: clipId });
+  }, [pushUndo]);
+
+  const onOverlayDragMove = useCallback((clipId: string, x: number, y: number) => {
+    engineRef.current?.setOverlayFreePos(clipId, x, y);
+  }, []);
+
+  const onOverlayDragEnd = useCallback((moved: boolean) => {
+    if (!moved) {
+      // plain tap: select only — drop the snapshot so it doesn't fill undo
+      undoStack.current.pop();
+      setUndoCount(undoStack.current.length);
+    }
+  }, []);
 
   // ------------------------------------------------------------- keyframes / motion
 
@@ -595,6 +658,39 @@ export function Editor({
       if (blob) engineRef.current?.attachUrl(item.id, URL.createObjectURL(blob));
     }
     toast.success(`${items.length} item(s) added`);
+  }
+
+  // ------------------------------------------------------------- media delete
+  /** Remove a media item from the library (and any clips using it). */
+  async function deleteMediaItem(item: MediaItem) {
+    const eng = engineRef.current;
+    if (!eng) return;
+    const used =
+      eng.project.main.filter((c) => c.mediaId === item.id).length +
+      eng.project.tracks.reduce((a, tr) => a + tr.clips.filter((c) => c.mediaId === item.id).length, 0);
+    const msg = used
+      ? `Remove “${item.name}” from the library?\nIt is used by ${used} timeline clip(s) — those will be removed too.`
+      : `Remove “${item.name}” from the library?`;
+    if (!window.confirm(msg)) return;
+    pushUndo();
+    const removed = eng.dropMediaRefs(item.id);
+    try {
+      await db.deleteMedia(item.id);
+    } catch {
+      /* storage error — the timeline change already happened */
+    }
+    eng.draw();
+    const all = await db.listMedia();
+    setMedia(all);
+    eng.setMedia(all);
+    if (selection) {
+      const stillThere =
+        selection.lane === "main"
+          ? eng.project.main.some((c) => c.id === selection.id)
+          : eng.project.tracks.some((tr) => tr.clips.some((c) => c.id === selection.id));
+      if (!stillThere) setSelection(null);
+    }
+    toast.success(used ? `Removed media and ${removed} clip(s)` : "Removed from library");
   }
 
   function startRecording() {
@@ -935,7 +1031,7 @@ export function Editor({
       </div>
   );
   const topbarMobile = (
-    <div className="h-12 border-b border-border flex items-center gap-1.5 px-2 shrink-0">
+    <div className={`shrink-0 border-b border-border flex items-center gap-1.5 px-2 ${compact ? "h-11" : "h-12"}`}>
       <button className="mb-btn-ghost h-8 w-8 p-0" onClick={onExit ?? (() => window.location.assign("/mayocut"))} title="Save & close">
         <ArrowLeft className="h-4 w-4" />
       </button>
@@ -960,6 +1056,39 @@ export function Editor({
       </button>
       <button className="mb-btn h-8 px-3 text-xs bg-primary shrink-0" onClick={() => setShowExport(true)}>
         <Download className="h-4 w-4" /> Export
+      </button>
+    </div>
+  );
+  /** Library card: tap to add to the timeline, × to delete from the library. */
+  const mediaCard = (m: MediaItem) => (
+    <div key={m.id} className="relative rounded overflow-hidden border border-border group">
+      <button
+        className="w-full block text-left hover:border-primary"
+        onClick={() => addMediaToTimeline(m)}
+        title={`Add ${m.name} (${fmtBytes(m.size)})`}
+      >
+        <div className="aspect-video bg-slate-900 flex items-center justify-center">
+          {m.thumb ? (
+            <img src={m.thumb} alt="" className="w-full h-full object-cover" />
+          ) : m.kind === "audio" ? (
+            <Music className="h-4 w-4 text-fuchsia-300" />
+          ) : m.kind === "image" ? (
+            <ImageIcon className="h-4 w-4 text-cyan-300" />
+          ) : (
+            <Film className="h-4 w-4 text-muted-foreground" />
+          )}
+        </div>
+        <div className="px-1 py-0.5 text-[10px] truncate">{m.name}</div>
+      </button>
+      <button
+        className="absolute top-1 right-1 h-5 w-5 rounded-full bg-black/70 border border-white/25 text-[11px] leading-none text-white/75 hover:text-white hover:border-red-400 flex items-center justify-center"
+        title={`Delete ${m.name} from the library`}
+        onClick={(e) => {
+          e.stopPropagation();
+          void deleteMediaItem(m);
+        }}
+      >
+        ×
       </button>
     </div>
   );
@@ -1029,27 +1158,7 @@ export function Editor({
             </div>
           </div>
           <div className={`flex-1 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}>
-            {media.map((m) => (
-              <button
-                key={m.id}
-                className="relative rounded overflow-hidden border border-border hover:border-primary group text-left"
-                onClick={() => addMediaToTimeline(m)}
-                title={`Add ${m.name} (${fmtBytes(m.size)})`}
-              >
-                <div className="aspect-video bg-slate-900 flex items-center justify-center">
-                  {m.thumb ? (
-                    <img src={m.thumb} alt="" className="w-full h-full object-cover" />
-                  ) : m.kind === "audio" ? (
-                    <Music className="h-4 w-4 text-fuchsia-300" />
-                  ) : m.kind === "image" ? (
-                    <ImageIcon className="h-4 w-4 text-cyan-300" />
-                  ) : (
-                    <Film className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </div>
-                <div className="px-1 py-0.5 text-[10px] truncate">{m.name}</div>
-              </button>
-            ))}
+            {media.map(mediaCard)}
             {media.length === 0 && (
               <div className="col-span-2 text-[11px] text-muted-foreground text-center py-6">
                 Library empty.
@@ -1070,7 +1179,14 @@ export function Editor({
                 height: "100%",
               }}
             >
-              <EditorCanvas engine={engineRef} project={project} onReady={(c) => engineRef.current?.bind(c)} />
+              <EditorCanvas
+                engine={engineRef}
+                project={project}
+                onReady={(c) => engineRef.current?.bind(c)}
+                onDragStart={onOverlayDragStart}
+                onDragMove={onOverlayDragMove}
+                onDragEnd={onOverlayDragEnd}
+              />
             </div>
             {spans.length === 0 && project.tracks.every((tr) => tr.clips.length === 0) && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -1105,6 +1221,19 @@ export function Editor({
             <span className="font-mono tabular-nums">
               {fmtTime(t)} <span className="text-muted-foreground">/ {fmtTime(dur)}</span>
             </span>
+            {selection && (
+              <div className="flex items-center gap-1">
+                <button className="mb-btn-ghost h-7 px-2 text-[10px]" onClick={doSplit} title="Split at playhead (S)">
+                  ✂ Split
+                </button>
+                <button className="mb-btn-ghost h-7 px-2 text-[10px]" onClick={doDuplicate} title="Duplicate selected clip">
+                  ⧉ Duplicate
+                </button>
+                <button className="mb-btn-ghost h-7 px-2 text-[10px] text-red-400" onClick={deleteSelection} title="Delete selected clip (Del)">
+                  🗑 Delete
+                </button>
+              </div>
+            )}
             <div className="ml-auto flex items-center gap-2">
               <button className="mb-btn-ghost h-7 px-2" onClick={() => setPps((v) => Math.max(16, v - 12))} title="Zoom out">
                 −
@@ -1126,7 +1255,7 @@ export function Editor({
           </div>
   );
   const transportMobile = (
-    <div className="h-10 border-t border-border flex items-center gap-1 px-2 text-xs shrink-0">
+    <div className={`shrink-0 border-t border-border flex items-center gap-1 px-2 text-xs ${compact ? "h-9" : "h-10"}`}>
       <button className="mb-btn-ghost h-7 px-2.5" onClick={() => engineRef.current?.toggle()}>
         {playing ? "❚❚" : "▶"}
       </button>
@@ -1147,6 +1276,13 @@ export function Editor({
       <span className="font-mono tabular-nums ml-1">
         {fmtTime(t)} <span className="text-muted-foreground">/ {fmtTime(dur)}</span>
       </span>
+      {selection && (
+        <div className="flex items-center gap-0.5 ml-1">
+          <button className="mb-btn-ghost h-7 px-1.5 text-[10px]" onClick={doSplit} title="Split at playhead">✂</button>
+          <button className="mb-btn-ghost h-7 px-1.5 text-[10px]" onClick={doDuplicate} title="Duplicate clip">⧉</button>
+          <button className="mb-btn-ghost h-7 px-1.5 text-[10px] text-red-400" onClick={deleteSelection} title="Delete clip">🗑</button>
+        </div>
+      )}
       <div className="ml-auto flex items-center gap-1">
         <button className="mb-btn-ghost h-7 w-7 p-0" onClick={() => setPps((v) => Math.max(16, v - 12))} title="Zoom out">−</button>
         <button className="mb-btn-ghost h-7 w-7 p-0" onClick={() => setPps((v) => Math.min(160, v + 12))} title="Zoom in">+</button>
@@ -1199,18 +1335,7 @@ export function Editor({
               })
             }
             onSplit={doSplit}
-            onDuplicate={() => {
-              if (!selection) return;
-              mutateVoid((eng) => {
-                if (selection.lane === "main") {
-                  eng.duplicateMainClip(selection.id);
-                } else {
-                  const tr = eng.project.tracks.find((x) => x.id === selection.trackId);
-                  const c = tr?.clips.find((x) => x.id === selection.id);
-                  if (c) tr!.clips.push({ ...c, id: uid("dup"), start: c.start + c.duration * 0.5 });
-                }
-              });
-            }}
+            onDuplicate={doDuplicate}
             onDelete={deleteSelection}
             onSeek={(v) => engineRef.current?.seek(v)}
             filters={FILTER_PRESETS}
@@ -1222,7 +1347,7 @@ export function Editor({
     </div>
   );
   const bottomBar = (
-    <div className="h-14 shrink-0 border-t border-border grid grid-cols-4 bg-card/90 backdrop-blur">
+    <div className={`shrink-0 border-t border-border grid grid-cols-4 bg-card/90 backdrop-blur ${compact ? "h-12" : "h-14"}`}>
       {(
         [
           { id: "media", icon: Film, label: "Media" },
@@ -1315,27 +1440,7 @@ export function Editor({
             </div>
           </div>
           <div className={`flex-1 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}>
-            {media.map((m) => (
-              <button
-                key={m.id}
-                className="relative rounded overflow-hidden border border-border hover:border-primary group text-left"
-                onClick={() => addMediaToTimeline(m)}
-                title={`Add ${m.name} (${fmtBytes(m.size)})`}
-              >
-                <div className="aspect-video bg-slate-900 flex items-center justify-center">
-                  {m.thumb ? (
-                    <img src={m.thumb} alt="" className="w-full h-full object-cover" />
-                  ) : m.kind === "audio" ? (
-                    <Music className="h-4 w-4 text-fuchsia-300" />
-                  ) : m.kind === "image" ? (
-                    <ImageIcon className="h-4 w-4 text-cyan-300" />
-                  ) : (
-                    <Film className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </div>
-                <div className="px-1 py-0.5 text-[10px] truncate">{m.name}</div>
-              </button>
-            ))}
+            {media.map(mediaCard)}
             {media.length === 0 && (
               <div className="col-span-2 text-[11px] text-muted-foreground text-center py-6">
                 Library empty.
@@ -1424,18 +1529,7 @@ export function Editor({
               })
             }
             onSplit={doSplit}
-            onDuplicate={() => {
-              if (!selection) return;
-              mutateVoid((eng) => {
-                if (selection.lane === "main") {
-                  eng.duplicateMainClip(selection.id);
-                } else {
-                  const tr = eng.project.tracks.find((x) => x.id === selection.trackId);
-                  const c = tr?.clips.find((x) => x.id === selection.id);
-                  if (c) tr!.clips.push({ ...c, id: uid("dup"), start: c.start + c.duration * 0.5 });
-                }
-              });
-            }}
+            onDuplicate={doDuplicate}
             onDelete={deleteSelection}
             onSeek={(v) => engineRef.current?.seek(v)}
             filters={FILTER_PRESETS}
@@ -1460,7 +1554,7 @@ export function Editor({
         <>
           {previewArea}
           {transportMobile}
-          <div className="h-44 border-t border-border shrink-0">
+          <div className={`border-t border-border shrink-0 ${compact ? "h-28" : "h-44"}`}>
             <Timeline
               project={project}
               pps={pps}
@@ -1737,17 +1831,25 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-/** Canvas host: creates the <canvas> and hands it to the engine. */
+/** Canvas host: creates the <canvas>, hands it to the engine, and lets the
+ *  user drag text/stickers directly on the preview (CapCut-style). */
 function EditorCanvas({
   engine,
   project,
   onReady,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
 }: {
   engine: React.RefObject<Engine | null>;
   project: Project;
   onReady: (c: HTMLCanvasElement) => void;
+  onDragStart: (clipId: string) => void;
+  onDragMove: (clipId: string, x: number, y: number) => void;
+  onDragEnd: (moved: boolean) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const dragRef = useRef<{ id: string; moved: boolean } | null>(null);
   useEffect(() => {
     if (ref.current) onReady(ref.current);
     // rebind when aspect changes
@@ -1755,8 +1857,42 @@ function EditorCanvas({
   return (
     <canvas
       ref={ref}
-      className="w-full h-full rounded shadow-2xl"
+      className="w-full h-full rounded shadow-2xl touch-none"
       onDoubleClick={() => engine.current?.toggle()}
+      onPointerDown={(e) => {
+        const eng = engine.current;
+        const c = ref.current;
+        if (!eng || !c) return;
+        const r = c.getBoundingClientRect();
+        const x = ((e.clientX - r.left) / r.width) * c.width;
+        const y = ((e.clientY - r.top) / r.height) * c.height;
+        const id = eng.pickOverlayAt(x, y);
+        if (id) {
+          dragRef.current = { id, moved: false };
+          c.setPointerCapture(e.pointerId);
+          onDragStart(id);
+        }
+      }}
+      onPointerMove={(e) => {
+        const d = dragRef.current;
+        const c = ref.current;
+        if (!d || !c) return;
+        const r = c.getBoundingClientRect();
+        const fx = ((e.clientX - r.left) / r.width) * 2 - 1;
+        const fy = ((e.clientY - r.top) / r.height) * 2 - 1;
+        d.moved = true;
+        onDragMove(d.id, fx, fy);
+      }}
+      onPointerUp={() => {
+        const d = dragRef.current;
+        dragRef.current = null;
+        if (d) onDragEnd(d.moved);
+      }}
+      onPointerCancel={() => {
+        const d = dragRef.current;
+        dragRef.current = null;
+        if (d) onDragEnd(d.moved);
+      }}
     />
   );
 }

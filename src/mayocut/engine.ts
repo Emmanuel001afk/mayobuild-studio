@@ -8,6 +8,7 @@ import {
   ASPECTS,
   DEFAULT_ADJUST,
   DEFAULT_ANIM,
+  fontCss,
   mainClipDuration,
   mainRateAt,
   mainSpans,
@@ -277,6 +278,13 @@ export class Engine {
   private lutOff: HTMLCanvasElement | null = null;
   private vhsPattern: HTMLCanvasElement | null = null;
   private impulse: AudioBuffer | null = null;
+
+  /**
+   * Hit rectangles of the overlays drawn in the last draw() — canvas-space
+   * pixels, in draw order. Used by pickOverlayAt() so "drag the text on the
+   * preview" hit-tests the exact pixels that were painted.
+   */
+  private overlayRects: { clipId: string; x: number; y: number; w: number; h: number }[] = [];
 
   /** 1 = canvas native, 2 = 4K (export only; draw() resizes the buffer). */
   exportScale = 1;
@@ -879,7 +887,64 @@ export class Engine {
     if ("kind" in clip && (clip.kind === "image" || clip.kind === "video")) {
       return { x: clip.x ?? 0, y: clip.y ?? 0, scale: clip.scale ?? 0.5, rotation: clip.rot ?? 0, opacity: 1 };
     }
+    if ("kind" in clip && clip.kind === "text") {
+      // free positioning: base x/y (drag on the preview, or the sliders),
+      // pos grid stays the anchor point they offset from
+      return { x: clip.x ?? 0, y: clip.y ?? 0, scale: 1, rotation: 0, opacity: 1 };
+    }
     return { ...DEFAULT_ANIM };
+  }
+
+  /** Which track holds a given overlay clip? */
+  overlayTrackOf(clipId: string): string | null {
+    for (const tr of this.project.tracks) {
+      if (tr.clips.some((c) => c.id === clipId)) return tr.id;
+    }
+    return null;
+  }
+
+  /**
+   * Free placement of a text/image/video overlay (canvas fractions of the
+   * half-width/height from center, as painted). Clamped so nothing can be
+   * dragged further than 50% of the canvas away from center.
+   */
+  setOverlayFreePos(clipId: string, x: number, y: number) {
+    const tr = this.project.tracks.find((t) => t.clips.some((c) => c.id === clipId));
+    const c = tr?.clips.find((c) => c.id === clipId);
+    if (!c || (c.kind !== "text" && c.kind !== "image" && c.kind !== "video")) return;
+    const cl = (v: number) => Math.max(-1.5, Math.min(1.5, v));
+    c.x = cl(x);
+    c.y = cl(y);
+    this.bump();
+    this.draw();
+  }
+
+  /**
+   * Hit-test the overlays painted in the last draw(). x/y are canvas-space
+   * pixels (i.e. in [0, canvas.width] × [0, canvas.height]). Returns the
+   * topmost clip id under the point, or null.
+   */
+  pickOverlayAt(x: number, y: number): string | null {
+    for (let i = this.overlayRects.length - 1; i >= 0; i--) {
+      const r = this.overlayRects[i];
+      if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r.clipId;
+    }
+    return null;
+  }
+
+  /** Remove every clip (main + all overlay tracks) that references a media id. */
+  dropMediaRefs(mediaId: string): number {
+    let n = 0;
+    const before = this.project.main.length;
+    this.project.main = this.project.main.filter((c) => c.mediaId !== mediaId);
+    n += before - this.project.main.length;
+    for (const tr of this.project.tracks) {
+      const b = tr.clips.length;
+      tr.clips = tr.clips.filter((c) => c.mediaId !== mediaId);
+      n += b - tr.clips.length;
+    }
+    if (n) this.bump();
+    return n;
   }
 
   /** Interpolated animation values at the playhead for a clip. */
@@ -943,6 +1008,7 @@ export class Engine {
     }
 
     // --- overlay tracks ---
+    this.overlayRects.length = 0;
     for (const tr of this.project.tracks) {
       for (const c of tr.clips) {
         if (t < c.start || t >= c.start + c.duration) continue;
@@ -968,6 +1034,13 @@ export class Engine {
           const ar = sw / sh;
           const cx = W / 2 + anim.x * (W / 2);
           const cy = H / 2 + anim.y * (H / 2);
+          this.overlayRects.push({
+            clipId: c.id,
+            x: cx - size / 2,
+            y: cy - size / (2 * ar),
+            w: size,
+            h: size / ar,
+          });
           const rot = (anim.rotation * Math.PI) / 180;
           const alpha = clamp01(fadeAlpha * anim.opacity);
           const blend: GlobalCompositeOperation | null =
@@ -1392,7 +1465,7 @@ export class Engine {
     if (anim2 === "bounce") yOff = -px * 0.9 * (1 - easeOutBounce(clamp01(localT / 0.55)));
     if (anim2 === "slideup") yOff = (1 - clamp01(localT / 0.4)) * H * 0.03;
 
-    ctx.font = `${weight} ${Math.round(px)}px "Inter", "Segoe UI", system-ui, sans-serif`;
+    ctx.font = `${weight} ${Math.round(px)}px ${fontCss(c.font)}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
@@ -1428,7 +1501,16 @@ export class Engine {
     const row = pos[0] as "t" | "m" | "b";
     if (row === "t") y = my + totalH / 2;
     if (row === "b") y = H - my - totalH / 2;
-    ctx.translate(x + anim.x * (W / 2) + kbX, y + anim.y * (H / 2) + yOff);
+    const xC = x + anim.x * (W / 2) + kbX;
+    const yC = y + anim.y * (H / 2) + yOff;
+    this.overlayRects.push({
+      clipId: c.id,
+      x: xC - maxW / 2 - px * 0.4,
+      y: yC - totalH / 2 - px * 0.28,
+      w: maxW + px * 0.8,
+      h: totalH + px * 0.56,
+    });
+    ctx.translate(xC, yC);
     if (anim.rotation !== 0) ctx.rotate((anim.rotation * Math.PI) / 180);
     if (kbScale !== 1) ctx.scale(kbScale, kbScale);
     if (c.bg && (anim2 !== "typewriter" || doneTyping)) {
@@ -1520,6 +1602,16 @@ export class Engine {
     const row = pos[0] as "t" | "m" | "b";
     if (row === "t") y = my + totalH / 2;
     if (row === "b") y = H - my - totalH / 2;
+    // free placement (drag on the preview / X-Y sliders) offsets the pos anchor
+    x += (c.x ?? 0) * (W / 2);
+    y += (c.y ?? 0) * (H / 2);
+    this.overlayRects.push({
+      clipId: c.id,
+      x: x - totalW / 2 - px * 0.4,
+      y: y - totalH / 2 - px * 0.18,
+      w: totalW + px * 0.8,
+      h: totalH + px * 0.36,
+    });
     ctx.translate(x, y);
     // background plate
     ctx.fillStyle = c.bg || "rgba(0,0,0,0.35)";

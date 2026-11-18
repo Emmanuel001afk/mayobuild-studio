@@ -13,7 +13,7 @@ import type {
   TextPos,
   TransitionKind,
 } from "../types";
-import { EFFECTS, TEXT_ANIMS } from "../types";
+import { EFFECTS, FONTS, TEXT_ANIMS } from "../types";
 
 interface Props {
   selection:
@@ -431,6 +431,25 @@ export function Inspector(p: Props) {
                 </button>
               ))}
             </div>
+            <div className="text-[10px] text-muted-foreground mt-2 mb-1">
+              Fine position <span className="opacity-70">(or drag the text on the preview)</span>
+            </div>
+            <div className="grid grid-cols-2 gap-1">
+              <Slider label="X offset" min={-1.5} max={1.5} step={0.01} value={over.x ?? 0} onChange={(v) => p.onPatchOverlay(trackId, { x: v })} />
+              <Slider label="Y offset" min={-1.5} max={1.5} step={0.01} value={over.y ?? 0} onChange={(v) => p.onPatchOverlay(trackId, { y: v })} />
+            </div>
+            <div className="text-xs mt-2 mb-1">Font</div>
+            <select
+              className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
+              value={over.font ?? "system"}
+              onChange={(e) => p.onPatchOverlay(trackId, { font: e.target.value })}
+            >
+              {FONTS.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
           </Section>
           <Section label="Animation">
             <select
@@ -570,6 +589,26 @@ export function Inspector(p: Props) {
               value={over.fx?.pitch ?? 0}
               onChange={(v) => p.onPatchOverlay(trackId, { fx: { ...over.fx, pitch: v } })}
             />
+            <div className="text-[10px] text-muted-foreground mt-1 mb-1">Voice presets</div>
+            <div className="flex flex-wrap gap-1">
+              {([
+                ["Normal", 0],
+                ["Slightly higher", 3],
+                ["Chipmunk", 7],
+                ["Lower", -5],
+                ["Deep", -10],
+              ] as [string, number][]).map(([label, semis]) => (
+                <button
+                  key={label}
+                  className={`text-[10px] border rounded px-1.5 py-0.5 ${
+                    (over.fx?.pitch ?? 0) === semis ? "border-cyan-400 bg-cyan-400/10" : "border-border hover:border-white/40"
+                  }`}
+                  onClick={() => p.onPatchOverlay(trackId, { fx: { ...over.fx, pitch: semis } })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <DenoiseRow media={overMedia} denoise={p.denoise} onDenoise={p.onDenoise} denoiseGate={p.denoiseGate} />
             <p className="text-[10px] text-muted-foreground leading-snug">
               Pitch-shifts clips up to 2 minutes (chipmuck / deep-voice). Reverb and echo apply to any length. Denoise
