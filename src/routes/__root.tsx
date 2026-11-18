@@ -4,6 +4,7 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useLocation,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
@@ -127,6 +128,25 @@ function RootShell({ children }: { children: ReactNode }) {
   );
 }
 
+function ShellCloudNotice() {
+  const { pathname } = useLocation();
+  // Home explains it in place; the editor is fully on-device.
+  if (pathname === "/" || pathname.startsWith("/mayocut")) return null;
+  return (
+    <div className="border-b border-amber-400/25 bg-amber-400/10 text-amber-200/90 px-3 py-1.5 text-[11px] sm:text-xs flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span>📴 Offline app:</span>
+      <span>
+        cloud areas (projects, builder, console, AI providers) run on the Mayobuild server — they need a
+        connection and the web app. Everything on this device (MayoCut editor, local models, downloads)
+        works fully offline.
+      </span>
+      <Link to="/" className="underline shrink-0">
+        Back to home
+      </Link>
+    </div>
+  );
+}
+
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
@@ -168,6 +188,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      {isShellApp() && <ShellCloudNotice />}
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
       <Toaster theme="dark" position="top-right" richColors />

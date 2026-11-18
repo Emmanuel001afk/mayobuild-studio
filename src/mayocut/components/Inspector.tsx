@@ -45,6 +45,8 @@ interface Props {
   denoise: { mediaId: string; progress: number } | null;
   onDenoise: () => void;
   denoiseGate: { ok: boolean; reason?: string };
+  onExtractAudio?: () => void;
+  extracting?: boolean;
 }
 
 function DenoiseRow({
@@ -57,6 +59,8 @@ function DenoiseRow({
   denoise: { mediaId: string; progress: number } | null;
   onDenoise: () => void;
   denoiseGate: { ok: boolean; reason?: string };
+  onExtractAudio?: () => void;
+  extracting?: boolean;
 }) {
   if (!media || media.kind !== "audio") return null;
   if (denoise && denoise.mediaId === media.id) {
@@ -337,6 +341,16 @@ export function Inspector(p: Props) {
               <input type="checkbox" className="accent-cyan-400" checked={main.muted} onChange={(e) => p.onPatchMain({ muted: e.target.checked })} />
               Mute original sound
             </label>
+            {mainMedia?.kind === "video" && p.onExtractAudio && (
+              <button
+                className={`mb-btn-ghost w-full text-xs h-7 mt-2 ${p.extracting ? "opacity-60" : ""}`}
+                onClick={p.extracting ? undefined : p.onExtractAudio}
+                disabled={!!p.extracting}
+                title="Move this clip's sound to the Audio track as an independent clip (like CapCut's Extract Audio). The video clip is then muted — delete it to keep only the audio."
+              >
+                {p.extracting ? "Extracting audio…" : "🎵 Extract audio to Audio track"}
+              </button>
+            )}
             <DenoiseRow media={mainMedia} denoise={p.denoise} onDenoise={p.onDenoise} denoiseGate={p.denoiseGate} />
           </Section>
 

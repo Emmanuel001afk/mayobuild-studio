@@ -116,6 +116,7 @@ export function Editor({
   const isMobile = useIsMobile();
   const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
+  const [extracting, setExtracting] = useState(false);
   const [recState, setRecState] = useState<{ active: boolean; secs: number; error?: string }>({ active: false, secs: 0 });
   const recRef = useRef<{ stop: () => void } | null>(null);
   const undoStack = useRef<string[]>([]);
@@ -514,6 +515,66 @@ export function Editor({
     }
   }
 
+  // ------------------------------------------------------------- Extract audio (CapCut-style)
+  // Pulls a video clip's sound out into an independent clip on the Audio
+  // track, then mutes the video clip — same workflow as CapCut's
+  // "Extract Audio" (the extracted copy is what you then trim/move/delete).
+  async function extractAudioSelected() {
+    const eng = engineRef.current;
+    const sel = selection;
+    if (!eng || !sel || sel.lane !== "main" || extracting) return;
+    const clip = eng.project.main.find((c) => c.id === sel.id);
+    if (!clip) return;
+    const media = eng.getMedia(clip.mediaId);
+    if (!media || media.kind !== "video") {
+      toast.info("Extract audio works on video clips");
+      return;
+    }
+    if (media.duration != null && media.duration > 15 * 60) {
+      toast.error("That source is longer than 15 min — too big to decode on-device");
+      return;
+    }
+    pushUndo();
+    setExtracting(true);
+    try {
+      const res = await eng.extractAudioWav(clip.mediaId, clip.in, clip.out);
+      if (!res) {
+        toast.error("No audio found in this clip");
+        return;
+      }
+      const wav = encodeWavMono(res.samples, res.sampleRate);
+      const id = uid("med");
+      const { wave, rms } = analyzeMono(res.samples);
+      const span = mainSpans(eng.project).find((x) => x.clip.id === sel.id);
+      const at = span ? span.start : Math.max(0, eng.t);
+      const item: MediaItem = {
+        id,
+        name: `Audio: ${media.name}`,
+        kind: "audio",
+        size: wav.size,
+        createdAt: Date.now(),
+        duration: res.duration,
+        wave,
+        rms,
+      };
+      await db.putMedia(item, wav);
+      const all = await db.listMedia();
+      setMedia(all);
+      eng.setMedia(all);
+      eng.attachUrl(id, URL.createObjectURL(wav));
+      undoable((e) => {
+        e.addAudioClip("t_audio", item, at);
+        const c = e.project.main.find((x) => x.id === sel.id);
+        if (c) c.muted = true;
+      });
+      toast.success("Audio extracted to the Audio track — the video clip is now muted");
+    } catch (err) {
+      toast.error(`Could not extract audio: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExtracting(false);
+    }
+  }
+
   // ------------------------------------------------------------- media import (in editor)
 
   async function onImport(files: FileList | null) {
@@ -585,7 +646,14 @@ export function Editor({
       return;
     }
     const clip = mutateRet((e) => e.addMainClip(item));
-    if (clip) setSelection({ lane: "main", id: clip.id });
+    if (clip) {
+      setSelection({ lane: "main", id: clip.id });
+      if (eng.project.main.length > 1) {
+        toast.success(
+          `Added after the last clip — ${eng.project.main.length} clips on the timeline (tap one in Tune to split, mute or move it)`
+        );
+      }
+    }
   }
 
   function addText() {
@@ -1375,6 +1443,8 @@ export function Editor({
             onImportLut={(f) => void onImportLut(f)}
             denoise={denoise}
             onDenoise={() => void denoiseSelected()}
+            onExtractAudio={() => void extractAudioSelected()}
+            extracting={extracting}
           /></div>
         </DrawerContent>
       </Drawer>
