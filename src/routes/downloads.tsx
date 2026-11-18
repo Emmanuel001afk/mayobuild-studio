@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 
 const REPO = "Emmanuel001afk/mayobuild-studio";
-const VERSION = "0.6.0";
+const VERSION = "0.6.1";
 const LATEST = `https://github.com/${REPO}/releases/latest/download`;
 const EXE_URL = `${LATEST}/mayobuild-studio-setup-${VERSION}.exe`;
 const APK_URL = `${LATEST}/mayobuild-studio-android-${VERSION}.apk`;
@@ -21,7 +21,7 @@ const APK_URL = `${LATEST}/mayobuild-studio-android-${VERSION}.apk`;
 export const Route = createFileRoute("/downloads")({
   head: () => ({
     meta: [
-      { title: "Download Mayobuild Studio (with MayoCut) · v0.6.0" },
+      { title: `Download Mayobuild Studio (with MayoCut) · v${VERSION}` },
       {
         name: "description",
         content:
