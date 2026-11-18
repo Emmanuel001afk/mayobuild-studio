@@ -67,6 +67,7 @@ export function Assist({
   onClose,
   selectedClip,
   onAddTts,
+  initialTab = "tools",
 }: {
   engine: Engine;
   project: Project;
