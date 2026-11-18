@@ -24,7 +24,9 @@ function assetBase(): string {
   return window.location.origin + "/";
 }
 
-async function getSegmenter(onProgress?: (message: string, pct?: number) => void): Promise<Segmenter> {
+async function getSegmenter(
+  onProgress?: (message: string, pct?: number) => void,
+): Promise<Segmenter> {
   if (!segmenterPromise) {
     segmenterPromise = (async () => {
       const { pipeline, env } = await import("@xenova/transformers");
@@ -82,14 +84,12 @@ export async function removeImageBackground(
     if (!ctx) throw new Error("Could not create an image-processing canvas");
     ctx.drawImage(bitmap, 0, 0);
     const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const rgba = applyAlphaMask(
-      frame.data,
-      mask.data,
-      canvas.width,
-      canvas.height,
-      mask.channels,
+    const rgba = applyAlphaMask(frame.data, mask.data, canvas.width, canvas.height, mask.channels);
+    ctx.putImageData(
+      new ImageData(new Uint8ClampedArray(rgba), canvas.width, canvas.height),
+      0,
+      0,
     );
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), canvas.width, canvas.height), 0, 0);
     const blob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((value) => {
         if (value) resolve(value);
