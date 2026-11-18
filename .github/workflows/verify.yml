@@ -17,6 +17,10 @@ on:
     branches: ["main"]
     paths:
       - "package.json"
+      - "package-lock.json"
+      - "src/mayocut/background.ts"
+      - "scripts/onnx-assets.mjs"
+      - ".github/workflows/verify.yml"
     tags:
       - "mc-*"
   workflow_dispatch:
