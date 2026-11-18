@@ -890,6 +890,7 @@ export function Editor({
         if (blob) engineRef.current?.attachUrl(item.id, URL.createObjectURL(blob));
       }
       const badVideos = items.filter((item) => item.kind === "video" && item.unplayable);
+      const badImages = items.filter((item) => item.kind === "image" && item.unplayable);
       toast.success(`Added ${items.length} media item${items.length === 1 ? "" : "s"}`);
       if (badVideos.length) {
         const hevcCount = badVideos.filter((item) => item.codecHint === "HEVC/H.265").length;
@@ -903,6 +904,12 @@ export function Editor({
               ? `Detected ${Array.from(new Set(knownCodecs)).join(", ")} in media that this device could not decode. Use MP4 with H.264 video and AAC audio for broad compatibility.`
               : "The browser could not decode these video files. Their container or codec may not be supported, or the files may be damaged.";
         toast.warning(detail, { duration: 12000 });
+      }
+      if (badImages.length) {
+        toast.warning(
+          `${badImages.length} image file(s) could not be decoded here. Convert them to PNG or JPEG and reimport.`,
+          { duration: 10000 },
+        );
       }
     } catch (error) {
       console.error("MayoCut media import failed:", error);
@@ -987,9 +994,15 @@ export function Editor({
   function addMediaToTimeline(item: MediaItem) {
     const eng = engineRef.current;
     if (!eng) return;
+    if (item.kind === "image" && item.unplayable) {
+      toast.error("This image format cannot be decoded on this device. Convert it to PNG or JPEG first.");
+      return;
+    }
     if (item.kind === "video" && item.unplayable) {
       toast.warning(
-        "This video could not be decoded for preview on this device. You can still try its audio track if the audio codec is supported.",
+        item.codecHint === "HEVC/H.265"
+          ? "HEVC/H.265 was detected. This device cannot decode it for preview; convert to MP4 with H.264 video and AAC audio."
+          : "This video could not be decoded for preview on this device. You can still try its audio track if the audio codec is supported.",
       );
     }
     if (item.kind === "audio") {
@@ -1600,10 +1613,10 @@ export function Editor({
           title={
             m.codecHint && m.codecHint !== "Unknown"
               ? `${m.codecHint} detected; this device could not decode the video. Audio may still be available if its codec is supported.`
-              : "This device could not decode the video. Audio may still be available if its codec is supported."
+              : "This device could not decode this media file. Convert it to a supported format before adding it to the timeline."
           }
         >
-          ⚠ won't play here
+          ⚠ unsupported
         </div>
       )}
       <button
