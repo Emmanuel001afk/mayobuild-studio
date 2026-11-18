@@ -350,7 +350,7 @@ export function Assist({
       );
       const output: MediaItem = {
         id: uid("med"),
-        name: `${selectedImage.name.replace(/\\.[^.]+$/, "")}-no-background.png`,
+        name: `${selectedImage.name.replace(/\.[^.]+$/, "")}-no-background.png`,
         kind: "image",
         size: result.blob.size,
         createdAt: Date.now(),
