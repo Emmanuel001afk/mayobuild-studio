@@ -20,10 +20,21 @@ on:
       - "scripts/smoke-*.mjs"
       - ".diag/**"
       - ".github/workflows/audit.yml"
+      - ".github/workflows/distribute.yml"
+      - ".github/workflows/verify.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "desktop/**"
+      - "android/**"
   pull_request:
     paths:
       - "src/mayocut/**"
       - ".diag/**"
+      - ".github/workflows/**"
+      - "package.json"
+      - "package-lock.json"
+      - "desktop/**"
+      - "android/**"
   workflow_dispatch:
 
 permissions:
