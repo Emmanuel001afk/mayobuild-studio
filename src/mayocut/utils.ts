@@ -250,6 +250,7 @@ export async function importFiles(
         height = img.naturalHeight;
         duration = 0;
         thumb = await makeThumb(kind, url);
+        playable = true;
       } else if (kind === "video") {
         const probe = await probeVideo(url);
         duration = probe.duration;
@@ -263,7 +264,10 @@ export async function importFiles(
       }
     } catch {
       duration = 0;
-      if (kind === "video") playable = false;
+      if (kind === "video" || kind === "image") {
+        playable = false;
+        if (kind === "video") itemCodecHint = await detectVideoCodecHint(f);
+      }
     }
     URL.revokeObjectURL(url);
     const item: MediaItem = {
@@ -277,10 +281,8 @@ export async function importFiles(
       height,
       thumb,
     };
-    if (kind === "video") {
-      item.unplayable = playable === false;
-      if (itemCodecHint) item.codecHint = itemCodecHint;
-    }
+    if (kind === "video" || kind === "image") item.unplayable = playable === false;
+    if (kind === "video" && itemCodecHint) item.codecHint = itemCodecHint;
     if (kind === "audio") {
       // waveform + true loudness, computed locally at import time
       const audio = await analyzeAudioFile(f);
