@@ -1860,7 +1860,13 @@ export function Editor({
             <p className="text-[11px] text-muted-foreground leading-relaxed">
               Open the assistant for project-aware editing help, voice tools, captions and AI workflows.
             </p>
-            <button className="mb-btn w-full h-8 text-xs" onClick={() => setAssistOpen(true)}>
+            <button
+              className="mb-btn w-full h-8 text-xs"
+              onClick={() => {
+                setAssistInitialTab("tools");
+                setAssistOpen(true);
+              }}
+            >
               <Sparkles className="h-3.5 w-3.5" /> Open AI Studio
             </button>
           </div>
