@@ -1645,7 +1645,13 @@ export function Editor({
             {workspaceTabs.find((tab) => tab.id === workspaceTab)?.label}
           </span>
           {workspaceTab === "ai" && (
-            <button className="mb-btn h-6 px-2 text-[10px]" onClick={() => { setAssistInitialTab("tools"); setAssistOpen(true); }}>
+            <button
+              className="mb-btn h-6 px-2 text-[10px]"
+              onClick={() => {
+                setAssistInitialTab("tools");
+                setAssistOpen(true);
+              }}
+            >
               Open
             </button>
           )}
@@ -2220,11 +2226,14 @@ export function Editor({
           className={`flex flex-col items-center justify-center gap-0.5 text-[10px] ${
             b.id === "assist" || sheet === b.id ? "text-cyan-300" : "text-muted-foreground"
           }`}
-          onClick={() =>
-            b.id === "assist"
-              ? (setAssistInitialTab("tools"), setAssistOpen(true))
-              : setSheet(sheet === b.id ? null : b.id)
-          }
+          onClick={() => {
+            if (b.id === "assist") {
+              setAssistInitialTab("tools");
+              setAssistOpen(true);
+            } else {
+              setSheet(sheet === b.id ? null : b.id);
+            }
+          }}
         >
           <b.icon className="h-5 w-5" />
           {b.label}
