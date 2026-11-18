@@ -101,6 +101,7 @@ function startServer() {
 }
 
 let localServer = null;
+let localPort = null;
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -118,7 +119,7 @@ function createWindow() {
     },
   });
 
-  void win.loadURL(`http://127.0.0.1:${localServer.port}/`).catch((e) => {
+  void win.loadURL(`http://127.0.0.1:${localPort}/`).catch((e) => {
     win.webContents
       .executeJavaScript(
         "document.body.innerHTML = '<pre style=color:red;padding:20px>Failed to load the app: ' + (window.__loadErr || 'unknown')"
@@ -160,7 +161,14 @@ if (process.env.MAYOBUILD_CDP) {
 
 app.whenReady().then(async () => {
   try {
-    ({ server: localServer } = await startServer());
+    const started = await startServer();
+    localServer = started.server;
+    localPort = started.port;
+    if (!Number.isInteger(localPort) || localPort < 1) {
+      throw new Error("Local shell server did not provide a valid port");
+    }
+    const indexPath = path.join(DIST, "index.html");
+    await fs.promises.access(indexPath, fs.constants.R_OK);
   } catch (e) {
     console.error("Could not start local server:", e);
     app.quit();
