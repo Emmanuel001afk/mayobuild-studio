@@ -184,6 +184,8 @@ export interface MainClip {
   keyframes?: Keyframe[];
   /** how the source fills the canvas: cover (crop), contain (letterbox), blur-fill */
   fit?: FrameFit;
+  flipX?: boolean;
+  flipY?: boolean;
   /** equaliser-style voice shaping, dB-ish -1..1 offsets */
   voice?: VoiceShape;
 }
@@ -430,6 +432,8 @@ export interface OverlayClip {
   x?: number; // -1..1 fraction of center
   y?: number;
   rot?: number; // degrees
+  flipX?: boolean;
+  flipY?: boolean;
   chroma?: boolean; // green-screen keying (video/image overlays)
   chromaTol?: number; // key tolerance 10..255 (default 90)
   blend?: BlendMode; // compositing mode for image/video overlays
