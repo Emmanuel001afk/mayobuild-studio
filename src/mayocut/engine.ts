@@ -2878,21 +2878,6 @@ export class Engine {
     if (!picked) throw new Error("This browser does not support video recording. Use Chrome/Edge.");
     await this.ensureAudio();
     if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
-    const aacConfig: AudioEncoderConfig = {
-      codec: "mp4a.40.2",
-      sampleRate: this.audioCtx.sampleRate,
-      numberOfChannels: 2,
-      bitrate: opts.audioBitsPerSecond,
-    };
-    if (!(await supportsAacEncoder(
-      aacConfig.sampleRate!,
-      aacConfig.numberOfChannels!,
-      aacConfig.bitrate!,
-    ))) {
-      throw new Error(
-        "This device cannot encode AAC audio for a standard MP4 file. Choose WebM or use a device with AAC WebCodecs encoding support.",
-      );
-    }
     const prevScale = this.exportScale;
     const prevCap = this.previewMaxSide;
     this.exportScale = opts.scale ?? 1;
@@ -2971,6 +2956,21 @@ export class Engine {
       throw new Error("H.264 encoding is not supported at this resolution here — use WebM.");
     await this.ensureAudio();
     if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
+    const aacConfig: AudioEncoderConfig = {
+      codec: "mp4a.40.2",
+      sampleRate: this.audioCtx.sampleRate,
+      numberOfChannels: 2,
+      bitrate: opts.audioBitsPerSecond,
+    };
+    if (!(await supportsAacEncoder(
+      aacConfig.sampleRate!,
+      aacConfig.numberOfChannels!,
+      aacConfig.bitrate!,
+    ))) {
+      throw new Error(
+        "This device cannot encode AAC audio for a standard MP4 file. Choose WebM or use a device with AAC WebCodecs encoding support.",
+      );
+    }
     const prevScale = this.exportScale;
     const prevCap = this.previewMaxSide;
     this.exportScale = opts.scale ?? 1;
