@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
-import * as ortModule from "onnxruntime-web";
+import * as ortModule from "onnxruntime-node";
 const ort = ortModule.default?.default ?? ortModule.default ?? ortModule;
-ort.env.wasm.numThreads = 1;
-ort.env.wasm.proxy = false;
-console.log("ONNX Runtime Web configured for single-threaded WASM.");
+console.log("Native ONNX Runtime configured for CPU inference.");
 
 const MODEL_REVISION = "1630fe9ce1a780c85c1f7ca1f919379ee1480e1a";
 const MODEL_URL = `https://huggingface.co/Xenova/modnet/resolve/${MODEL_REVISION}/onnx/model.onnx`;
@@ -58,6 +56,4 @@ console.log(
   `MODNET SMOKE PASS — output [${matte.dims.join("×")}], ${matte.data.length} values, full range ${min.toFixed(3)}–${max.toFixed(3)}`,
 );
 await session.release();
-// ONNX Runtime Web 1.14's Node worker teardown exits with code 7 after
-// successful inference; the browser runtime remains alive for the app.
-process.exit(0);
+
