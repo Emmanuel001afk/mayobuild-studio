@@ -173,6 +173,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const textOf = () => (document.body.textContent || "").replace(/\s+/g, " ").trim();
 
 await wait(4000);
+// The desktop tool shelf opens on Media; open Stickers before asserting the
+// sticker library contents, matching the actual user navigation.
+const stickersTool = [...document.querySelectorAll("button")].find(
+  (button) => button.textContent?.trim() === "Stickers",
+);
+if (stickersTool) {
+  stickersTool.click();
+  await wait(250);
+}
 const text = textOf();
 const html = document.body.innerHTML;
 
