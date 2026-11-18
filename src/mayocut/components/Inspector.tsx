@@ -544,6 +544,22 @@ export function Inspector(p: Props) {
               onDelete={(at) => p.onKeyframeDelete(clipId, at)}
               onSeek={p.onSeek}
             />
+            <div className="grid grid-cols-2 gap-1 mt-2">
+              <button
+                className={`h-7 border rounded text-[10px] ${main.flipX ? "border-cyan-400 bg-cyan-400/10" : "border-border hover:border-white/40"}`}
+                aria-pressed={main.flipX ?? false}
+                onClick={() => p.onPatchMain({ flipX: !main.flipX })}
+              >
+                ↔ Flip horizontal
+              </button>
+              <button
+                className={`h-7 border rounded text-[10px] ${main.flipY ? "border-cyan-400 bg-cyan-400/10" : "border-border hover:border-white/40"}`}
+                aria-pressed={main.flipY ?? false}
+                onClick={() => p.onPatchMain({ flipY: !main.flipY })}
+              >
+                ↕ Flip vertical
+              </button>
+            </div>
           </Section>
 
           <Section label="Filter">
@@ -1156,6 +1172,22 @@ export function Inspector(p: Props) {
               onDelete={(at) => p.onKeyframeDelete(clipId, at)}
               onSeek={p.onSeek}
             />
+            <div className="grid grid-cols-2 gap-1 mt-2">
+              <button
+                className={`h-7 border rounded text-[10px] ${over.flipX ? "border-cyan-400 bg-cyan-400/10" : "border-border hover:border-white/40"}`}
+                aria-pressed={over.flipX ?? false}
+                onClick={() => p.onPatchOverlay(trackId, { flipX: !over.flipX })}
+              >
+                ↔ Flip horizontal
+              </button>
+              <button
+                className={`h-7 border rounded text-[10px] ${over.flipY ? "border-cyan-400 bg-cyan-400/10" : "border-border hover:border-white/40"}`}
+                aria-pressed={over.flipY ?? false}
+                onClick={() => p.onPatchOverlay(trackId, { flipY: !over.flipY })}
+              >
+                ↕ Flip vertical
+              </button>
+            </div>
           </Section>
           <Section label="Framing & motion">
             <div className="grid grid-cols-3 gap-1">
