@@ -1612,7 +1612,10 @@ export function Editor({
   ] as const;
   const mediaPanel = (
     <div className="w-52 md:w-60 border-r border-border flex shrink-0 min-h-0">
-      <nav className="w-12 shrink-0 border-r border-border flex flex-col py-1 gap-0.5 overflow-y-auto" aria-label="Editing tools">
+      <nav
+        className="w-12 shrink-0 border-r border-border flex flex-col py-1 gap-0.5 overflow-y-auto"
+        aria-label="Editing tools"
+      >
         {workspaceTabs.map((tab) => (
           <button
             key={tab.id}
@@ -1628,7 +1631,9 @@ export function Editor({
       </nav>
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="px-2 py-2 border-b border-border flex items-center justify-between">
-          <span className="text-xs font-semibold">{workspaceTabs.find((tab) => tab.id === workspaceTab)?.label}</span>
+          <span className="text-xs font-semibold">
+            {workspaceTabs.find((tab) => tab.id === workspaceTab)?.label}
+          </span>
           {workspaceTab === "ai" && (
             <button className="mb-btn h-6 px-2 text-[10px]" onClick={() => setAssistOpen(true)}>
               Open
@@ -1643,7 +1648,11 @@ export function Editor({
                 onClick={() => fileRef.current?.click()}
                 disabled={importing}
               >
-                {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                {importing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Upload className="h-3.5 w-3.5" />
+                )}
                 {importing && importProgress
                   ? `Checking ${importProgress.done}/${importProgress.total}…`
                   : importing
@@ -1679,7 +1688,7 @@ export function Editor({
                 </button>
               </div>
             </div>
-            <div className={`flex-1 min-h-0 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}>
+            <div\n              className={`flex-1 min-h-0 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}\n            >
               {media.filter((item) => item.kind !== "audio").map(mediaCard)}
               {media.every((item) => item.kind === "audio") && (
                 <div className="col-span-2 text-[10px] text-muted-foreground text-center py-6">
@@ -1708,14 +1717,14 @@ export function Editor({
                 onClick={() => fileRef.current?.click()}
                 disabled={importing}
               >
-                {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                {importing ? (\n                  <Loader2 className="h-3.5 w-3.5 animate-spin" />\n                ) : (\n                  <Upload className="h-3.5 w-3.5" />\n                )}
                 {importing ? "Importing…" : "Import audio"}
               </button>
               <button
                 className={`mb-btn-ghost w-full h-8 text-xs ${recState.active ? "text-red-400 border-red-400/50" : ""}`}
                 onClick={startRecording}
               >
-                {recState.active ? <Square className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+                {recState.active ? (\n                  <Square className="h-3.5 w-3.5" />\n                ) : (\n                  <Mic className="h-3.5 w-3.5" />\n                )}
                 {recState.active ? `Stop recording · ${recState.secs}s` : "Record voice / music"}
               </button>
               <p className="text-[10px] text-muted-foreground">
@@ -1737,7 +1746,7 @@ export function Editor({
             <button className="mb-btn w-full h-8 text-xs" onClick={addText}>
               <Plus className="h-3.5 w-3.5" /> Add text at playhead
             </button>
-            <div className="text-[10px] text-muted-foreground">Text styles · adds a styled title to the timeline</div>
+            <div className="text-[10px] text-muted-foreground">\n              Text styles · adds a styled title to the timeline\n            </div>
             <div className="grid grid-cols-2 gap-1.5">
               {TEXT_PRESETS.map((preset) => (
                 <button
@@ -1787,7 +1796,7 @@ export function Editor({
             {EFFECTS.map((effect) => (
               <button
                 key={effect.id}
-                className={`w-full text-left px-2 py-2 rounded border text-[11px] ${selectedMainClip?.effect === effect.id ? "border-primary bg-primary/10" : "border-border hover:border-primary"}`}
+                className={`w-full text-left px-2 py-2 rounded border text-[11px] ${\n                  selectedMainClip?.effect === effect.id\n                    ? "border-primary bg-primary/10"\n                    : "border-border hover:border-primary"\n                }` }
                 onClick={() => applyMainEffect(effect.id)}
               >
                 {effect.name}
@@ -1800,7 +1809,7 @@ export function Editor({
             {FILTER_PRESETS.map((filter) => (
               <button
                 key={filter.id}
-                className={`min-h-10 border rounded px-2 py-1 text-[10px] text-left ${selectedMainClip?.filter === filter.id ? "border-primary bg-primary/10" : "border-border hover:border-primary"}`}
+                className={`min-h-10 border rounded px-2 py-1 text-[10px] text-left ${\n                  selectedMainClip?.filter === filter.id\n                    ? "border-primary bg-primary/10"\n                    : "border-border hover:border-primary"\n                }` }
                 onClick={() => applyMainFilter(filter.id)}
               >
                 {filter.name}
@@ -1816,7 +1825,7 @@ export function Editor({
             {TRANSITIONS.map((transition) => (
               <button
                 key={transition.id}
-                className={`w-full text-left px-2 py-2 rounded border text-[11px] ${selectedMainClip?.transitionIn === transition.id ? "border-primary bg-primary/10" : "border-border hover:border-primary"}`}
+                className={`w-full text-left px-2 py-2 rounded border text-[11px] ${\n                  selectedMainClip?.transitionIn === transition.id\n                    ? "border-primary bg-primary/10"\n                    : "border-border hover:border-primary"\n                }` }
                 onClick={() => applyMainTransition(transition.id)}
               >
                 {transition.name}
