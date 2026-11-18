@@ -84,7 +84,10 @@ export function Assist({
   const [beats, setBeats] = useState<number[] | null>(null);
   const [silenceMediaId, setSilenceMediaId] = useState("");
   const [silence, setSilence] = useState<{ lead: number; trail: number } | null>(null);
-  const [backgroundStatus, setBackgroundStatus] = useState<{ msg: string; pct?: number } | null>(null);
+  const [backgroundStatus, setBackgroundStatus] = useState<{
+    msg: string;
+    pct?: number;
+  } | null>(null);
   const audioMedia = media.filter((m) => m.kind === "audio" || m.kind === "video");
   const audioOnly = media.filter((m) => m.kind === "audio");
   const selectedImage = selectedClip?.mediaId
@@ -523,7 +526,9 @@ export function Assist({
                 desc="Portrait matting runs on this device. The model downloads once, is cached for offline use, and adds a transparent copy as a new overlay without changing your original."
               >
                 <div className="text-[10px] text-muted-foreground">
-                  {selectedImage ? `Selected: ${selectedImage.name}` : "Select an image clip on the timeline first."}
+                  {selectedImage
+                    ? `Selected: ${selectedImage.name}`
+                    : "Select an image clip on the timeline first."}
                 </div>
                 <ToolBtn
                   primary
