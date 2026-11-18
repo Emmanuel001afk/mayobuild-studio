@@ -13,6 +13,10 @@
 name: verify
 
 on:
+  push:
+    branches: ["main"]
+    paths:
+      - "package.json"
   workflow_dispatch:
   push:
     tags:
