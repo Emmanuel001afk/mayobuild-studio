@@ -452,13 +452,17 @@ export class Engine {
       rec.el.src = url;
     } else {
       const element = rec.el as HTMLVideoElement | HTMLAudioElement;
-      if (media.kind === 'video') {
+      if (media.kind === "video") {
         const video = element as HTMLVideoElement;
-        video.preload = 'metadata';
+        video.preload = "metadata";
         video.playsInline = true;
         // Attach listeners before src: cached object URLs may dispatch quickly.
-        video.addEventListener('loadedmetadata', () => {
-          if (Number.isFinite(video.duration) && video.duration > 0 && (!media.duration || media.duration <= 0)) {
+        video.addEventListener("loadedmetadata", () => {
+          if (
+            Number.isFinite(video.duration) &&
+            video.duration > 0 &&
+            (!media.duration || media.duration <= 0)
+          ) {
             media.duration = video.duration;
             this.bump();
           }
@@ -471,24 +475,28 @@ export class Engine {
           if (rec.videoLoadTimer) window.clearTimeout(rec.videoLoadTimer);
           rec.videoLoadTimer = undefined;
         };
-        video.addEventListener('loadeddata', clearWatchdog);
-        video.addEventListener('canplay', clearWatchdog);
-        video.addEventListener('error', () => {
+        video.addEventListener("loadeddata", clearWatchdog);
+        video.addEventListener("canplay", clearWatchdog);
+        video.addEventListener("error", () => {
           clearWatchdog();
-          this.markVideoBroken(mediaId, 'video decoder rejected this media file');
+          this.markVideoBroken(mediaId, "video decoder rejected this media file");
         });
       }
       element.src = url;
       element.load();
     }
     if (media.isGif && !rec.gif) {
-      void fetch(url).then((r) => r.blob()).then((blob) => decodeGifFrames(blob)).then((frames) => {
-        const rec2 = this.els.get(mediaId);
-        if (frames && rec2 && frames.frames.length > 0) {
-          rec2.gif = frames;
-          this.bump();
-        }
-      }).catch(() => undefined);
+      void fetch(url)
+        .then((r) => r.blob())
+        .then((blob) => decodeGifFrames(blob))
+        .then((frames) => {
+          const rec2 = this.els.get(mediaId);
+          if (frames && rec2 && frames.frames.length > 0) {
+            rec2.gif = frames;
+            this.bump();
+          }
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -499,15 +507,23 @@ export class Engine {
     const video = rec.el;
     if (video.readyState >= 2 || rec.videoLoadRequested) return;
     rec.videoLoadRequested = true;
-    video.preload = 'auto';
-    try { video.load(); } catch { /* browser rejected a redundant load */ }
+    video.preload = "auto";
+    try {
+      video.load();
+    } catch {
+      /* browser rejected a redundant load */
+    }
     rec.videoLoadTimer = window.setTimeout(() => {
       rec.videoLoadTimer = undefined;
       if (this.els.get(mediaId) === rec && !rec.videoBroken && video.readyState < 2) {
-        this.markVideoBroken(mediaId, 'no decoded frame after 12 s (unsupported codec or damaged file)');
+        this.markVideoBroken(
+          mediaId,
+          "no decoded frame after 12 s (unsupported codec or damaged file)",
+        );
       }
     }, 12000);
   }
+
   /** A video track can't be decoded here: switch its sound to a shadow
    *  <audio> element so the editor stays fully usable (audio, captions,
    *  export audio) while the preview shows a clear placeholder. */
