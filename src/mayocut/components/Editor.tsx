@@ -980,6 +980,11 @@ export function Editor({
   function addMediaToTimeline(item: MediaItem) {
     const eng = engineRef.current;
     if (!eng) return;
+    if (item.kind === "video" && item.unplayable) {
+      toast.warning(
+        "This video could not be decoded for preview on this device. You can still try its audio track if the audio codec is supported.",
+      );
+    }
     if (item.kind === "audio") {
       const clip = mutateRet((e) => e.addAudioClip("t_audio", item, Math.max(0, e.t)));
       if (clip) setSelection({ lane: "overlay", trackId: "t_audio", id: clip.id });
@@ -1585,7 +1590,7 @@ export function Editor({
       {m.unplayable && (
         <div
           className="absolute top-1 left-1 text-[9px] leading-tight text-amber-300 bg-black/75 border border-amber-400/30 rounded px-1 max-w-[70%] truncate"
-          title="Imported, but this device can't decode this video's codec (audio + captions still work)"
+          title="This device could not decode the video. Audio may still be available if its codec is supported."
         >
           ⚠ won't play here
         </div>
