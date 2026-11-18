@@ -47,10 +47,17 @@ const matte = output[session.outputNames[0]];
 assert.ok(matte, "MODNet did not return an output tensor");
 assert.ok(matte.dims.length >= 2 && matte.dims.every((d) => d > 0), "MODNet output dimensions are invalid");
 assert.ok(matte.data.length > 0, "MODNet returned an empty matte");
-const values = matte.data;
-const min = Math.min(...Array.from(values).slice(0, Math.min(values.length, 4096)));
-const max = Math.max(...Array.from(values).slice(0, Math.min(values.length, 4096)));
+let min = Infinity;
+let max = -Infinity;
+for (const value of matte.data) {
+  min = Math.min(min, value);
+  max = Math.max(max, value);
+}
+assert.ok(max - min > 0.1, "MODNet matte has no useful foreground/background variation");
 console.log(
-  `MODNET SMOKE PASS — output [${matte.dims.join("×")}], ${matte.data.length} values, sample range ${min.toFixed(3)}–${max.toFixed(3)}`,
+  `MODNET SMOKE PASS — output [${matte.dims.join("×")}], ${matte.data.length} values, full range ${min.toFixed(3)}–${max.toFixed(3)}`,
 );
 await session.release();
+// ONNX Runtime Web 1.14's Node worker teardown exits with code 7 after
+// successful inference; the browser runtime remains alive for the app.
+process.exit(0);
