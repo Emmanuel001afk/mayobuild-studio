@@ -266,10 +266,7 @@ export function Editor({
     const eng = engineRef.current;
     if (!eng) return;
     const deviceCap = devProfile.limits.previewMaxSide;
-    const requested =
-      previewQuality === "auto"
-        ? deviceCap
-        : Number(previewQuality);
+    const requested = previewQuality === "auto" ? deviceCap : Number(previewQuality);
     eng.previewMaxSide =
       previewQuality === "auto" || deviceCap <= 0
         ? requested
