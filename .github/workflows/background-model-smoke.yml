@@ -1,0 +1,26 @@
+name: background-model-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/mayocut/background.ts"
+      - "src/mayocut/background-math.ts"
+      - "scripts/smoke-background-model.mjs"
+      - ".github/workflows/background-model-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  modnet-inference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run real MODNet inference
+        run: node scripts/smoke-background-model.mjs
