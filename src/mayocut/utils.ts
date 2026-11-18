@@ -43,9 +43,6 @@ export function kindFromMime(mime: string, name: string): MediaKind | null {
       "wmv",
       "vob",
       "ogv",
-      "hevc",
-      "h265",
-      "h264",
     ].includes(ext)
   )
     return "video";
