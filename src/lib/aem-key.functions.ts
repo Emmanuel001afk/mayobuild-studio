@@ -18,7 +18,7 @@ function assertAdmin(email: string | null | undefined) {
 
 export const createHubKey = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator(
+  .validator(
     z.object({
       label: z.string().min(1).max(80),
       scope: z.enum(["owner", "restricted"]),
@@ -58,7 +58,7 @@ export const listHubKeys = createServerFn({ method: "POST" })
 
 export const revokeHubKey = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator(z.object({ keyId: z.string().uuid() }))
+  .validator(z.object({ keyId: z.string().uuid() }))
   .handler(async ({ data, context }) => {
     assertAdmin(context.user.email);
     const { error } = await getAdmin()

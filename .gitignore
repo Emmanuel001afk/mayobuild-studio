@@ -47,3 +47,6 @@ public/onnx/
 
 # local smoke-test scratch
 .smoke/
+
+# local render-verification harnesses (need happy-dom/fake-indexeddb, --no-save)
+.diag/

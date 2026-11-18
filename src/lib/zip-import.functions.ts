@@ -33,7 +33,7 @@ const Input = z.object({
 
 export const importZipProject = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => Input.parse(d))
+  .validator((d: unknown) => Input.parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
 

@@ -14,7 +14,7 @@ function isAdminEmail(email: string | null | undefined) {
 
 export const askAem = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator(
+  .validator(
     z.object({
       message: z.string().min(1).max(8000),
       deviceId: z.string().optional(),

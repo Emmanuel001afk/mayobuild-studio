@@ -18,7 +18,7 @@ const RouteInput = z.object({
 
 export const callRouter = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => RouteInput.parse(d))
+  .validator((d: unknown) => RouteInput.parse(d))
   .handler(async ({ data, context }) => {
     const started = Date.now();
     const { user, admin } = context;
