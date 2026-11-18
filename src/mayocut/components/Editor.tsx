@@ -1217,7 +1217,7 @@ export function Editor({
           blob = await eng.exportMP4(opts, (p) => setExportProgress(p));
         } catch (e) {
           console.warn("MP4 failed, falling back to WebM", e);
-          toast.warning("MP4 encoder unavailable at this size — exported WebM instead");
+          toast.warning("Standard MP4 (H.264 + AAC) is unavailable on this device — exported WebM instead.");
           blob = await eng.exportMedia(opts, (p) => setExportProgress(p));
         }
       } else {
