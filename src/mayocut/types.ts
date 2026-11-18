@@ -18,7 +18,7 @@ export interface MediaItem {
   isGif?: boolean; // animated sticker (frames decoded from the stored blob)
   gifFrames?: number;
   denoised?: boolean; // audio processed by the RNNoise denoise batch
-  unplayable?: boolean; // video track cannot be decoded on this device
+  unplayable?: boolean; // source media cannot be decoded on this device
   codecHint?: string; // best-effort codec identifier read from the container header
 }
 
