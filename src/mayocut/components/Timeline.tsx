@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, Lock, Music2, Type, Volume2, VolumeX, Wand2 } from "lucide-react";
+import { Eye, EyeOff, Lock, Magnet, Music2, Type, Volume2, VolumeX, Wand2 } from "lucide-react";
 import type { Keyframe, MediaItem, OverlayClip, Project } from "../types";
 import { mainClipDuration } from "../types";
 import { fmtTime } from "../utils";
@@ -50,6 +50,7 @@ export function Timeline(p: Props) {
   const [maxEnd, setMaxEnd] = useState(0);
   /** which clip is being dragged (for the "move to index" ghost) */
   const [dragId, setDragId] = useState<string | null>(null);
+  const [snapEnabled, setSnapEnabled] = useState(true);
 
   useEffect(() => {
     let m = dur;
@@ -59,6 +60,29 @@ export function Timeline(p: Props) {
   }, [project, dur]);
   const total = Math.max(20, maxEnd + 2);
   const width = total * pps;
+  const snapPoints = [
+    t,
+    ...beatsForSnap(project.beats ?? []),
+    ...spans.flatMap((s) => [s.start, s.end]),
+    ...project.tracks.flatMap((tr) => tr.clips.flatMap((clip) => [clip.start, clip.start + clip.duration])),
+  ];
+  const snapTime = (value: number) => {
+    if (!snapEnabled) return value;
+    const threshold = 8 / pps;
+    let best = value;
+    let distance = threshold;
+    for (const point of snapPoints) {
+      const delta = Math.abs(point - value);
+      if (delta <= distance) { best = point; distance = delta; }
+    }
+    return best;
+  };
+  const fitTimeline = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    p.onZoomChange?.(Math.max(16, Math.min(400, (el.clientWidth - 24) / total)));
+    el.scrollLeft = 0;
+  };
   const rowH = pps >= 90 ? 64 : 56;
 
   // keep playhead visible while playing
@@ -179,6 +203,14 @@ export function Timeline(p: Props) {
         >
           <Wand2 className="h-3 w-3" /> beats
         </button>
+        <button
+          className={`px-1.5 h-5 rounded flex items-center gap-1 ${snapEnabled ? "text-cyan-300 bg-cyan-400/10" : "text-muted-foreground hover:bg-slate-700/70"}`}
+          title={snapEnabled ? "Snapping on — align clips to the playhead, beats and clip edges" : "Snapping off"}
+          aria-pressed={snapEnabled}
+          onClick={() => setSnapEnabled((v) => !v)}
+        >
+          <Magnet className="h-3 w-3" /> snap
+        </button>
         {beats.length > 0 && (
           <button
             className="px-1.5 h-5 rounded hover:bg-slate-700/70 text-muted-foreground hover:text-red-300"
@@ -193,6 +225,13 @@ export function Timeline(p: Props) {
         </span>
         {p.onZoomChange && (
           <>
+            <button
+              className="px-1.5 h-5 rounded hover:bg-slate-700/70 text-muted-foreground"
+              onClick={fitTimeline}
+              title="Fit the complete timeline in view"
+            >
+              fit
+            </button>
             <button
               className="w-5 h-5 rounded hover:bg-slate-700/70 text-muted-foreground"
               onClick={() => p.onZoomChange?.(Math.max(16, pps - 12))}
@@ -477,6 +516,8 @@ export function Timeline(p: Props) {
                     wave={c.kind === "audio" ? mediaById(c.mediaId)?.wave : undefined}
                     denoised={c.kind === "audio" ? mediaById(c.mediaId)?.denoised : undefined}
                     lanes={project.tracks.map((x) => ({ id: x.id, name: x.name }))}
+                    snapEnabled={snapEnabled}
+                    snapPoints={snapPoints.filter((point) => point < c.start - 0.001 || point > c.start + c.duration + 0.001)}
                     onSelect={() => p.onSelect({ lane: "overlay", trackId: tr.id, id: c.id })}
                     onPatch={(patch) => p.onOverlayPatch(tr.id, c.id, patch)}
                     onMoveTrack={(tid) => p.onOverlayMoveTrack?.(c.id, tid)}
@@ -554,6 +595,8 @@ function OverlayClipBox({
   wave,
   denoised,
   lanes,
+  snapEnabled,
+  snapPoints,
   onSelect,
   onPatch,
   onMoveTrack,
@@ -566,6 +609,8 @@ function OverlayClipBox({
   wave?: number[];
   denoised?: boolean;
   lanes: { id: string; name: string }[];
+  snapEnabled: boolean;
+  snapPoints: number[];
   onSelect: () => void;
   onPatch: (patch: Partial<OverlayClip>) => void;
   onMoveTrack?: (trackId: string) => void;
@@ -591,6 +636,17 @@ function OverlayClipBox({
       const dx = ev.clientX - startX;
       if (Math.abs(dx) > 2) moved = true;
       const d = dx / pps;
+      const snap = (value: number) => {
+        if (!snapEnabled) return value;
+        const limit = 8 / pps;
+        let best = value;
+        let distance = limit;
+        for (const point of snapPoints) {
+          const delta = Math.abs(point - value);
+          if (delta <= distance) { best = point; distance = delta; }
+        }
+        return best;
+      };
       // vertical drag between lanes (only while moving, once per gesture)
       if (mode === "move" && !laneDone && onMoveTrack && Math.abs(ev.clientY - startY) > 30) {
         laneDone = true;
@@ -609,14 +665,20 @@ function OverlayClipBox({
         return;
       }
       if (mode === "move") {
-        const ns = Math.max(0, Math.min(total - base.duration, base.start + d));
-        onPatch({ start: ns });
+        const raw = Math.max(0, Math.min(total - base.duration, base.start + d));
+        const snappedStart = snap(raw);
+        const snappedEnd = snap(raw + base.duration) - base.duration;
+        const ns = Math.abs(snappedStart - raw) <= Math.abs(snappedEnd - raw) ? snappedStart : snappedEnd;
+        onPatch({ start: Math.max(0, Math.min(total - base.duration, ns)) });
       } else if (mode === "in") {
-        const nd = Math.max(0.2, base.duration - d);
-        const ns = Math.max(0, Math.min(total - nd, base.start + d));
+        const rawStart = Math.max(0, Math.min(base.start + base.duration - 0.2, base.start + d));
+        const ns = Math.max(0, Math.min(base.start + base.duration - 0.2, snap(rawStart)));
+        const nd = base.duration - (ns - base.start);
         onPatch({ start: ns, duration: nd });
       } else {
-        onPatch({ duration: Math.max(0.2, Math.min(total - base.start, base.duration + d)) });
+        const rawEnd = Math.max(base.start + 0.2, Math.min(total, base.start + base.duration + d));
+        const end = Math.max(base.start + 0.2, Math.min(total, snap(rawEnd)));
+        onPatch({ duration: end - base.start });
       }
     };
     const onUp = () => {
@@ -694,6 +756,11 @@ function OverlayClipBox({
       />
     </div>
   );
+}
+
+/** Filter and de-duplicate finite timeline snap positions. */
+function beatsForSnap(values: number[]): number[] {
+  return values.filter((value) => Number.isFinite(value) && value >= 0);
 }
 
 /** Current lane id for a clip (used to pick a neighbour lane on drag). */
