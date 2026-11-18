@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import * as ortModule from "onnxruntime-web";
-const ort = ortModule.default ?? ortModule;
+const ort = ortModule.default?.default ?? ortModule.default ?? ortModule;
+console.log("ONNX Runtime exports:", Object.keys(ortModule), "runtime:", Object.keys(ort));
 
 const MODEL_REVISION = "1630fe9ce1a780c85c1f7ca1f919379ee1480e1a";
 const MODEL_URL = `https://huggingface.co/Xenova/modnet/resolve/${MODEL_REVISION}/onnx/model.onnx`;
