@@ -45,6 +45,31 @@ function probeDuration(el: HTMLVideoElement | HTMLAudioElement): Promise<number>
   });
 }
 
+/**
+ * Can this device actually DECODE and play the video (not just read its
+ * metadata)? Metadata loads fine for many formats the WebView can't render
+ * (e.g. HEVC camera clips) — checking `loadeddata` (a real decoded frame) is
+ * what separates "plays" from "reads a header but stays a placeholder".
+ */
+function probePlayable(el: HTMLVideoElement, timeoutMs = 4500): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(to);
+      resolve(v);
+    };
+    const to = setTimeout(() => finish(false), timeoutMs);
+    if (el.readyState >= 2) {
+      finish(true);
+      return;
+    }
+    el.onloadeddata = () => finish(true);
+    el.onerror = () => finish(false);
+  });
+}
+
 export async function makeThumb(
   kind: MediaKind,
   url: string,
@@ -118,6 +143,7 @@ export async function importFiles(
     let duration: number | undefined;
     let width: number | undefined;
     let height: number | undefined;
+    let playable: boolean | undefined; // video: decodable on THIS device
     try {
       if (kind === "image") {
         const img = await new Promise<HTMLImageElement>((res, rej) => {
@@ -131,19 +157,21 @@ export async function importFiles(
         duration = 0;
       } else {
         const el = document.createElement(kind === "video" ? "video" : "audio") as HTMLVideoElement;
-        el.preload = "metadata";
+        el.preload = "auto";
         if (kind === "video") el.muted = true;
         el.src = url;
         duration = await probeDuration(el);
         if (kind === "video") {
           width = el.videoWidth;
           height = el.videoHeight;
+          playable = await probePlayable(el);
         }
       }
     } catch {
       duration = 0;
+      if (kind === "video") playable = false;
     }
-    const thumb = await makeThumb(kind, url);
+    const thumb = kind === "video" && playable === false ? undefined : await makeThumb(kind, url);
     URL.revokeObjectURL(url);
     const item: MediaItem = {
       id,
@@ -156,6 +184,7 @@ export async function importFiles(
       height,
       thumb,
     };
+    if (kind === "video") item.unplayable = playable === false;
     if (kind === "audio") {
       // waveform + true loudness, computed locally at import time
       const audio = await analyzeAudioFile(f);

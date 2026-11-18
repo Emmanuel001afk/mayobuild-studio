@@ -657,7 +657,13 @@ export function Editor({
       const blob = await db.getBlob(item.id);
       if (blob) engineRef.current?.attachUrl(item.id, URL.createObjectURL(blob));
     }
+    const bad = items.filter((i) => i.unplayable);
     toast.success(`${items.length} item(s) added`);
+    if (bad.length)
+      toast.warning(
+        `${bad.length} video(s) can't be played on this device (codec — often HEVC camera clips). Their audio + captions still work in the editor.`,
+        { duration: 8000 },
+      );
   }
 
   // ------------------------------------------------------------- media delete
@@ -961,6 +967,27 @@ export function Editor({
     };
   })();
 
+  // Video at the playhead that this device can't decode (runtime-confirmed
+  // or flagged at import) — explain it instead of a mysterious placeholder.
+  const brokenAtPlayhead = (() => {
+    const eng = engineRef.current;
+    if (!eng) return null;
+    for (const s of spans) {
+      if (t >= s.start && t < s.end) {
+        const m = eng.getMedia(s.clip.mediaId);
+        if (m?.kind === "video" && (m.unplayable || eng.isVideoBroken(m.id))) return m.name;
+        return null;
+      }
+    }
+    return null;
+  })();
+
+  // main clips that will export as audio-over-black on this device
+  const unplayableMainCount = (project?.main ?? []).filter((c) => {
+    const m = media.find((x) => x.id === c.mediaId);
+    return m?.kind === "video" && (m.unplayable || engineRef.current?.isVideoBroken(m.id));
+  }).length;
+
   // ------------------------------------------------------------- render
 
   if (loadError) {
@@ -1080,6 +1107,14 @@ export function Editor({
         </div>
         <div className="px-1 py-0.5 text-[10px] truncate">{m.name}</div>
       </button>
+      {m.unplayable && (
+        <div
+          className="absolute top-1 left-1 text-[9px] leading-tight text-amber-300 bg-black/75 border border-amber-400/30 rounded px-1 max-w-[70%] truncate"
+          title="Imported, but this device can't decode this video's codec (audio + captions still work)"
+        >
+          ⚠ won't play here
+        </div>
+      )}
       <button
         className="absolute top-1 right-1 h-5 w-5 rounded-full bg-black/70 border border-white/25 text-[11px] leading-none text-white/75 hover:text-white hover:border-red-400 flex items-center justify-center"
         title={`Delete ${m.name} from the library`}
@@ -1188,6 +1223,13 @@ export function Editor({
                 onDragEnd={onOverlayDragEnd}
               />
             </div>
+            {brokenAtPlayhead && (
+              <div className="absolute bottom-2 inset-x-2 sm:inset-x-8 bg-amber-400/15 border border-amber-400/40 text-amber-200 rounded-lg px-3 py-2 text-[11px] sm:text-xs leading-snug pointer-events-none">
+                ⚠ “{brokenAtPlayhead}” can't be decoded on this device (usually an HEVC camera clip).
+                Its <b>audio + captions still work</b> — for the picture, convert it to H.264 (any video
+                converter / compressor app) and import it again.
+              </div>
+            )}
             {spans.length === 0 && project.tracks.every((tr) => tr.clips.length === 0) && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="text-center text-muted-foreground text-xs sm:text-sm max-w-[92%] bg-black/60 rounded-lg px-4 py-3">
@@ -1792,6 +1834,12 @@ export function Editor({
               <button className="mb-btn w-full mt-5" onClick={() => void runExport()}>
                 <Loader2 className={`h-4 w-4 ${dur === 0 ? "animate-spin" : "opacity-0"}`} /> Start export
               </button>
+            )}
+            {unplayableMainCount > 0 && (
+              <p className="text-[11px] text-amber-300/90 -mt-1">
+                ⚠ {unplayableMainCount} clip(s) can't be decoded on this device — they will be exported as audio over
+                a black screen.
+              </p>
             )}
             <p className="text-[11px] text-muted-foreground mt-3">
               MP4 (H.264 + Opus) is encoded by the WebCodecs engine — Chrome, Edge and the desktop/Android builds. The

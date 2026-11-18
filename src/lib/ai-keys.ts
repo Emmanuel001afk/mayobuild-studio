@@ -18,6 +18,8 @@ export interface AiProvider {
   url: string;
   model: string;
   hint: string;
+  /** Cohere v2: different response envelope ({ message: { content: [{ text }] } }). */
+  isV2?: boolean;
 }
 
 export const AI_PROVIDERS: AiProvider[] = [
@@ -76,6 +78,21 @@ export const AI_PROVIDERS: AiProvider[] = [
     url: "https://router.huggingface.co/v1/chat/completions",
     model: "meta-llama/Llama-3.3-70B-Instruct",
     hint: "huggingface.co → Settings → Access tokens",
+  },
+  {
+    id: "cohere",
+    name: "Cohere (free tier)",
+    url: "https://api.cohere.com/v2/chat",
+    model: "command-r-08-2024",
+    hint: "dashboard.cohere.com → Keys (free: 10 req/min)",
+    isV2: true,
+  },
+  {
+    id: "nvidia",
+    name: "NVIDIA NIM (free)",
+    url: "https://integrate.api.nvidia.com/v1/chat/completions",
+    model: "meta/llama-3.1-70b-instruct",
+    hint: "build.nvidia.com → Get API Key (free credits)",
   },
 ];
 
@@ -149,8 +166,17 @@ async function callProvider(
       const body = await res.text().catch(() => "");
       throw new Error(`HTTP ${res.status}${body ? ` — ${body.slice(0, 140)}` : ""}`);
     }
-    const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const text = json.choices?.[0]?.message?.content?.trim();
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+      message?: { content?: { type?: string; text?: string }[] };
+    };
+    let text: string | undefined;
+    if (p.isV2) {
+      const parts = json.message?.content ?? [];
+      text = parts.map((x) => x.text ?? "").join("").trim();
+    } else {
+      text = json.choices?.[0]?.message?.content?.trim();
+    }
     if (!text) throw new Error("empty response");
     return text;
   } finally {
