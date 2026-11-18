@@ -320,6 +320,32 @@ async function pickAvcCodec(
   return null;
 }
 
+async function supportsAacEncoder(
+  sampleRate: number,
+  numberOfChannels: number,
+  bitrate: number,
+): Promise<boolean> {
+  const Ctor = (
+    window as unknown as {
+      AudioEncoder?: {
+        isConfigSupported: (config: AudioEncoderConfig) => Promise<{ supported: boolean }>;
+      };
+    }
+  ).AudioEncoder;
+  if (!Ctor?.isConfigSupported) return false;
+  try {
+    const result = await Ctor.isConfigSupported({
+      codec: "mp4a.40.2",
+      sampleRate,
+      numberOfChannels,
+      bitrate,
+    });
+    return result.supported;
+  } catch {
+    return false;
+  }
+}
+
 export class Engine {
   project: Project;
   media: Map<string, MediaItem> = new Map();
@@ -2852,6 +2878,21 @@ export class Engine {
     if (!picked) throw new Error("This browser does not support video recording. Use Chrome/Edge.");
     await this.ensureAudio();
     if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
+    const aacConfig: AudioEncoderConfig = {
+      codec: "mp4a.40.2",
+      sampleRate: this.audioCtx.sampleRate,
+      numberOfChannels: 2,
+      bitrate: opts.audioBitsPerSecond,
+    };
+    if (!(await supportsAacEncoder(
+      aacConfig.sampleRate!,
+      aacConfig.numberOfChannels!,
+      aacConfig.bitrate!,
+    ))) {
+      throw new Error(
+        "This device cannot encode AAC audio for a standard MP4 file. Choose WebM or use a device with AAC WebCodecs encoding support.",
+      );
+    }
     const prevScale = this.exportScale;
     const prevCap = this.previewMaxSide;
     this.exportScale = opts.scale ?? 1;
@@ -2950,7 +2991,7 @@ export class Engine {
       const muxer = new Muxer({
         target,
         video: { codec: "avc", width: W, height: H, frameRate: opts.fps },
-        audio: { codec: "opus", numberOfChannels: 2, sampleRate: this.audioCtx.sampleRate },
+        audio: { codec: "aac", numberOfChannels: 2, sampleRate: this.audioCtx.sampleRate },
         fastStart: "in-memory",
       });
 
@@ -2991,12 +3032,7 @@ export class Engine {
           encError = e;
         },
       });
-      await audioEncoder.configure({
-        codec: "opus",
-        sampleRate: this.audioCtx.sampleRate,
-        numberOfChannels: 2,
-        bitrate: opts.audioBitsPerSecond,
-      });
+      await audioEncoder.configure(aacConfig);
       // Bridge: exportDest's MediaStream → ScriptProcessor → AudioData → AudioEncoder.
       // (WebAudio nodes cannot be connected directly to a WebCodecs encoder.)
       const streamSource = this.audioCtx.createMediaStreamSource(this.exportDest.stream);
