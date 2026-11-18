@@ -58,6 +58,7 @@ jobs:
           npx esbuild src/mayocut/luts.ts    --bundle --format=esm --outfile=.diag/b-luts.mjs
           npx esbuild src/mayocut/templates.ts --bundle --format=esm --outfile=.diag/b-templates.mjs
           npx esbuild src/mayocut/background-math.ts --bundle --format=esm --outfile=.diag/b-background-math.mjs
+          npx esbuild src/mayocut/utils.ts --bundle --format=esm --outfile=.diag/b-utils.mjs
 
       - name: Logic audit
         run: node .diag/audit.mjs
