@@ -151,6 +151,8 @@ export function Editor({
   const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [importing, setImporting] = useState(false);
   const [recState, setRecState] = useState<{ active: boolean; secs: number; error?: string }>({
     active: false,
     secs: 0,
@@ -851,29 +853,50 @@ export function Editor({
   // ------------------------------------------------------------- media import (in editor)
 
   async function onImport(files: FileList | null) {
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0 || importing) return;
     const accepted = Array.from(files).filter((f) => kindFromMime(f.type, f.name));
     if (!accepted.length) {
       toast.error("No supported media files");
       return;
     }
-    const items = await importFiles(accepted);
-    for (let i = 0; i < items.length; i++) await db.putMedia(items[i], accepted[i]);
-    const all = await db.listMedia();
-    setMedia(all);
-    engineRef.current?.setMedia(all);
-    // resolve urls for the new items so they play instantly
-    for (const item of items) {
-      const blob = await db.getBlob(item.id);
-      if (blob) engineRef.current?.attachUrl(item.id, URL.createObjectURL(blob));
-    }
-    const bad = items.filter((i) => i.unplayable);
-    toast.success(`${items.length} item(s) added`);
-    if (bad.length)
-      toast.warning(
-        `${bad.length} video(s) can't be played on this device (codec — often HEVC camera clips). Their audio + captions still work in the editor.`,
-        { duration: 8000 },
+    setImporting(true);
+    setImportProgress({ done: 0, total: accepted.length });
+    try {
+      const items = await importFiles(accepted, (done, total) => {
+        setImportProgress({ done, total });
+      });
+      if (items.length === 0) {
+        toast.error("No media could be read from those files");
+        return;
+      }
+      await Promise.all(items.map((item, index) => db.putMedia(item, accepted[index])));
+      const all = await db.listMedia();
+      setMedia(all);
+      engineRef.current?.setMedia(all);
+      // Attach each source only after its metadata/frame probe has completed.
+      for (const item of items) {
+        const blob = await db.getBlob(item.id);
+        if (blob) engineRef.current?.attachUrl(item.id, URL.createObjectURL(blob));
+      }
+      const badVideos = items.filter((item) => item.kind === "video" && item.unplayable);
+      toast.success(`Added ${items.length} media item${items.length === 1 ? "" : "s"}`);
+      if (badVideos.length) {
+        toast.warning(
+          `${badVideos.length} video file(s) could not be decoded here. MP4/MOV files can still contain HEVC/H.265; convert those clips to MP4 with H.264 video and AAC audio for broad compatibility.`,
+          { duration: 10000 },
+        );
+      }
+    } catch (error) {
+      console.error("MayoCut media import failed:", error);
+      toast.error(
+        error instanceof Error
+          ? `Media import failed: ${error.message}`
+          : "Media import failed — check available device storage",
       );
+    } finally {
+      setImporting(false);
+      setImportProgress(null);
+    }
   }
 
   // ------------------------------------------------------------- media delete
