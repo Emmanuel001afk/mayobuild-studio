@@ -99,7 +99,8 @@ export function scoreDevice(env: DeviceEnv): DeviceProfile {
 
   score += env.webgl === 2 ? 1 : env.webgl === 1 ? 0.5 : 0;
 
-  if (env.platform === "windows" || env.platform === "macos" || env.platform === "linux") score += 0.5;
+  if (env.platform === "windows" || env.platform === "macos" || env.platform === "linux")
+    score += 0.5;
   if (env.crossOriginIsolated) score += 0.5;
 
   const tier: DeviceTier = score >= 6 ? "high" : score >= 3.5 ? "medium" : "low";
@@ -108,8 +109,18 @@ export function scoreDevice(env: DeviceEnv): DeviceProfile {
     tier === "high"
       ? { previewMaxSide: 1920, exportMaxScale: 2, maxExportFps: 60, features: featureGates(tier) }
       : tier === "medium"
-        ? { previewMaxSide: 1280, exportMaxScale: 2, maxExportFps: 30, features: featureGates(tier) }
-        : { previewMaxSide: 960, exportMaxScale: 1, maxExportFps: 30, features: featureGates(tier) };
+        ? {
+            previewMaxSide: 1280,
+            exportMaxScale: 2,
+            maxExportFps: 30,
+            features: featureGates(tier),
+          }
+        : {
+            previewMaxSide: 960,
+            exportMaxScale: 1,
+            maxExportFps: 30,
+            features: featureGates(tier),
+          };
 
   return {
     tier,
@@ -162,7 +173,8 @@ export function getFeaturePrefs(): FeaturePrefs {
 
 export function setFeaturePref(f: HeavyFeature, on: boolean): FeaturePrefs {
   const prefs = readPrefs();
-  if (on) delete prefs[f]; // back to "follow the device"
+  if (on)
+    delete prefs[f]; // back to "follow the device"
   else prefs[f] = false;
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -179,7 +191,8 @@ export function setFeaturePref(f: HeavyFeature, on: boolean): FeaturePrefs {
 export function gateFor(p: DeviceProfile, f: HeavyFeature, prefs: FeaturePrefs): FeatureGate {
   const deviceGate = p.limits.features[f];
   if (!deviceGate.ok) return deviceGate;
-  if (prefs[f] === false) return { ok: false, reason: "You switched this off in Assist → Local tools." };
+  if (prefs[f] === false)
+    return { ok: false, reason: "You switched this off in Assist → Local tools." };
   return deviceGate;
 }
 
@@ -257,7 +270,8 @@ export function detectDevice(): DeviceProfile {
     cores: Math.max(1, nav?.hardwareConcurrency || 2),
     memoryGB,
     webgl: gl.webgl,
-    crossOriginIsolated: (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true,
+    crossOriginIsolated:
+      (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true,
     platform: detectPlatform(nav?.userAgent ?? ""),
     gpu: gl.gpu,
   });

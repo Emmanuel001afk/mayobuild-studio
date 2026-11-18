@@ -14,32 +14,86 @@ assistive* — when AI is unavailable the platform is still 100% usable.
 | Android — `.apk` | Capacitor build (`android/`) of the same static shell. Side-loadable APK. |
 | Downloads page — `/downloads` | Central page hosting the EXE/APK links (GitHub Releases) + PWA install help. |
 
-## Feature set (v0.1)
+## Feature set (v0.7)
 
-- **Multi-track timeline** — main video track + Text / Overlay / Audio tracks
-- **Clips** — trim (drag edges), split at playhead (`S` / double-click), duplicate, delete, reorder, replace media
-- **Speed** — 0.25×–4× per clip (slow motion / fast forward)
-- **Filters** — 10 presets (Vivid, Warm, Cinema, Noir, …) + per-clip Brightness / Contrast / Saturation / Hue
-- **Transitions** — crossfade & dip-to-black between clips, with duration control
-- **Text** — size, color, background pill, bold, 9-position grid, fade/slide-up animation
-- **Image overlays (stickers)** — scale, position, rotation
-- **Audio** — music/SFX clips with volume, fade edges; per-clip mute for original sound
-- **Canvas formats** — 9:16, 1:1, 4:5, 16:9
+**Timeline & clips**
+- **Multi-track timeline** — main video lane + Text / Overlay / Audio lanes, per-lane
+  hide, and mute/solo on the audio lane
+- **Clips** — trim by dragging either edge (fixed: the right handle used to collapse a
+  clip to 0.1 s), split at playhead (`S` / double-click), duplicate (`Ctrl+D`), delete,
+  **drag a clip body to re-order**, replace media
+- **Speed** — 0.1×–8× ladder (slow motion → hyper-lapse), a linear **speed ramp**,
+  and a **drawable multi-point speed curve** (add/remove/drag points, with
+  "slow in/out" and "bullet time" presets). The timeline clip draws the curve
+  and the engine integrates it in closed form, so timing is exact.
+- **Freeze frame** — `F` or the ❄ button holds the exact frame at the playhead
+- **Reverse** — frame-stepped playback (audio muted, as CapCut does)
+
+**Look**
+- **Filters** — 19 presets (Vivid, Warm, Cinema, Noir, Teal & Orange, Retro Film, …)
+- **Adjust** — Brightness, Contrast, Saturation, Hue, **Temperature, Tint, Fade,
+  Sharpen, Vignette and Split-tone** (the last five are a real pixel pass, so they
+  also work on phones without CSS `filter` support for those effects)
+- **LUTs** — 5 analytic built-in looks + `.cube` import
+- **Framing** — cover / contain (letterbox) / blur-fill per clip, with a project
+  background colour behind letterboxing
+- **Color match** — copy one clip's grade to every other clip in one tap
+
+**Transitions** (12) — crossfade, dip to black, dip to white, slide ←→↑↓,
+wipe ←→↑↓, zoom punch, blur dissolve; duration control and “apply to every cut”.
+
+**Text** — 10 cross-platform font styles **+ imported .ttf/.otf fonts** (stored
+on-device), size, colour, pill background with adjustable radius, **outline,
+shadow strength, letter spacing, line height, alignment, italic/underline/
+uppercase, opacity**, 9-position grid + free drag on the preview, 12 animations
+(fade, slide-up/left, typewriter, karaoke, bounce, Ken Burns, neon, zoom-in,
+rise, wipe-in) and **10 one-tap text looks**.
+
+**Motion** — 15 built-in effects (zoom pulse, heartbeat, shake, spin, glitch,
+flash-in, blur-in, VHS, zoom-out, pan left/right, tilt-up, Ken Burns, colour
+pulse, sway) plus **keyframes on x/y/scale/rotation/opacity for every clip**.
+
+**Audio**
+- Layered music/SFX/voiceover with volume, fade in/out, per-clip mute
+- **Reverb, echo and pitch** FX; named voice presets
+- **Voice shaping** — bass / mid / treble EQ per clip + a one-tap "voice enhance"
+- **Auto-ducking** — mark a clip (e.g. the voiceover) and every other audio clip
+  dips under it, with a project-wide strength control
+- **Mute / solo** per audio track, master gain
+- RNNoise denoise, mic recording, local TTS, **extract audio** from video
+- Beat detection → **beat markers drawn on the ruler** → split at every beat
+
+**Export**
+- **MP4 (H.264 + Opus via WebCodecs)**, **WebM (VP9)**, **animated GIF**,
+  **PNG still**, **WAV (full stereo mix)**
+- 24/30/60 fps, 1080p / 4K, quality ladder; per-device caps with an explanation
+- Export settings are remembered per project
+- Finished exports are kept in an on-device library with **inline preview**
+
+**Platform**
+- **8 canvas formats** — 9:16, 4:5, 1:1, 16:9, 3:4, 4:3, 2:3, 21:9
 - **Projects** — auto-saved to IndexedDB, thumbnails, rename/duplicate/delete
 - **Media library** — videos/photos/music stored as blobs on-device
-- **Templates** — 4 built-in (Slideshow, Cinematic Intro, Beat Cut, Lyric Box) built from *your* media + “Save as template” for your own reusable templates (media slots re-match by file name)
-- **Export** — real-time canvas+WebAudio render to WebM (VP9/Opus), saved to the device + kept in the on-device export library
-- **Undo** — 60-step snapshot undo (`Ctrl+Z`)
+- **Templates** — 4 built-in + "Save as template" + shareable `.json` packs
+- **Storage insight** — on-device usage meter and a "protect my media" persistent-
+  storage request, so the browser cannot silently evict a project
+- **Undo/redo** — 80-step history (`Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`)
+- **Keyboard** — `Space` play, `J/K/L` transport, `←/→` frame step (Shift = 1 s),
+  `Home/End`, `S` split, `F` freeze, `Ctrl+D` duplicate, `Ctrl+wheel` timeline zoom
 - **Offline** — PWA manifest + service worker; the editor never calls a server
 
 ## Architecture
 
 ```
 src/mayocut/
-  types.ts            data model (Project / MainClip / OverlayClip / MediaItem)
-  engine.ts           playback clock, canvas compositor (cover crop, filters,
-                      transitions, text, overlays), WebAudio graph, MediaRecorder export
-  idb.ts              IndexedDB layer (media, blobs, projects, templates, exports)
+  types.ts            data model (Project / MainClip / OverlayClip / MediaItem),
+                      transitions, aspects, text looks, freeze & speed maths
+  engine.ts           playback clock, canvas compositor (fit modes, CSS + pixel
+                      grading, LUTs, 12 transitions, text engine, overlays,
+                      chroma/mask/blend), WebAudio graph (voice EQ, ducking,
+                      mute/solo), and four exporters (MP4/WebM/GIF/WAV/PNG)
+  idb.ts              IndexedDB layer (media, blobs, projects, templates,
+                      exports, LUTs, imported fonts)
   templates.ts        built-in template factories
   utils.ts            import pipeline, thumbnails, formatting
   components/
@@ -61,9 +115,15 @@ while the compositor draws the active frame(s) to a 1080p canvas — including
 overlapping transition frames, per-clip `ctx.filter` chains, text and overlays.
 Preview and export share the identical compositor, so WYSIWYG is exact.
 
-**Export.** `canvas.captureStream(30)` + WebAudio `MediaStreamDestination`
-→ `MediaRecorder` (WebM). Runs 100% client-side, in the browser, Electron or
-WebView. MP4 encoding (ffmpeg-based) is planned for the desktop/Android builds.
+**Export.** Four paths, all client-side:
+- **MP4** — WebCodecs `VideoEncoder` (H.264) + `AudioEncoder` (Opus) muxed by
+  `mp4-muxer`, with a ScriptProcessor bridge from the WebAudio graph.
+- **WebM** — `canvas.captureStream()` + `MediaStreamAudioDestinationNode`
+  → `MediaRecorder` (VP9/Opus). Works everywhere MediaRecorder exists.
+- **GIF** — frame-stepped render into a 256-colour cube palette via `omggif`.
+- **WAV / PNG** — `OfflineAudioContext` stereo mixdown / `canvas.toBlob`.
+
+All four share the same compositor, so what you preview is what ships.
 
 **The device as database.** All state lives in IndexedDB (`mayocut-db`):
 `media` (items) + `blobs` (files), `projects`, `templates`, `exports`.
@@ -77,6 +137,33 @@ no feature is gated behind a model, a cloud call or an account. The
 will be an *assistive* module that is off by default and can be turned off
 without losing any capability. The Mayobuild platform's own database (if any
 is attached to the wider platform) is never used for editing state.
+
+## Testing & verification
+
+Green builds are not proof the app works, so the editor is verified three ways
+(all wired into `.github/workflows/audit.yml`):
+
+```bash
+npx tsc --noEmit -p tsconfig.json     # types
+npx eslint src/mayocut                # lint (0 errors)
+node .diag/audit.mjs                  # 114 pure-logic assertions
+
+npm run build:shell
+node scripts/smoke-shell.mjs /        # bundle boots + renders the landing page
+node scripts/smoke-shell.mjs /mayocut # …and the MayoCut home
+node scripts/smoke-editor.mjs         # the EDITOR mounts with a seeded project
+```
+
+`audit.mjs` covers the maths that is easy to get quietly wrong: speed-ramp and
+speed-curve integration (closed form vs brute-force numeric integration), its
+inverse, freeze-frame semantics, split/keyframe rebasing, transition windows,
+keyframe interpolation, colour-grade CSS composition, aspect ratios, template
+packs, caption word re-timing, device gating and the GIF encoder round-trip.
+
+`smoke-editor.mjs` seeds a project containing a video clip, a freeze frame, a
+wipe transition, styled text, a keyed sticker and a ducked music bed, then loads
+the **production** bundle in a real DOM and asserts every surface mounted — zero
+console errors allowed.
 
 ## Building the binaries
 
@@ -106,8 +193,16 @@ release; the `/downloads` page links follow that version.
 ## Roadmap (stages)
 
 1. ✅ Core editor — import, tracks, trim/split, audio, text, transitions, export
-2. 🔜 Creative — more transitions (slide/wipe/zoom), keyframe animation, speed curves, stickers packs
-3. 🔜 Template ecosystem — template packages export/import as a single file (zip), community exchange
-4. 🔜 Advanced — chroma key / green screen, masking, stabilization, audio ducking, waveform view
-5. 🔜 Local AI — on-device captions & background removal (optional, assistive, never blocking)
-6. 🔜 MP4 export — ffmpeg.wasm (web) + native encoders (desktop/Android)
+2. ✅ Creative — 12 transitions, 15 motion effects, keyframes, speed ramp,
+   freeze frame, 10 text looks, GIF export, sticker packs
+3. ✅ Template ecosystem — packs as a single `.json` file, media re-matched by file
+   name, "enhance" packs that restyle an existing project
+4. ✅ Advanced — chroma key, masks, blend modes, audio ducking, per-track mute/solo,
+   voice shaping, beat markers, colour match, letterbox framing, storage insight,
+   word-level caption re-timing, drawable speed curves
+5. 🔜 Local AI — on-device captions & background removal (optional, assistive,
+   never blocking). Captions/TTS/denoise already ship; background removal is next.
+6. 🔶 MP4 export — WebCodecs H.264 ships today (Chrome/Edge/desktop/Android
+   WebView). ffmpeg.wasm fallback for older browsers is the remaining piece.
+7. ✅ Speed curves — drawable multi-point curve with closed-form timing
+8. 🔜 Motion tracking / auto-reframe — needs an on-device model; large

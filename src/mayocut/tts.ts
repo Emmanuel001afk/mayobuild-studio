@@ -28,7 +28,12 @@ interface TtsFileSpec {
 const HF = "https://huggingface.co/csukuangfj/vits-piper-en_US-amy-low/resolve/main/";
 
 export const TTS_FILES: TtsFileSpec[] = [
-  { key: "model", path: "/tts/en_US-amy-low.onnx", url: HF + "en_US-amy-low.onnx", size: 63_104_657 },
+  {
+    key: "model",
+    path: "/tts/en_US-amy-low.onnx",
+    url: HF + "en_US-amy-low.onnx",
+    size: 63_104_657,
+  },
   { key: "tokens", path: "/tts/tokens.txt", url: HF + "tokens.txt", size: 763 },
   {
     key: "lexicon",
@@ -131,7 +136,10 @@ export class TtsEngine {
         const mb = (n: number) => (n / 1048576).toFixed(1);
         onStatus?.(`Downloading ${f.path.split("/").pop()} (0/${mb(f.size)} MB)…`, 0);
         const buf = await fetchWithProgress(f.url, f.size, (got) =>
-          onStatus?.(`Downloading ${f.path.split("/").pop()} (${mb(got)}/${mb(f.size)} MB)…`, got / f.size),
+          onStatus?.(
+            `Downloading ${f.path.split("/").pop()} (${mb(got)}/${mb(f.size)} MB)…`,
+            got / f.size,
+          ),
         );
         if (buf.byteLength !== f.size) {
           throw new Error(`unexpected size for ${f.key}: got ${buf.byteLength} want ${f.size}`);
@@ -198,23 +206,25 @@ export class TtsEngine {
   async generate(text: string, speed = 1): Promise<TtsAudio> {
     if (!this.info || !this.worker) throw new Error("TTS model not loaded yet");
     const seq = ++this.seq;
-    const a = await new Promise<{ samples: Float32Array; sampleRate: number }>((resolve, reject) => {
-      const to = setTimeout(() => {
-        this.pending.delete(seq);
-        reject(new Error("speech generation timed out"));
-      }, 300_000);
-      this.pending.set(seq, {
-        resolve: (x) => {
-          clearTimeout(to);
-          resolve(x);
-        },
-        reject: (e) => {
-          clearTimeout(to);
-          reject(e);
-        },
-      });
-      this.worker!.postMessage({ type: "generate", seq, text, speed });
-    });
+    const a = await new Promise<{ samples: Float32Array; sampleRate: number }>(
+      (resolve, reject) => {
+        const to = setTimeout(() => {
+          this.pending.delete(seq);
+          reject(new Error("speech generation timed out"));
+        }, 300_000);
+        this.pending.set(seq, {
+          resolve: (x) => {
+            clearTimeout(to);
+            resolve(x);
+          },
+          reject: (e) => {
+            clearTimeout(to);
+            reject(e);
+          },
+        });
+        this.worker!.postMessage({ type: "generate", seq, text, speed });
+      },
+    );
     return {
       samples: a.samples,
       sampleRate: a.sampleRate,

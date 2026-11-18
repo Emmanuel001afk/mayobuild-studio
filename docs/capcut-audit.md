@@ -97,33 +97,55 @@ Already at or above CapCut parity for an *offline* editor:
 
 ---
 
+## 3b. v0.7 — closing the gap list (shipped)
+
+Everything below was implemented in this pass, including the engine work that
+made each item real rather than cosmetic.
+
+| Area | What shipped | Where |
+|---|---|---|
+| **Bug** | Right-edge trim collapsed a clip to 0.1 s (clamp inverted). Fixed, with a shared `trimMain` used by both layouts. | `Editor.tsx` |
+| **Transitions** | 2 → **12** (slide ×4, wipe ×4, dip-to-white, zoom punch, blur dissolve) through a real compositor (`composeTransition`), so preview and export stay identical. `Apply to every cut`. | `engine.ts`, `Inspector.tsx` |
+| **Freeze frame** | Split-at-playhead + held-frame clip; frame pinned, audio silent, motion suppressed. `F` shortcut. | `engine.ts`, `types.ts` |
+| **Speed** | 0.1×–8× ladder (was 0.25×–4×), plus the **drawable speed curve** — drag points on a log-scale graph, presets, curve drawn on the timeline clip, closed-form timing (verified against numeric integration) | `types.ts`, `Inspector.tsx`, `Timeline.tsx` |
+| **Colour** | `temperature`, `tint`, `fade`, `sharpen`, `vignette`, `splitTone` as a real pixel pass (`gradePixels`), plus **colour match** across clips. | `engine.ts` |
+| **Framing** | cover / contain / blur-fill per clip; project background colour behind letterboxing. | `engine.ts` |
+| **Motion** | 15 effects (added zoom-out, pan ×2, tilt, Ken Burns, colour pulse, sway) | `engine.ts` |
+| **Text** | Outline, shadow strength, letter spacing, line height, alignment, italic/underline/uppercase, opacity, pill radius, **imported .ttf/.otf**, **10 one-tap looks**, 4 new animations (zoom-in, rise, wipe-in, slide-from-left) | `engine.ts`, `Inspector.tsx`, `idb.ts` |
+| **Audio** | **Auto-ducking** (music dips under a voiceover, per-clip amount + project strength), **mute/solo per track**, master gain, **voice shaping** (bass/mid/treble + "voice enhance") | `engine.ts` |
+| **Timeline** | Drag a clip body to **re-order**, beat markers drawn on the ruler + "split at beats", per-lane hide, Ctrl+wheel zoom, adaptive ruler density | `Timeline.tsx` |
+| **Stickers** | Sticker filter, fit modes, playback speed & loop for video stickers | `engine.ts`, `Inspector.tsx` |
+| **Export** | **GIF**, **PNG still**, **WAV mix** added to MP4/WebM; remembered per project; inline preview in the export library | `engine.ts`, `ProjectsHome.tsx` |
+| **Formats** | 4 → **8** canvases (3:4, 4:3, 2:3, 21:9) | `types.ts` |
+| **Undo** | 60 → **80** steps, plus a full **redo** stack (`Ctrl+Shift+Z` / `Ctrl+Y`) that was missing entirely | `Editor.tsx` |
+| **Device** | On-device **storage meter** + persistent-storage request so the browser can't silently evict a project | `ProjectsHome.tsx` |
+| **Assist** | Beat detection now writes markers onto the timeline ruler (detect-only used to leave the ruler empty); "Cut to beats" writes both; a "clear markers" action | `Assist.tsx` |
+| **Captions** | **Word-level re-timing** editor: nudge per word (order-safe), shift the whole caption, re-space evenly, tap a word to seek to it | `types.ts`, `Inspector.tsx` |
+| **Quality gates** | 785 → **0** lint errors; logic audit 37 → **114** assertions; new `smoke-editor.mjs`; CI workflow `audit.yml` | `.diag/`, `scripts/`, `.github/` |
+
 ## 4. Honest gap list vs CapCut (what we do NOT have yet)
 
 Ranked by (user-visible value / effort):
 
-1. **Freeze frame** (CapCut core) — medium: engine already frame-steps for
-   reverse; a "freeze at playhead" clip type is the work.
-2. **Beat markers on the timeline** — we detect beats; drawing them as tick
-   marks on the audio lane is small and makes "cut to beat" visual.
-3. **Word-level caption re-timing** — word timing is already stored
-   (`TextWord`); an editor to nudge word start/end = medium.
-4. **Speed curves (drawn)** — we have a linear ramp; a drawable curve is the
-   CapCut-grade version. Medium.
+1. ~~Freeze frame~~ — **shipped (v0.7)**
+2. ~~Beat markers on the timeline~~ — **shipped (v0.7)**
+3. ~~Word-level caption re-timing~~ — **shipped (v0.7)**: nudge any word
+   earlier/later between its neighbours, shift the whole caption, re-space
+   evenly, click a word to jump the playhead to it.
+4. ~~Speed curves (drawn)~~ — **shipped (v0.7)**
 5. **Sticker/music library** — CapCut ships millions of CC-BY assets; we're
-   offline-first so a bundled starter pack (a few dozen SFX + stickers,
-   generated or CC0) is the offline-honest version. Medium + asset work.
-6. **Font import (local .ttf/.otf)** — CapCut allows importing fonts; we can
-   do the same via `FontFace` + IndexedDB. Small.
-7. **Stabilization** — CapCut has a one-tap version; a proper one needs a
-   feature-matching pass (e.g. a small ONNX flow estimator). Large.
-8. **Auto reframe / smart crop** for aspect changes — we change aspect with
-   letterbox/cover; subject-aware crop is ML. Large.
-9. **Motion tracking** — ML (object tracker). Large.
-10. **Background removal / retouch / video translation** — ML; would ride on
-    the existing ONNX/wllama runtime pattern. Large.
-11. **Color match** (match clip A to clip B) — compute a reference palette
-    and map. Medium, no ML needed.
-12. **GIF export, vertical/9:16 presets per platform** — small polish.
+   offline-first so a bundled starter pack is the offline-honest version.
+   Medium + asset work. **Still open.**
+6. ~~Font import (local .ttf/.otf)~~ — **shipped (v0.7)**
+7. **Stabilization** — needs a feature-matching pass (e.g. a small ONNX flow
+   estimator). Large. **Still open.**
+8. **Auto reframe / smart crop** — subject-aware crop is ML. Large.
+   **Still open.**
+9. **Motion tracking** — ML (object tracker). Large. **Still open.**
+10. **Background removal / retouch / video translation** — ML; rides on the
+    existing ONNX/wllama runtime pattern. Large. **Next AI stage.**
+11. ~~Color match~~ — **shipped (v0.7)**
+12. ~~GIF export, platform aspect presets~~ — **shipped (v0.7)** (GIF + 8 aspects)
 
 What we have that CapCut does **not** (offline positioning): on-device
 Whisper captions, on-device TTS, on-device denoise, LUT import, template

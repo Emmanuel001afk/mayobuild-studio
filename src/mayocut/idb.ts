@@ -5,8 +5,8 @@ import type { ExportItem, MediaItem, Project, UserTemplate } from "./types";
 import type { LutRecord } from "./luts";
 
 const DB_NAME = "mayocut-db";
-const DB_VERSION = 2;
-const STORES = ["media", "blobs", "projects", "templates", "exports", "luts"] as const;
+const DB_VERSION = 3;
+const STORES = ["media", "blobs", "projects", "templates", "exports", "luts", "fonts"] as const;
 type StoreName = (typeof STORES)[number];
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -27,7 +27,11 @@ function open(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-function tx<T>(store: StoreName, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T> {
+function tx<T>(
+  store: StoreName,
+  mode: IDBTransactionMode,
+  fn: (s: IDBObjectStore) => IDBRequest,
+): Promise<T> {
   return open().then(
     (db) =>
       new Promise<T>((resolve, reject) => {
@@ -73,23 +77,36 @@ export const db = {
     ),
 
   // --- projects ---
-  listProjects: (): Promise<Project[]> => tx("projects", "readonly", (s) => s.getAll() as IDBRequest),
+  listProjects: (): Promise<Project[]> =>
+    tx("projects", "readonly", (s) => s.getAll() as IDBRequest),
   saveProject: (p: Project): Promise<unknown> => tx("projects", "readwrite", (s) => s.put(p)),
-  getProject: (id: string): Promise<Project | undefined> => tx("projects", "readonly", (s) => s.get(id)),
+  getProject: (id: string): Promise<Project | undefined> =>
+    tx("projects", "readonly", (s) => s.get(id)),
   deleteProject: (id: string): Promise<unknown> => tx("projects", "readwrite", (s) => s.delete(id)),
 
   // --- user templates ---
-  listTemplates: (): Promise<UserTemplate[]> => tx("templates", "readonly", (s) => s.getAll() as IDBRequest),
-  saveTemplate: (t: UserTemplate): Promise<unknown> => tx("templates", "readwrite", (s) => s.put(t)),
-  deleteTemplate: (id: string): Promise<unknown> => tx("templates", "readwrite", (s) => s.delete(id)),
+  listTemplates: (): Promise<UserTemplate[]> =>
+    tx("templates", "readonly", (s) => s.getAll() as IDBRequest),
+  saveTemplate: (t: UserTemplate): Promise<unknown> =>
+    tx("templates", "readwrite", (s) => s.put(t)),
+  deleteTemplate: (id: string): Promise<unknown> =>
+    tx("templates", "readwrite", (s) => s.delete(id)),
 
   // --- imported LUTs (.cube) ---
   listLuts: (): Promise<LutRecord[]> => tx("luts", "readonly", (s) => s.getAll() as IDBRequest),
   saveLut: (r: LutRecord): Promise<unknown> => tx("luts", "readwrite", (s) => s.put(r)),
   deleteLut: (id: string): Promise<unknown> => tx("luts", "readwrite", (s) => s.delete(id)),
 
+  // --- imported fonts (ttf/otf bytes, kept on-device) ---
+  listFonts: (): Promise<{ id: string; family: string; name: string; blob: Blob }[]> =>
+    tx("fonts", "readonly", (s) => s.getAll() as IDBRequest),
+  saveFont: (f: { id: string; family: string; name: string; blob: Blob }): Promise<unknown> =>
+    tx("fonts", "readwrite", (s) => s.put(f)),
+  deleteFont: (id: string): Promise<unknown> => tx("fonts", "readwrite", (s) => s.delete(id)),
+
   // --- exports ---
-  listExports: (): Promise<ExportItem[]> => tx("exports", "readonly", (s) => s.getAll() as IDBRequest),
+  listExports: (): Promise<ExportItem[]> =>
+    tx("exports", "readonly", (s) => s.getAll() as IDBRequest),
   saveExport: (item: ExportItem, blob: Blob): Promise<unknown> =>
     open().then(
       (db) =>

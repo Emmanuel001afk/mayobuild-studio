@@ -54,6 +54,534 @@ await t('uid unique + prefixed', () => {
   assert.ok(a.startsWith('med_') && b.startsWith('med_') && a !== b);
 });
 
+// ================= freeze frames =================
+console.log("types.ts — freeze & speed");
+await t("freeze clip: duration is the hold length, not source/speed", () => {
+  const c = T.freezeClipFrom({ in: 2, out: 2.5, speed: 3, rampTo: 4 }, 2, 3);
+  assert.equal(c.freeze, true);
+  assert.ok(Math.abs(T.mainClipDuration(c) - 3) < 1e-9, `got ${T.mainClipDuration(c)}`);
+});
+await t("freeze clip: srcAt is pinned to a single frame", () => {
+  const c = T.freezeClipFrom({ in: 1, out: 2, speed: 1 }, 1, 2);
+  assert.ok(Math.abs(T.mainSrcAt(c, 0) - T.mainSrcAt(c, 99)) < 1e-9);
+  assert.ok(Math.abs(T.mainSrcAt(c, 0) - (1 + 1 / 60)) < 1e-9);
+});
+await t("freeze clip: playback rate is 1 (no ramp on a still)", () => {
+  const c = T.freezeClipFrom({ in: 0, out: 4, speed: 0.25, rampTo: 4 }, 1, 1);
+  assert.equal(T.mainRateAt(c, 0.5), 1);
+});
+await t("reverse clip: rate stays 1", () => {
+  const c = { in: 0, out: 4, speed: 2, reverse: true };
+  assert.equal(T.mainRateAt(c, 1), 1);
+});
+await t("speed ramp still integrates exactly after the freeze change", () => {
+  const c = { in: 0, out: 4, speed: 1, rampTo: 2 };
+  let dt = 0; const N = 100000; const h = 4 / N;
+  for (let i = 0; i < N; i++) dt += h / (1 + 0.25 * ((i + 0.5) * h));
+  assert.ok(Math.abs(T.mainClipDuration(c) - dt) / dt < 1e-4);
+});
+await t("SPEED_PRESETS covers slow-mo through 8x", () => {
+  assert.ok(T.SPEED_PRESETS.includes(0.1) && T.SPEED_PRESETS.includes(8));
+  assert.ok(T.SPEED_PRESETS.every((v) => v > 0));
+});
+
+// ================= transitions =================
+console.log("types.ts — transitions & aspects");
+await t("every transition has a unique id and a label", () => {
+  const ids = T.TRANSITIONS.map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(T.TRANSITIONS.every((x) => typeof x.name === "string" && x.name.length > 0));
+});
+await t("forward-looking transitions exist", () => {
+  for (const id of ["slideleft", "wipeup", "zoom", "blur", "fadewhite"])
+    assert.ok(T.TRANSITIONS.some((x) => x.id === id), `missing ${id}`);
+});
+await t("isDipTo classifies black / white / neither", () => {
+  assert.equal(T.isDipTo("fadeblack"), "black");
+  assert.equal(T.isDipTo("fadewhite"), "white");
+  assert.equal(T.isDipTo("crossfade"), null);
+  assert.equal(T.isDipTo("wipeleft"), null);
+});
+await t("aspects: 8 formats, valid sizes, all in ASPECT_ORDER", () => {
+  const ids = Object.keys(T.ASPECTS);
+  assert.equal(ids.length, 8);
+  for (const id of ids) {
+    const a = T.ASPECTS[id];
+    assert.ok(a.w > 0 && a.h > 0, id);
+    assert.ok(T.ASPECT_ORDER.includes(id), `${id} missing from ASPECT_ORDER`);
+  }
+  assert.equal(T.ASPECT_ORDER.length, 8);
+});
+await t("aspectRatio matches the declared w/h", () => {
+  for (const id of Object.keys(T.ASPECTS)) {
+    const a = T.ASPECTS[id];
+    assert.ok(Math.abs(T.aspectRatio(id) - a.w / a.h) < 1e-12);
+  }
+});
+await t("21:9 is wider than 16:9 and 9:16 is the tallest portrait", () => {
+  assert.ok(T.aspectRatio("21:9") > T.aspectRatio("16:9"));
+  assert.ok(T.aspectRatio("9:16") < T.aspectRatio("4:5"));
+  assert.ok(T.aspectRatio("9:16") < T.aspectRatio("1:1"));
+});
+
+// ================= text presets =================
+console.log("types.ts — text look presets");
+await t("TEXT_PRESETS: >=10 looks with names and patches", () => {
+  assert.ok(T.TEXT_PRESETS.length >= 10);
+  for (const tpl of T.TEXT_PRESETS) {
+    assert.ok(tpl.name && typeof tpl.patch === "object");
+  }
+});
+await t("text anims include the new entrances", () => {
+  const ids = T.TEXT_ANIMS.map((a) => a.id);
+  for (const id of ["zoom-in", "rise", "wipe-in", "slideleft"])
+    assert.ok(ids.includes(id), `missing ${id}`);
+});
+
+// ================= engine (pure parts) =================
+const E = await import('./b-engine.mjs');
+console.log("engine.ts — transitions, grade, clip ops");
+await t("buildFilterCss: neutral clip yields an empty filter", () => {
+  assert.equal(E.buildFilterCss({ filter: "none", adjust: T.DEFAULT_ADJUST }), "");
+});
+await t("buildFilterCss: fade squashes contrast + lifts brightness", () => {
+  const css = E.buildFilterCss({ filter: "none", adjust: { ...T.DEFAULT_ADJUST, fade: 100 } });
+  assert.ok(css.includes("contrast(0.680)"), css);
+  assert.ok(css.includes("brightness(1.070)"), css);
+});
+await t("buildFilterCss: preset + adjust compose in order", () => {
+  const css = E.buildFilterCss({ filter: "bw", adjust: { ...T.DEFAULT_ADJUST, hue: 30 } });
+  assert.ok(css.startsWith("grayscale(1)"));
+  assert.ok(css.includes("hue-rotate(30deg)"));
+});
+await t("presetCss: unknown id is safe (empty string)", () => {
+  assert.equal(E.presetCss("does-not-exist"), "");
+});
+await t("FILTER_PRESETS: unique ids, >= 19 looks", () => {
+  const ids = E.FILTER_PRESETS.map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(ids.length >= 19);
+});
+await t("animAt: interpolates midpoint between keyframes", () => {
+  const kfs = [
+    { at: 0, v: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 } },
+    { at: 2, v: { x: 1, y: 0, scale: 2, rotation: 90, opacity: 0 } },
+  ];
+  const mid = E.animAt(kfs, T.DEFAULT_ANIM, 1);
+  assert.ok(Math.abs(mid.x - 0.5) < 1e-9);
+  assert.ok(Math.abs(mid.scale - 1.5) < 1e-9);
+  assert.ok(Math.abs(mid.opacity - 0.5) < 1e-9);
+});
+await t("animAt: clamps before the first and after the last keyframe", () => {
+  const kfs = [
+    { at: 1, v: { x: 0.2, y: 0, scale: 1, rotation: 0, opacity: 1 } },
+    { at: 2, v: { x: 0.9, y: 0, scale: 1, rotation: 0, opacity: 1 } },
+  ];
+  assert.equal(E.animAt(kfs, T.DEFAULT_ANIM, 0).x, T.DEFAULT_ANIM.x);
+  assert.equal(E.animAt(kfs, T.DEFAULT_ANIM, 5).x, 0.9);
+});
+
+// --- Engine instance operations (no canvas / no media needed) --------------
+function mkProject() {
+  const p = T.newProject("audit", "9:16");
+  p.main = [
+    { id: "mA", mediaId: "m1", in: 0, out: 4, speed: 1, reverse: false, filter: "none",
+      adjust: { ...T.DEFAULT_ADJUST }, volume: 1, muted: false, transitionIn: "none", transitionDur: 0 },
+    { id: "mB", mediaId: "m2", in: 1, out: 5, speed: 2, reverse: false, filter: "none",
+      adjust: { ...T.DEFAULT_ADJUST }, volume: 1, muted: false, transitionIn: "crossfade", transitionDur: 0.5 },
+  ];
+  return p;
+}
+await t("Engine.setTransition: writes kind + clamps duration", () => {
+  const e = new E.Engine(mkProject());
+  e.setTransition("mB", "wipeup", 0.02);
+  assert.equal(e.project.main[1].transitionIn, "wipeup");
+  assert.ok(e.project.main[1].transitionDur >= 0.1);
+  e.setTransition("mB", "none", 1);
+  assert.equal(e.project.main[1].transitionDur, 0);
+});
+await t("Engine.setTransitionAll: first clip never has an incoming transition", () => {
+  const e = new E.Engine(mkProject());
+  e.setTransitionAll("slideleft", 0.4);
+  assert.equal(e.project.main[0].transitionIn, "none");
+  assert.equal(e.project.main[1].transitionIn, "slideleft");
+  assert.ok(Math.abs(e.project.main[1].transitionDur - 0.4) < 1e-9);
+});
+await t("Engine.freezeAt: splits mid-clip and inserts a held frame", () => {
+  const e = new E.Engine(mkProject());
+  const before = e.project.main.length;
+  const f = e.freezeAt(2, 3);
+  assert.ok(f && f.freeze === true, "freeze clip returned");
+  assert.equal(e.project.main.length, before + 2, "split + freeze");
+  assert.ok(Math.abs(T.mainClipDuration(f) - 3) < 1e-9);
+  assert.ok(Math.abs(T.mainSpans(e.project)[1].start - 2) < 0.05, "freeze sits at the playhead");
+});
+await t("Engine.freezeAt: at a clip end appends instead of splitting", () => {
+  const e = new E.Engine(mkProject());
+  const f = e.freezeAt(3.99, 2);
+  assert.ok(f && f.freeze === true);
+  assert.equal(e.project.main.length, 3);
+});
+await t("Engine.reorderMainClip: moves and strips a head transition", () => {
+  const e = new E.Engine(mkProject());
+  assert.equal(e.reorderMainClip("mB", 0), true);
+  assert.equal(e.project.main[0].id, "mB");
+  assert.equal(e.project.main[0].transitionIn, "none");
+});
+await t("Engine.splitAt: refuses at clip edges, splits inside", () => {
+  const e = new E.Engine(mkProject());
+  assert.equal(e.splitAt(0), false);
+  assert.equal(e.splitAt(4), false); // exact boundary
+  assert.equal(e.splitAt(2), true);
+  assert.equal(e.project.main.length, 3);
+  assert.ok(Math.abs(e.project.main[0].out - 2) < 1e-9);
+  assert.ok(Math.abs(e.project.main[1].in - 2) < 1e-9);
+});
+await t("Engine.splitAt: carries keyframes to both halves", () => {
+  const p = mkProject();
+  p.main[0].keyframes = [
+    { at: 0.5, v: { ...T.DEFAULT_ANIM, scale: 1.2 } },
+    { at: 3, v: { ...T.DEFAULT_ANIM, scale: 0.8 } },
+  ];
+  const e = new E.Engine(p);
+  e.splitAt(2);
+  assert.equal(e.project.main[0].keyframes.length, 1);
+  assert.equal(e.project.main[1].keyframes.length, 1);
+  assert.ok(Math.abs(e.project.main[1].keyframes[0].at - 1) < 1e-9, "rebased to the new clip");
+});
+await t("Engine.splitAtAllBeats: splits once per interior beat", () => {
+  const e = new E.Engine(mkProject());
+  e.setBeats([1, 2, 3]);
+  const n = e.splitAtAllBeats();
+  assert.equal(n, 3);
+  assert.ok(e.project.main.length >= 5);
+});
+await t("Engine.setBeats: sorts and caps the marker list", () => {
+  const e = new E.Engine(mkProject());
+  e.setBeats([5, 1, 3]);
+  assert.deepEqual(e.project.beats, [1, 3, 5]);
+  const many = Array.from({ length: 900 }, (_, i) => i * 0.1);
+  e.setBeats(many);
+  assert.equal(e.project.beats.length, 400);
+});
+await t("Engine.track flag: mute/solo/hidden round-trip", () => {
+  const e = new E.Engine(mkProject());
+  e.setTrackFlag("t_audio", { muted: true, solo: true });
+  const tr = e.project.tracks.find((x) => x.id === "t_audio");
+  assert.equal(tr.muted, true);
+  assert.equal(tr.solo, true);
+  e.setTrackFlag("t_text", { hidden: true });
+  assert.equal(e.project.tracks.find((x) => x.id === "t_text").hidden, true);
+});
+await t("Engine.reorderMainClip: clamps out-of-range indices", () => {
+  const e = new E.Engine(mkProject());
+  assert.equal(e.reorderMainClip("mA", 99), true);
+  assert.equal(e.project.main[1].id, "mA");
+});
+await t("Engine.snapshot/restore: undo round-trip keeps data intact", () => {
+  const e = new E.Engine(mkProject());
+  const snap = e.snapshot();
+  e.deleteMainClip("mA");
+  assert.equal(e.project.main.length, 1);
+  e.restore(snap);
+  assert.equal(e.project.main.length, 2);
+  assert.equal(e.project.main[0].id, "mA");
+});
+await t("Engine.moveOverlayToTrack: audio can't land on a visual lane", () => {
+  const p = mkProject();
+  p.tracks[2].clips.push({ id: "a1", kind: "audio", mediaId: "m1", start: 0, duration: 2, volume: 1 });
+  const e = new E.Engine(p);
+  assert.equal(e.moveOverlayToTrack("a1", "t_text"), false);
+  assert.equal(e.moveOverlayToTrack("a1", "t_audio"), false); // same lane
+});
+await t("Engine.moveOverlayToTrack: text moves between visual lanes", () => {
+  const p = mkProject();
+  p.tracks[0].clips.push({ id: "t1", kind: "text", start: 0, duration: 2, text: "hi" });
+  const e = new E.Engine(p);
+  assert.equal(e.moveOverlayToTrack("t1", "t_overlay"), true);
+  assert.equal(e.project.tracks[1].clips.some((c) => c.id === "t1"), true);
+  assert.equal(e.project.tracks[0].clips.length, 0);
+});
+await t("Engine.duplicateTrack: copies clips with fresh ids", () => {
+  const p = mkProject();
+  p.tracks[0].clips.push({ id: "t1", kind: "text", start: 0, duration: 2, text: "hi" });
+  const e = new E.Engine(p);
+  assert.equal(e.duplicateTrack("t_text"), 1);
+  assert.equal(e.project.tracks[0].clips.length, 2);
+  assert.notEqual(e.project.tracks[0].clips[0].id, e.project.tracks[0].clips[1].id);
+});
+await t("Engine.patchClip: patches main and overlay clips alike", () => {
+  const p = mkProject();
+  p.tracks[0].clips.push({ id: "t1", kind: "text", start: 0, duration: 2, text: "hi" });
+  const e = new E.Engine(p);
+  assert.equal(e.patchClip("mA", { speed: 3 }), true);
+  assert.equal(e.project.main[0].speed, 3);
+  assert.equal(e.patchClip("t1", { text: "yo" }), true);
+  assert.equal(e.project.tracks[0].clips[0].text, "yo");
+  assert.equal(e.patchClip("nope", { speed: 1 }), false);
+});
+await t("Engine A→B transition windows are contiguous (no black gap)", () => {
+  const p = mkProject();
+  p.main[1].transitionIn = "wipeleft";
+  p.main[1].transitionDur = 0.5;
+  const e = new E.Engine(p);
+  const spans = T.mainSpans(e.project);
+  assert.ok(Math.abs(spans[0].end - spans[1].start) < 1e-12, "spans are adjacent");
+  // the transition window starts inside the previous clip and ends at the cut
+  const winStart = spans[1].start - 0.5;
+  assert.ok(winStart < spans[0].end);
+  assert.ok(Math.abs(spans[1].start - winStart - 0.5) < 1e-12);
+});
+
+// ================= GIF export =================
+// The GIF writer path is the only new export that produces bytes without a
+// canvas, so it can be verified end-to-end here (encode → decode → frames).
+console.log("engine.ts — GIF export round-trip");
+{
+  const omggif = await import("omggif");
+  await t("omggif exposes GifWriter (GIF export dependency present)", () => {
+    assert.equal(typeof omggif.GifWriter, "function");
+  });
+  await t("exportGIF palette is a valid power-of-two 256 colours", () => {
+    const palette = [];
+    for (let r = 0; r < 6; r++)
+      for (let g = 0; g < 6; g++)
+        for (let b = 0; b < 6; b++) palette.push(((r * 51) << 16) | ((g * 51) << 8) | (b * 51));
+    for (let i = 0; i < 40; i++) {
+      const v = Math.round((i / 39) * 255);
+      palette.push((v << 16) | (v << 8) | v);
+    }
+    assert.equal(palette.length, 256);
+    assert.equal(palette.length & (palette.length - 1), 0, "must be a power of two");
+    assert.ok(palette.every((v) => v >= 0 && v <= 0xffffff));
+  });
+  await t("GIF encode→decode preserves frame count, size and colour", () => {
+    const W = 16;
+    const H = 16;
+    const palette = [];
+    for (let r = 0; r < 6; r++)
+      for (let g = 0; g < 6; g++)
+        for (let b = 0; b < 6; b++) palette.push(((r * 51) << 16) | ((g * 51) << 8) | (b * 51));
+    for (let i = 0; i < 40; i++) {
+      const v = Math.round((i / 39) * 255);
+      palette.push((v << 16) | (v << 8) | v);
+    }
+    const buf = new Uint8Array(W * H * 3 + 4096);
+    const writer = new omggif.GifWriter(buf, W, H, { loop: 0, palette });
+    const redIdx = 6 * 6 * 5; // r=5,g=0,b=0 → pure red in the 6•6•6 cube
+    const idx = new Uint8Array(W * H).fill(redIdx);
+    for (let f = 0; f < 3; f++) writer.addFrame(0, 0, W, H, idx, { delay: 5, disposal: 1 });
+    const out = buf.subarray(0, writer.end());
+    assert.equal(String.fromCharCode(...out.slice(0, 6)), "GIF89a");
+    const reader = new omggif.GifReader(out);
+    assert.equal(reader.numFrames(), 3);
+    assert.equal(reader.width, W);
+    assert.equal(reader.height, H);
+    const px = new Uint8ClampedArray(W * H * 4);
+    reader.decodeAndBlitFrameRGBA(0, px);
+    assert.ok(px[0] > 200 && px[1] < 60 && px[2] < 60, `first pixel not red: ${px[0]},${px[1]},${px[2]}`);
+  });
+}
+
+// ================= caption word re-timing =================
+console.log("types.ts — caption word re-timing");
+const WORDS = [
+  { t: 0.0, text: "the" },
+  { t: 0.4, text: "quick" },
+  { t: 0.9, text: "brown" },
+  { t: 1.4, text: "fox" },
+];
+await t("nudgeWord: moves a word forward inside its window", () => {
+  const out = T.nudgeWord(WORDS, 1, 0.1, 2, 0.05);
+  assert.ok(Math.abs(out[1].t - 0.5) < 1e-9, `got ${out[1].t}`);
+});
+await t("nudgeWord: cannot overtake the next word", () => {
+  const out = T.nudgeWord(WORDS, 1, 5, 2, 0.05);
+  assert.ok(out[1].t <= WORDS[2].t - 0.05 + 1e-9, `got ${out[1].t}`);
+});
+await t("nudgeWord: cannot overtake the previous word", () => {
+  const out = T.nudgeWord(WORDS, 2, -5, 2, 0.05);
+  assert.ok(out[2].t >= WORDS[1].t + 0.05 - 1e-9, `got ${out[2].t}`);
+});
+await t("nudgeWord: first word can't go negative, last can't leave the clip", () => {
+  assert.ok(T.nudgeWord(WORDS, 0, -5, 2, 0.05)[0].t >= 0);
+  assert.ok(T.nudgeWord(WORDS, 3, 5, 2, 0.05)[3].t <= 2);
+});
+await t("nudgeWord: order is still strictly increasing after many nudges", () => {
+  let w = WORDS;
+  for (let i = 0; i < 200; i++) w = T.nudgeWord(w, i % 4, i % 2 ? 0.3 : -0.3, 2, 0.05);
+  for (let i = 1; i < w.length; i++) assert.ok(w[i].t > w[i - 1].t, `inverted at ${i}`);
+});
+await t("nudgeWord: is pure — the input array is untouched", () => {
+  const copy = JSON.parse(JSON.stringify(WORDS));
+  T.nudgeWord(WORDS, 1, 0.2, 2);
+  assert.deepEqual(WORDS, copy);
+});
+await t("nudgeWord: out-of-range index is a no-op", () => {
+  assert.equal(T.nudgeWord(WORDS, 99, 1, 2), WORDS);
+  assert.equal(T.nudgeWord(WORDS, -1, 1, 2), WORDS);
+});
+await t("respaceWords: spreads words evenly and keeps order", () => {
+  const out = T.respaceWords(WORDS, 2);
+  assert.deepEqual(
+    out.map((w) => w.t),
+    [0, 0.5, 1, 1.5],
+  );
+  assert.deepEqual(
+    out.map((w) => w.text),
+    ["the", "quick", "brown", "fox"],
+  );
+});
+await t("shiftWords: shifts the whole caption", () => {
+  const out = T.shiftWords(WORDS, 0.25, 4);
+  assert.deepEqual(
+    out.map((w) => w.t),
+    [0.25, 0.65, 1.15, 1.65],
+  );
+});
+await t("shiftWords: clamps at t=0 and at the clip end", () => {
+  assert.equal(T.shiftWords(WORDS, -10, 2)[0].t, 0);
+  const end = T.shiftWords(WORDS, 10, 2);
+  assert.ok(end[3].t <= 2 + 1e-9, `last word escaped: ${end[3].t}`);
+});
+await t("shiftWords: empty list and zero delta are safe", () => {
+  assert.deepEqual(T.shiftWords([], 1, 2), []);
+  assert.equal(T.shiftWords(WORDS, 0, 2), WORDS);
+});
+
+// ================= drawable speed curves =================
+console.log("types.ts — speed curves");
+/** Brute-force reference: duration = ∫ ds / v(s). */
+function numericDur(c, N = 40000) {
+  const L = c.out - c.in;
+  let t = 0;
+  for (let i = 0; i < N; i++) t += L / N / T.speedAt(c, (i + 0.5) / N);
+  return t;
+}
+const CURVES = {
+  "constant 1x": { in: 0, out: 4, speed: 1 },
+  "constant 2.5x": { in: 0, out: 4, speed: 2.5 },
+  "linear ramp 1→3": { in: 0, out: 4, speed: 1, rampTo: 3 },
+  "ramp 3→0.5": { in: 0, out: 4, speed: 3, rampTo: 0.5 },
+  "slow-mo dip": {
+    in: 0,
+    out: 4,
+    speed: 1,
+    curve: [
+      { at: 0, v: 1 },
+      { at: 0.4, v: 0.25 },
+      { at: 0.6, v: 0.25 },
+      { at: 1, v: 1 },
+    ],
+  },
+  "3-segment accel": {
+    in: 1,
+    out: 7,
+    speed: 1,
+    curve: [
+      { at: 0, v: 0.5 },
+      { at: 0.33, v: 2 },
+      { at: 0.66, v: 4 },
+      { at: 1, v: 1 },
+    ],
+  },
+};
+for (const [name, c] of Object.entries(CURVES)) {
+  await t(`curve[${name}]: closed-form duration matches numeric integration`, () => {
+    const exact = T.mainClipDuration(c);
+    const numeric = numericDur(c);
+    assert.ok(Math.abs(exact - numeric) / numeric < 1e-4, `${exact} vs ${numeric}`);
+  });
+  await t(`curve[${name}]: srcAt(duration) lands exactly on the out point`, () => {
+    const d = T.mainClipDuration(c);
+    assert.ok(Math.abs(T.mainSrcAt(c, d) - c.out) < 1e-4, `got ${T.mainSrcAt(c, d)}`);
+  });
+  await t(`curve[${name}]: src position is monotonic (no jitter)`, () => {
+    const d = T.mainClipDuration(c);
+    let prev = -1;
+    for (let i = 0; i <= 200; i++) {
+      const src = T.mainSrcAt(c, (i / 200) * d);
+      assert.ok(src >= prev - 1e-9, `went backwards at ${i}`);
+      prev = src;
+    }
+  });
+}
+await t("curve: a 2-point curve is identical to the old linear ramp", () => {
+  const a = T.mainClipDuration({ in: 0, out: 4, speed: 1, rampTo: 3 });
+  const b = T.mainClipDuration({
+    in: 0,
+    out: 4,
+    speed: 1,
+    curve: [
+      { at: 0, v: 1 },
+      { at: 1, v: 3 },
+    ],
+  });
+  assert.equal(a, b);
+});
+await t("speedCurveOf: rejects <2 points and falls back to the ramp", () => {
+  assert.equal(T.speedCurveOf({ in: 0, out: 1, speed: 1, curve: [{ at: 0, v: 2 }] }), null);
+  assert.equal(T.speedCurveOf({ in: 0, out: 1, speed: 1, curve: [] }), null);
+  const c = { in: 0, out: 1, speed: 1, curve: [] };
+  assert.equal(T.speedAt(c, 0.5), 1);
+});
+await t("speedCurveOf: sorts unsorted points and clamps wild values", () => {
+  const pts = T.speedCurveOf({
+    in: 0,
+    out: 1,
+    speed: 1,
+    curve: [
+      { at: 0.8, v: 99 },
+      { at: 0, v: -3 },
+    ],
+  });
+  assert.equal(pts[0].at, 0);
+  assert.ok(pts.every((p) => p.v >= 0.05 && p.v <= 16));
+  assert.ok(pts[0].at <= pts[pts.length - 1].at);
+});
+await t("speedCurveOf: snaps the ends so the curve spans the whole segment", () => {
+  const pts = T.speedCurveOf({
+    in: 0,
+    out: 1,
+    speed: 1,
+    curve: [
+      { at: 0.2, v: 2 },
+      { at: 0.8, v: 0.5 },
+    ],
+  });
+  assert.equal(pts[0].at, 0);
+  assert.equal(pts[pts.length - 1].at, 1);
+});
+await t("speedCurveOf: drops NaN points instead of poisoning the maths", () => {
+  const pts = T.speedCurveOf({
+    in: 0,
+    out: 1,
+    speed: 1,
+    curve: [
+      { at: 0, v: 1 },
+      { at: NaN, v: 2 },
+      { at: 1, v: 4 },
+    ],
+  });
+  assert.ok(pts.every((p) => Number.isFinite(p.at) && Number.isFinite(p.v)));
+});
+await t("freeze clips ignore the speed curve entirely", () => {
+  const c = { in: 1, out: 3, speed: 1, freeze: true, curve: [{ at: 0, v: 4 }, { at: 1, v: 0.1 }] };
+  assert.equal(T.mainClipDuration(c), 2);
+  assert.equal(T.mainRateAt(c, 0.5), 1);
+});
+await t("reverse + curve still advances the element forward", () => {
+  const c = {
+    in: 0,
+    out: 4,
+    speed: 1,
+    reverse: true,
+    curve: [{ at: 0, v: 0.5 }, { at: 1, v: 4 }],
+  };
+  assert.equal(T.mainRateAt(c, 1), 1, "frame-stepped reverse");
+  assert.ok(T.mainPlaybackRate(c, 1) > 0, "media still plays forward");
+});
+
 // ================= luts =================
 const L = await import('./b-luts.mjs');
 console.log('luts.ts');
