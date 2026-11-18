@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "sonner";
+import { Download, Home, Scissors } from "lucide-react";
 import { getSupabase } from "@/integrations/mysupabase/client";
 
 import appCss from "../styles.css?url";
@@ -128,6 +129,38 @@ function RootShell({ children }: { children: ReactNode }) {
   );
 }
 
+/** App-style bottom navigation for the shell on phones (the editor provides
+ *  its own tab bar, so it is excluded). Gives the web app the feel of the
+ *  native app on small screens while keeping the full Mayobuild layout. */
+function ShellMobileNav() {
+  const { pathname } = useLocation();
+  if (pathname.startsWith("/mayocut")) return null; // the editor has its own tab bar
+  const items = [
+    { to: "/", icon: Home, label: "Home" },
+    { to: "/mayocut", icon: Scissors, label: "Editor" },
+    { to: "/downloads", icon: Download, label: "Get app" },
+  ] as const;
+  return (
+    <nav className="fixed bottom-0 inset-x-0 z-40 md:hidden border-t border-border bg-card/95 backdrop-blur grid grid-cols-3 pb-[env(safe-area-inset-bottom)]">
+      {items.map((it) => {
+        const active = pathname === it.to;
+        return (
+          <Link
+            key={it.to}
+            to={it.to}
+            className={`flex flex-col items-center gap-0.5 py-2 text-[10px] ${
+              active ? "text-cyan-300" : "text-muted-foreground"
+            }`}
+          >
+            <it.icon className="h-5 w-5" />
+            {it.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
 function ShellCloudNotice() {
   const { pathname } = useLocation();
   // Home explains it in place; the editor is fully on-device.
@@ -186,11 +219,18 @@ function RootComponent() {
     return () => unsubscribe?.();
   }, [queryClient, router]);
 
+  const { pathname } = useLocation();
+  const navPadding =
+    isShellApp() && !pathname.startsWith("/mayocut") ? "pb-14 md:pb-0" : undefined;
+
   return (
     <QueryClientProvider client={queryClient}>
       {isShellApp() && <ShellCloudNotice />}
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      <div className={navPadding}>
+        <Outlet />
+      </div>
+      {isShellApp() && <ShellMobileNav />}
       <Toaster theme="dark" position="top-right" richColors />
     </QueryClientProvider>
   );

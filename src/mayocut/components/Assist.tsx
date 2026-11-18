@@ -18,10 +18,12 @@ import {
   Palette,
   Scissors,
   Sparkles,
+  Globe,
   Subtitles,
   Timer,
   X,
 } from "lucide-react";
+import { AI_PROVIDERS, aiKeys, cloudChat, testKey } from "@/lib/ai-keys";
 import {
   analyzeAudioBlob,
   beatSegments,
@@ -74,7 +76,7 @@ export function Assist({
   selectedClip: { id: string; kind: string; mediaId?: string } | null;
   onAddTts: (audio: TtsAudio, name: string) => void;
 }) {
-  const [tab, setTab] = useState<"tools" | "ai" | "captions" | "voice">("tools");
+  const [tab, setTab] = useState<"tools" | "ai" | "cloud" | "captions" | "voice">("tools");
   const [busy, setBusy] = useState<string | null>(null);
   const [beatMediaId, setBeatMediaId] = useState("");
   const [beatCount, setBeatCount] = useState(8);
@@ -350,6 +352,9 @@ export function Assist({
         <TabBtn active={tab === "ai"} onClick={() => setTab("ai")}>
           <BrainCircuit className="h-3.5 w-3.5" /> AI writer
         </TabBtn>
+        <TabBtn active={tab === "cloud"} onClick={() => setTab("cloud")}>
+          <Globe className="h-3.5 w-3.5" /> Cloud AI
+        </TabBtn>
         <TabBtn active={tab === "captions"} onClick={() => setTab("captions")}>
           <Subtitles className="h-3.5 w-3.5" /> Captions
         </TabBtn>
@@ -613,6 +618,8 @@ export function Assist({
               Nothing leaves this device.
             </p>
           </FeatureGate>
+        ) : tab === "cloud" ? (
+          <CloudAiPanel />
         ) : (
           <FeatureGate gate={can("ai")} label="Local AI writer">
             <AIWriter project={project} />
@@ -620,6 +627,102 @@ export function Assist({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Cloud AI — the user's own provider keys, used straight from the device.
+ * The installed app has no server behind it, so the web build's env-based
+ * router is unreachable here; instead the device talks to the provider
+ * directly (OpenAI-compatible endpoints). Keys live only in this device's
+ * localStorage. Without a key, everything in MayoCut still works offline.
+ */
+function CloudAiPanel() {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [saved, setSaved] = useState<Record<string, boolean>>(() => Object.fromEntries(Object.keys(aiKeys.all()).map((k) => [k, true])));
+  const [res, setRes] = useState<Record<string, { ok: boolean; message: string; busy?: boolean }>>({});
+
+  function save(id: string) {
+    const v = (drafts[id] ?? "").trim();
+    if (!v) return;
+    aiKeys.set(id, v);
+    setSaved((s) => ({ ...s, [id]: true }));
+    setDrafts((d) => ({ ...d, [id]: "" }));
+    toast.success("Key stored on this device");
+    void testKey(id).then((r) => setRes((x) => ({ ...x, [id]: { ok: r.ok, message: r.message } })));
+  }
+
+  async function test(id: string) {
+    setRes((x) => ({ ...x, [id]: { ok: false, message: "Testing…", busy: true } }));
+    const r = await testKey(id, drafts[id]?.trim() || undefined);
+    setRes((x) => ({ ...x, [id]: { ok: r.ok, message: r.message } }));
+  }
+
+  function clear(id: string) {
+    aiKeys.set(id, "");
+    setSaved((s) => ({ ...s, [id]: false }));
+    setRes((x) => {
+      const n = { ...x };
+      delete n[id];
+      return n;
+    });
+    toast.info("Key removed");
+  }
+
+  return (
+    <>
+      <div className="border border-border rounded-lg p-3 space-y-1.5">
+        <div className="text-xs font-medium flex items-center gap-2">
+          <Globe className="h-4 w-4 text-primary" /> Cloud AI — your own keys
+        </div>
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          MayoCut's AI is on-device by default. For anything that needs a cloud model (longer context, better writing),
+          paste one of <b>your</b> provider keys below. It is stored <b>only on this device</b> and sent only to that
+          provider — no Mayobuild server is in the loop. The rest of the editor works with no key at all.
+        </p>
+        <p className="text-[10px] text-muted-foreground">
+          The AI writer uses the first working key automatically (failover). Free tiers: Gemini, Groq, Cerebras,
+          DeepSeek, OpenRouter.
+        </p>
+      </div>
+      {AI_PROVIDERS.map((p) => (
+        <div key={p.id} className="border border-border rounded-lg p-2.5 space-y-1.5">
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="font-medium">{p.name}</span>
+            <span className="text-muted-foreground text-[10px] truncate">{p.model}</span>
+            {saved[p.id] && <span className="ml-auto shrink-0 text-[10px] text-emerald-400">● stored</span>}
+          </div>
+          <div className="flex gap-1">
+            <input
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              className="flex-1 min-w-0 bg-slate-900 border border-border rounded px-2 py-1 text-[11px]"
+              placeholder="Paste your key…"
+              value={drafts[p.id] ?? ""}
+              onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
+            />
+            <ToolBtn onClick={() => save(p.id)} disabled={!(drafts[p.id] ?? "").trim()}>
+              Save
+            </ToolBtn>
+            <ToolBtn busy={!!res[p.id]?.busy} onClick={() => void test(p.id)} disabled={!saved[p.id] && !(drafts[p.id] ?? "").trim()}>
+              Test
+            </ToolBtn>
+            {saved[p.id] && (
+              <ToolBtn onClick={() => clear(p.id)} title="Remove this key">
+                <X className="h-3 w-3" />
+              </ToolBtn>
+            )}
+          </div>
+          {res[p.id] && (
+            <div className={`text-[10px] ${res[p.id].ok ? "text-emerald-400" : "text-amber-300/90"}`}>
+              {res[p.id].message}
+            </div>
+          )}
+          <div className="text-[10px] text-muted-foreground">{p.hint}</div>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -722,10 +825,18 @@ function AIWriter({ project }: { project: Project }) {
   const [prompt, setPrompt] = useState("");
   const [out, setOut] = useState("");
   const [thinking, setThinking] = useState(false);
+  const [useCloud, setUseCloud] = useState(false);
+  const [keysPresent, setKeysPresent] = useState(aiKeys.hasAny());
   const fileRef = useRef<HTMLInputElement>(null);
   const name = project.name || "my video";
 
   useEffect(() => () => llmRef.current.dispose(), []);
+
+  // Cloud keys can be added/removed in the Cloud AI tab while this one is open.
+  useEffect(() => {
+    const iv = window.setInterval(() => setKeysPresent(aiKeys.hasAny()), 1500);
+    return () => window.clearInterval(iv);
+  }, []);
 
   async function loadFiles(files: File[] | null) {
     if (!files?.length) return;
@@ -765,19 +876,38 @@ function AIWriter({ project }: { project: Project }) {
   }
 
   async function ask(p: string) {
-    if (!llmRef.current.ready) {
-      toast.info("Load a local model first — or keep editing, AI is optional");
+    const localReady = llmRef.current.ready;
+    const cloudReady = keysPresent;
+    if (!localReady && !cloudReady) {
+      toast.info("No local model and no cloud key — AI is optional, keep editing (see Cloud AI tab)");
       return;
     }
     setThinking(true);
     setOut("");
     try {
-      const r = await llmRef.current.ask(p, setStatus);
-      setOut(r);
-      setStatus(null);
+      if (!localReady || useCloud) {
+        const r = await cloudChat(
+          [
+            {
+              role: "system",
+              content:
+                "You are the writing assistant inside MayoCut, an offline video editor. Be concise and practical. " +
+                "For lists, use one idea per line, no numbering, max 80 words total.",
+            },
+            { role: "user", content: p },
+          ],
+          { onTry: (n) => setStatus(`Asking ${n}…`) },
+        );
+        setOut(r.text);
+        setStatus(`via ${r.provider} (${r.model})`);
+      } else {
+        const r = await llmRef.current.ask(p, setStatus);
+        setOut(r);
+        setStatus(null);
+      }
     } catch (e) {
       setStatus(null);
-      toast.error(e instanceof Error ? e.message : "The local model failed");
+      toast.error(e instanceof Error ? e.message : "AI request failed");
     } finally {
       setThinking(false);
     }
@@ -821,6 +951,23 @@ function AIWriter({ project }: { project: Project }) {
         )}
         <p className="text-[10px] text-muted-foreground">
           Tip: small models (7–13B, Q4) are the sweet spot. Loading a 4 GB file can take a couple of minutes.
+        </p>
+      </div>
+
+      <div className="border border-border rounded-lg p-2.5 space-y-1">
+        <label className="flex items-center gap-2 text-[11px]">
+          <input
+            type="checkbox"
+            className="accent-cyan-400"
+            checked={useCloud}
+            onChange={(e) => setUseCloud(e.target.checked)}
+          />
+          Prefer cloud AI (your keys from the Cloud AI tab)
+        </label>
+        <p className="text-[10px] text-muted-foreground leading-snug">
+          {keysPresent
+            ? "Cloud keys available — requests go straight from this device to the provider with automatic failover. Uncheck to use the local model when one is loaded."
+            : "No cloud keys stored yet — add one in the Cloud AI tab. Without keys (and without a local model) this tab simply stays idle; the editor itself never needs AI."}
         </p>
       </div>
 
@@ -902,12 +1049,14 @@ function ToolBtn({
   busy,
   primary,
   disabled,
+  title,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   busy?: boolean;
   primary?: boolean;
   disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
@@ -916,6 +1065,7 @@ function ToolBtn({
       }`}
       onClick={onClick}
       disabled={busy || disabled}
+      title={title}
     >
       {busy && <span className="inline-block h-3 w-3 border-2 border-current border-t-transparent rounded-full animate-spin" />}
       {children}

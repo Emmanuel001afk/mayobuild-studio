@@ -18,6 +18,7 @@ export interface MediaItem {
   isGif?: boolean; // animated sticker (frames decoded from the stored blob)
   gifFrames?: number;
   denoised?: boolean; // audio processed by the RNNoise denoise batch
+  unplayable?: boolean; // video track can't be decoded on this device (codec)
 }
 
 export interface FilterAdjust {
@@ -118,6 +119,25 @@ export const TEXT_ANIMS: { id: TextAnim; name: string }[] = [
   { id: "neon", name: "Neon pulse" },
 ];
 
+/** Text fonts — built from font stacks present on Android, iOS and desktop,
+ *  so exports look the same on every device (no font downloads needed). */
+export const FONTS: { id: string; name: string; css: string }[] = [
+  { id: "system", name: "Modern (default)", css: '"Inter", "Segoe UI", system-ui, sans-serif' },
+  { id: "serif", name: "Classic serif", css: 'Georgia, "Times New Roman", serif' },
+  { id: "condensed", name: "Condensed", css: '"Arial Narrow", "Roboto Condensed", sans-serif' },
+  { id: "slab", name: "Slab", css: 'Rockwell, "Roboto Slab", "Courier New", serif' },
+  { id: "impact", name: "Impact (loud)", css: 'Impact, "Arial Black", sans-serif' },
+  { id: "mono", name: "Typewriter mono", css: '"SF Mono", ui-monospace, "Roboto Mono", monospace' },
+  { id: "script", name: "Script (handwritten)", css: '"Brush Script MT", "Segoe Script", cursive' },
+  { id: "rounded", name: "Rounded (casual)", css: '"Comic Sans MS", "Comic Neue", cursive' },
+  { id: "elegant", name: "Elegant", css: '"Palatino Linotype", Palatino, "Book Antiqua", serif' },
+  { id: "fancy", name: "Fancy (blackletter)", css: '"Old English Text MT", "UnifrakturMaguntia", serif' },
+];
+
+export function fontCss(id?: string): string {
+  return FONTS.find((f) => f.id === id)?.css ?? FONTS[0].css;
+}
+
 export type BlendMode =
   | "normal"
   | "multiply"
@@ -154,6 +174,7 @@ export interface OverlayClip {
   color?: string;
   bg?: string; // css color or "" for none
   bold?: boolean;
+  font?: string; // FONTS id
   pos?: TextPos;
   anim?: TextAnim;
   words?: TextWord[]; // per-word timing (karaoke)

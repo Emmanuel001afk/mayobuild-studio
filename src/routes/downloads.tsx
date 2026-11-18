@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 
 const REPO = "Emmanuel001afk/mayobuild-studio";
-const VERSION = "0.6.1";
+const VERSION = "0.6.2";
 const LATEST = `https://github.com/${REPO}/releases/latest/download`;
 const EXE_URL = `${LATEST}/mayobuild-studio-setup-${VERSION}.exe`;
 const APK_URL = `${LATEST}/mayobuild-studio-android-${VERSION}.apk`;
