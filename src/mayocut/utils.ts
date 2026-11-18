@@ -26,8 +26,26 @@ export function kindFromMime(mime: string, name: string): MediaKind | null {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (
     [
-      "mp4", "m4v", "mov", "webm", "mkv", "avi", "3gp", "3g2", "flv", "ts", "mts",
-      "m2ts", "mpg", "mpeg", "wmv", "vob", "ogv", "hevc", "h265", "h264",
+      "mp4",
+      "m4v",
+      "mov",
+      "webm",
+      "mkv",
+      "avi",
+      "3gp",
+      "3g2",
+      "flv",
+      "ts",
+      "mts",
+      "m2ts",
+      "mpg",
+      "mpeg",
+      "wmv",
+      "vob",
+      "ogv",
+      "hevc",
+      "h265",
+      "h264",
     ].includes(ext)
   )
     return "video";
