@@ -53,6 +53,10 @@ import { Timeline } from "./Timeline";
 import { Inspector } from "./Inspector";
 import { Assist } from "./Assist";
 
+const MEDIA_ACCEPT =
+  "video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.3gp,.3g2,.flv,.ts,.mts,.m2ts,.mpg,.mpeg,.wmv,.vob,.ogv,image/*,.bmp,.heic,.heif,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac";
+const AUDIO_ACCEPT = "audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac";
+
 export type Selection =
   { lane: "main"; id: string } | { lane: "overlay"; trackId: string; id: string } | null;
 
@@ -148,7 +152,7 @@ export function Editor({
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [assistOpen, setAssistOpen] = useState(false);
-  const [assistInitialTab, setAssistInitialTab] = useState<"tools" | "ai" | "cloud" | "captions" | "voice">("tools");
+  const [assistInitialTab, setAssistInitialTab] = useState<\n    "tools" | "ai" | "cloud" | "captions" | "voice"\n  >("tools");
   const isMobile = useIsMobile();
   const landscape = useOrientationLandscape();
   // Rotated (landscape) phones: compact the fixed chrome so the preview stays
@@ -156,7 +160,7 @@ export function Editor({
   const compact = isMobile && landscape;
   const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
   const [workspaceTab, setWorkspaceTab] = useState<
-    "media" | "audio" | "text" | "stickers" | "effects" | "filters" | "transitions" | "captions" | "ai"
+    | "media"\n    | "audio"\n    | "text"\n    | "stickers"\n    | "effects"\n    | "filters"\n    | "transitions"\n    | "captions"\n    | "ai"
   >("media");
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
@@ -1703,7 +1707,7 @@ export function Editor({
                 ref={fileRef}
                 type="file"
                 multiple
-                accept="video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.3gp,.3g2,.flv,.ts,.mts,.m2ts,.mpg,.mpeg,.wmv,.vob,.ogv,image/*,.bmp,.heic,.heif,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+                accept={MEDIA_ACCEPT}
                 className="hidden"
                 onChange={(e) => {
                   void onImport(e.target.files);
@@ -1746,7 +1750,7 @@ export function Editor({
               ref={fileRef}
               type="file"
               multiple
-              accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+              accept={AUDIO_ACCEPT}
               className="hidden"
               onChange={(e) => {
                 void onImport(e.target.files);
@@ -1880,7 +1884,7 @@ export function Editor({
         {workspaceTab === "transitions" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
             <p className="text-[10px] text-muted-foreground mb-2">
-              Choose the incoming transition for the selected clip. The first clip has no incoming transition.
+              Choose the incoming transition for the selected clip. The first clip has no incoming\n              transition.
             </p>
             {TRANSITIONS.map((transition) => (
               <button
@@ -1902,7 +1906,7 @@ export function Editor({
             <Clapperboard className="h-7 w-7 text-primary" />
             <p className="text-xs font-semibold">Auto captions</p>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Generate editable, timed subtitles from your main-track audio using the on-device Whisper workflow.
+              Generate editable, timed subtitles from your main-track audio using the on-device\n              Whisper workflow.
             </p>
             <button
               className="mb-btn w-full h-8 text-xs"
