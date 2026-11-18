@@ -1009,7 +1009,9 @@ export function Editor({
     const eng = engineRef.current;
     if (!eng) return;
     if (item.kind === "image" && item.unplayable) {
-      toast.error(\n        "This image format cannot be decoded on this device. Convert it to PNG or JPEG first.",\n      );
+      toast.error(
+        "This image format cannot be decoded on this device. Convert it to PNG or JPEG first.",
+      );
       return;
     }
     if (item.kind === "video" && item.unplayable) {
@@ -1725,7 +1727,8 @@ export function Editor({
                 }}
               />
               <div className="text-[9px] leading-snug text-muted-foreground">
-                Best compatibility: MP4 with H.264 video and AAC audio. Some HEVC/H.265 clips need\n                conversion.
+                Best compatibility: MP4 with H.264 video and AAC audio. Some HEVC/H.265 clips need
+                conversion.
               </div>
               <div className="flex gap-1">
                 <button
@@ -1792,7 +1795,8 @@ export function Editor({
                 {recState.active ? `Stop recording · ${recState.secs}s` : "Record voice / music"}
               </button>
               <p className="text-[10px] text-muted-foreground">
-                Add music, voiceovers and sound effects. Select an audio clip to edit volume, fades\n                and audio effects.
+                Add music, voiceovers and sound effects. Select an audio clip to edit volume, fades
+                and audio effects.
               </p>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-2 grid grid-cols-2 gap-2 content-start">
@@ -1936,7 +1940,8 @@ export function Editor({
             <Sparkles className="h-7 w-7 text-primary" />
             <p className="text-xs font-semibold">AI Studio</p>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Open the assistant for project-aware editing help, voice tools, captions and AI\n              workflows.
+              Open the assistant for project-aware editing help, voice tools, captions and AI
+              workflows.
             </p>
             <button
               className="mb-btn w-full h-8 text-xs"
