@@ -142,15 +142,15 @@ Ranked by (user-visible value / effort):
 8. **Auto reframe / smart crop** — subject-aware crop is ML. Large.
    **Still open.**
 9. **Motion tracking** — ML (object tracker). Large. **Still open.**
-10. **Background removal / retouch / video translation** — ML; rides on the
-    existing ONNX/wllama runtime pattern. Large. **Next AI stage.**
+10. **Background removal / retouch / video translation** — **still-image background removal shipped**: pinned MODNet ONNX model, local ONNX Runtime Web/WASM inference, first-use model download cached in IndexedDB, transparent PNG added as a new overlay without modifying the source. Real native + WASM inference smoke tests pass. Video background removal, retouch and translation remain open.
 11. ~~Color match~~ — **shipped (v0.7)**
 12. ~~GIF export, platform aspect presets~~ — **shipped (v0.7)** (GIF + 8 aspects)
 
 What we have that CapCut does **not** (offline positioning): on-device
-Whisper captions, on-device TTS, on-device denoise, LUT import, template
-packs that travel as files, no account, no watermark, and the whole editor
-works with zero network after first load.
+Whisper captions, on-device TTS, on-device denoise, on-device still-image
+background removal after its one-time ~25 MB model download, LUT import,
+template packs that travel as files, no account, no watermark, and the whole
+editor works with zero network after first load.
 
 ---
 
