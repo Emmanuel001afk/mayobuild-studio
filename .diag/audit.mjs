@@ -880,5 +880,51 @@ await t('gateFor: manual off wins on capable devices', () => {
 });
 
 
+
+// ================= built-in creator templates =================
+const BT = await import('./b-templates.mjs');
+console.log('templates.ts — built-in creator templates');
+const templateMedia = [
+  { id: 'v1', name: 'creator.mp4', kind: 'video', size: 1000, createdAt: 1, duration: 15 },
+  { id: 'i1', name: 'photo-1.jpg', kind: 'image', size: 100, createdAt: 1, duration: 3 },
+  { id: 'i2', name: 'photo-2.jpg', kind: 'image', size: 100, createdAt: 1, duration: 3 },
+  { id: 'i3', name: 'photo-3.jpg', kind: 'image', size: 100, createdAt: 1, duration: 3 },
+  { id: 'a1', name: 'voice.mp3', kind: 'audio', size: 100, createdAt: 1, duration: 20 },
+];
+await t('built-in templates: unique ids and complete labels', () => {
+  const ids = BT.BUILT_IN_TEMPLATES.map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(BT.BUILT_IN_TEMPLATES.length >= 7);
+  assert.ok(BT.BUILT_IN_TEMPLATES.every((x) => x.name && x.desc && x.swatch && x.needs.length));
+});
+await t('built-in templates: every template builds from matching local media', () => {
+  for (const tpl of BT.BUILT_IN_TEMPLATES) {
+    const project = tpl.build(templateMedia);
+    assert.ok(project, `template did not build: ${tpl.id}`);
+    assert.ok(project.name && project.main.length + project.tracks.reduce((n, tr) => n + tr.clips.length, 0) > 0, tpl.id);
+    const mediaById = new Map(templateMedia.map((m) => [m.id, m]));
+    for (const clip of project.main) {
+      const source = mediaById.get(clip.mediaId);
+      assert.ok(source, `${tpl.id}: missing main media ${clip.mediaId}`);
+      const sourceDuration = source.kind === 'image' ? 3 : (source.duration ?? 0);
+      assert.ok(clip.in >= 0 && clip.out > clip.in && clip.out <= sourceDuration + 1e-6,
+        `${tpl.id}: invalid source range ${clip.in}–${clip.out} / ${sourceDuration}`);
+    }
+    for (const tr of project.tracks) for (const clip of tr.clips) {
+      assert.ok(Number.isFinite(clip.start) && clip.start >= 0, `${tpl.id}: invalid overlay start`);
+      assert.ok(Number.isFinite(clip.duration) && clip.duration > 0, `${tpl.id}: invalid overlay duration`);
+    }
+  }
+});
+await t('new creator templates: product and talking-head overlays stay within source duration', () => {
+  for (const id of ['tpl_product_spotlight', 'tpl_talking_head']) {
+    const tpl = BT.BUILT_IN_TEMPLATES.find((x) => x.id === id);
+    const project = tpl?.build(templateMedia);
+    assert.ok(project, id);
+    const end = Math.max(...project.tracks.flatMap((tr) => tr.clips.map((c) => c.start + c.duration)));
+    assert.ok(end <= 15 + 1e-6, `${id}: overlay extends past the 15s source (${end})`);
+  }
+});
+
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
