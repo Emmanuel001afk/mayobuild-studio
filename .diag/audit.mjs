@@ -956,5 +956,27 @@ await t('applyAlphaMask: rejects mismatched dimensions and invalid channels', ()
   assert.throws(() => BM.applyAlphaMask(new Uint8ClampedArray(4), new Uint8Array(4), 1, 1, 0));
 });
 
+// ================= media import format recognition =================
+const U = await import("./b-utils.mjs");
+console.log("utils.ts — media formats");
+await t("video containers include common mobile and desktop camera formats", () => {
+  for (const ext of [
+    "mp4", "m4v", "mov", "webm", "mkv", "avi", "3gp", "3g2",
+    "flv", "ts", "mts", "m2ts", "mpg", "mpeg", "wmv", "vob", "ogv",
+    "hevc", "h265", "h264",
+  ]) {
+    assert.equal(U.kindFromMime("application/octet-stream", `sample.${ext}`), "video", ext);
+  }
+});
+await t("MIME-based video detection works without a filename extension", () => {
+  assert.equal(U.kindFromMime("video/mp4", "camera-file"), "video");
+  assert.equal(U.kindFromMime("video/quicktime", "clip.bin"), "video");
+});
+await t("audio and image file types remain correctly classified", () => {
+  assert.equal(U.kindFromMime("application/octet-stream", "voice.m4a"), "audio");
+  assert.equal(U.kindFromMime("application/octet-stream", "photo.webp"), "image");
+  assert.equal(U.kindFromMime("application/octet-stream", "notes.txt"), null);
+});
+
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
