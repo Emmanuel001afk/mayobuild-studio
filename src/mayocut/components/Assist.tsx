@@ -233,10 +233,28 @@ export function Assist({
         return;
       }
       setBeats(found);
+      // Put the beats on the timeline ruler either way: "cut to the beat" is
+      // only usable if you can SEE the beat, and detect-only used to leave the
+      // ruler empty (the numbers lived in a throwaway panel).
+      const audio = project.tracks
+        .flatMap((tr) => tr.clips)
+        .filter((c) => c.kind === "audio" && c.mediaId === m.id);
+      const clip =
+        audio.find((c) => engine.t >= c.start && engine.t < c.start + c.duration) ?? audio[0];
+      const inSpan = clip
+        ? found.map((b) => b + clip.start).filter((b) => b >= 0 && b <= clip.start + clip.duration)
+        : [];
+
       if (apply) {
         const segs = beatSegments(found, duration);
-        onUndoable((eng) => eng.applyBeatCuts(m, segs));
+        onUndoable((eng) => {
+          eng.setBeats(inSpan);
+          eng.applyBeatCuts(m, segs);
+        });
         toast.success(`Cut to ${segs.length} beat segments`);
+      } else if (inSpan.length) {
+        onUndoable((eng) => eng.setBeats(inSpan));
+        toast.success(`${inSpan.length} beat markers on the ruler`);
       } else {
         toast.success(`Found ${found.length} beat points`);
       }
@@ -422,6 +440,19 @@ export function Assist({
                   Cut to beats
                 </ToolBtn>
               </div>
+              {(project.beats?.length ?? 0) > 0 && (
+                <button
+                  className="mt-1.5 text-[10px] text-muted-foreground hover:text-foreground underline"
+                  onClick={() =>
+                    onUndoable((eng) => {
+                      eng.setBeats([]);
+                      setBeats(null);
+                    })
+                  }
+                >
+                  Clear the {project.beats?.length ?? 0} markers on the ruler
+                </button>
+              )}
             </Tool>
 
             <Tool

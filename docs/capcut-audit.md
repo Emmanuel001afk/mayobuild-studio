@@ -119,6 +119,7 @@ made each item real rather than cosmetic.
 | **Formats** | 4 → **8** canvases (3:4, 4:3, 2:3, 21:9) | `types.ts` |
 | **Undo** | 60 → **80** steps, plus a full **redo** stack (`Ctrl+Shift+Z` / `Ctrl+Y`) that was missing entirely | `Editor.tsx` |
 | **Device** | On-device **storage meter** + persistent-storage request so the browser can't silently evict a project | `ProjectsHome.tsx` |
+| **Assist** | Beat detection now writes markers onto the timeline ruler (detect-only used to leave the ruler empty); "Cut to beats" writes both; a "clear markers" action | `Assist.tsx` |
 | **Captions** | **Word-level re-timing** editor: nudge per word (order-safe), shift the whole caption, re-space evenly, tap a word to seek to it | `types.ts`, `Inspector.tsx` |
 | **Quality gates** | 785 → **0** lint errors; logic audit 37 → **114** assertions; new `smoke-editor.mjs`; CI workflow `audit.yml` | `.diag/`, `scripts/`, `.github/` |
 
