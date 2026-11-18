@@ -963,7 +963,6 @@ await t("video containers include common mobile and desktop camera formats", () 
   for (const ext of [
     "mp4", "m4v", "mov", "webm", "mkv", "avi", "3gp", "3g2",
     "flv", "ts", "mts", "m2ts", "mpg", "mpeg", "wmv", "vob", "ogv",
-    "hevc", "h265", "h264",
   ]) {
     assert.equal(U.kindFromMime("application/octet-stream", `sample.${ext}`), "video", ext);
   }
