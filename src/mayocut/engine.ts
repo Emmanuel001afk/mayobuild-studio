@@ -351,6 +351,7 @@ export class Engine {
     // handed over via attachUrl().
     const record: ElRecord = { el, url: "" };
     this.els.set(media.id, record);
+    this.routeEl(record, media.id);
     return record;
   }
 
@@ -452,6 +453,63 @@ export class Engine {
       rec.fx = chain;
     }
     return chain;
+  }
+
+  /**
+   * Route a media element into the WebAudio FX chain exactly once.
+   *
+   * Every audible element MUST go through WebAudio: once routed, the
+   * element's audio can never also leak out the native output (which is how
+   * "double audio" / echo happens on Android Chromium when an element plays
+   * both ways). Elements created BEFORE the AudioContext exists are
+   * back-filled by the syncElements sweep — without that, clips added after
+   * the first play would bypass volume/FX AND be silent in exports.
+   */
+  private routeEl(rec: ElRecord, mediaId: string) {
+    const ctx = this.audioCtx;
+    if (!ctx || rec.el instanceof HTMLImageElement || rec.sourceNode) return;
+    try {
+      rec.sourceNode = ctx.createMediaElementSource(rec.el as AudioEl);
+      rec.sourceNode.connect(this.ensureFx(mediaId)!.in);
+    } catch {
+      /* element already routed elsewhere — ignore */
+    }
+  }
+
+  /**
+   * Decode a source segment [inS, outS) of a media's embedded audio to mono.
+   * Powers "Extract audio" (CapCut-style detach). On-device limit: sources
+   * up to ~15 min (decodeAudioData needs the whole file in memory).
+   */
+  async extractAudioWav(
+    mediaId: string,
+    inS: number,
+    outS: number
+  ): Promise<{ samples: Float32Array; sampleRate: number; duration: number } | null> {
+    if (!this.audioBufferAllowed(mediaId)) return null;
+    await this.ensureAudio();
+    const buf = await this.audioBuffer(mediaId);
+    if (!buf) return null;
+    const sr = buf.sampleRate;
+    const start = Math.max(0, Math.floor(inS * sr));
+    const end = Math.min(buf.length, Math.ceil(outS * sr));
+    if (end - start < sr * 0.15) return null;
+    const n = end - start;
+    const chs = buf.numberOfChannels;
+    const out = new Float32Array(n);
+    for (let c = 0; c < chs; c++) {
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < n; i++) out[i] += d[start + i] / chs;
+    }
+    return { samples: out, sampleRate: sr, duration: n / sr };
+  }
+
+  /** On-device memory guard for full-file audio decode. */
+  private audioBufferAllowed(mediaId: string): boolean {
+    const m = this.media.get(mediaId);
+    if (!m) return false;
+    if (m.duration == null) return true; // unknown length — let decode decide
+    return m.duration <= 15 * 60;
   }
 
   /** Apply the active clip's FX to its media chain (no-op when nothing is active). */
@@ -609,6 +667,11 @@ export class Engine {
    * source position every frame (its audio is muted — see effectiveVolume).
    */
   private syncElements(hard: boolean) {
+    // Back-fill WebAudio routing for any element created before the
+    // AudioContext existed (see routeEl) — single-pass audio, always.
+    if (this.audioCtx) {
+      for (const [id, rec] of this.els) this.routeEl(rec, id);
+    }
     const spans = mainSpans(this.project);
     const t = this.t;
     const activeIds = new Set<string>();
@@ -621,7 +684,7 @@ export class Engine {
       if (!el) continue;
       if (el instanceof HTMLVideoElement) {
         const local = mainSrcAt(s.clip, t - s.start);
-        if (Math.abs(el.currentTime - local) > (hard ? 0.1 : 0.35)) {
+        if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
           try {
             el.currentTime = Math.max(0, local);
           } catch {
@@ -662,7 +725,7 @@ export class Engine {
               void this.startBufferSource(c, local);
             } else {
               this.stopBufSource(c.mediaId);
-              if (Math.abs(el.currentTime - local) > (hard ? 0.1 : 0.35)) {
+              if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
                 try {
                   el.currentTime = Math.max(0, local);
                 } catch {
@@ -680,7 +743,7 @@ export class Engine {
             const el = this.audioEl(c.mediaId);
             if (el instanceof HTMLVideoElement) {
               const local = t - c.start;
-              if (Math.abs(el.currentTime - local) > (hard ? 0.1 : 0.35)) {
+              if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
                 try {
                   el.currentTime = Math.max(0, local);
                 } catch {

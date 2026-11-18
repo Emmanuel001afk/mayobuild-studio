@@ -5,10 +5,15 @@ directories:
   output: release
   buildResources: ../public
 files:
-  - ../app-shell-dist/**/*
   - main.cjs
   - preload.cjs
   - package.json
+# The web bundle is a REAL folder next to app.asar (not inside it): main.cjs
+# serves it over a local http server, and keeping the big wasm/onnx assets
+# out of the asar avoids slow asar reads and path-resolution traps.
+extraResources:
+  - from: ../app-shell-dist
+    to: app-shell-dist
 asar: true
 win:
   target:
