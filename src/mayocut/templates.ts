@@ -247,6 +247,101 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
       p.tracks[0].clips.push(line1, line2);
       return p;
     },
+  },,
+  {
+    id: "tpl_product_spotlight",
+    name: "Product Spotlight",
+    desc: "A vertical product promo with a bold hook, clean feature callouts and a closing action.",
+    aspect: "9:16",
+    needs: ["video"],
+    swatch: "linear-gradient(135deg,#0f172a 0%,#0e7490 52%,#22c55e 100%)",
+    build: (media) => {
+      const v = media.find((m) => m.kind === "video");
+      if (!v) return null;
+      const p = base("Product Spotlight", "9:16", "Product Spotlight");
+      const dur = Math.max(2.5, Math.min(v.duration ?? 12, 18));
+      p.main = [clip(v, { out: dur, filter: "vivid", adjust: { ...DEFAULT_ADJUST, contrast: 108, saturation: 112 } })];
+      p.tracks[0].clips.push(
+        {
+          id: uid("tc"), kind: "text", start: 0.25, duration: Math.min(2.8, dur * 0.28),
+          text: "MADE TO STAND OUT", size: 76, color: "#ffffff", bg: "#07111dcc",
+          bold: true, pos: "tc", anim: "rise", radius: 24, shadow: 0.45,
+        },
+        {
+          id: uid("tc"), kind: "text", start: Math.max(0.8, dur * 0.38), duration: Math.max(1, dur * 0.28),
+          text: "DESIGNED FOR EVERY DAY", size: 52, color: "#ecfeff", bg: "#0e7490bb",
+          bold: true, pos: "mc", anim: "slideleft", radius: 20,
+        },
+        {
+          id: uid("tc"), kind: "text", start: Math.max(1.2, dur - 2.2), duration: Math.min(2, dur - Math.max(1.2, dur - 2.2)),
+          text: "DISCOVER MORE  →", size: 58, color: "#ffffff", bg: "#16a34acc",
+          bold: true, pos: "bc", anim: "zoom-in", radius: 24,
+        },
+      );
+      return p;
+    },
+  },
+  {
+    id: "tpl_talking_head",
+    name: "Talking-Head Creator",
+    desc: "A clean 16:9 creator layout with a strong opening title and a persistent lower-third identity line.",
+    aspect: "16:9",
+    needs: ["video"],
+    swatch: "linear-gradient(135deg,#1e1b4b 0%,#7c3aed 55%,#ec4899 100%)",
+    build: (media) => {
+      const v = media.find((m) => m.kind === "video");
+      if (!v) return null;
+      const p = base("Talking-Head Creator", "16:9", "Talking-Head Creator");
+      const dur = Math.max(2.5, Math.min(v.duration ?? 30, 60));
+      p.main = [clip(v, { out: dur, filter: "none", fit: "contain" })];
+      p.tracks[0].clips.push(
+        {
+          id: uid("tc"), kind: "text", start: 0.2, duration: Math.min(3.2, dur),
+          text: "YOUR NEXT BIG IDEA", size: 68, color: "#ffffff", bg: "#312e81cc",
+          bold: true, pos: "tc", anim: "slideup", radius: 16,
+        },
+        {
+          id: uid("tc"), kind: "text", start: 1, duration: Math.max(1, dur - 1),
+          text: "YOUR NAME  •  CREATOR", size: 32, color: "#f5f3ff", bg: "#111827bb",
+          bold: true, pos: "bl", anim: "fade", radius: 12,
+        },
+      );
+      return p;
+    },
+  },
+  {
+    id: "tpl_memory_reel",
+    name: "Memory Reel",
+    desc: "A warm portrait montage from your photos, with chapter-like captions and gentle transitions.",
+    aspect: "9:16",
+    needs: ["image"],
+    swatch: "linear-gradient(135deg,#f97316 0%,#db2777 52%,#7c3aed 100%)",
+    build: (media) => {
+      const imgs = media.filter((m) => m.kind === "image").slice(0, 10);
+      if (imgs.length < 2) return null;
+      const p = base("Memory Reel", "9:16", "Memory Reel");
+      p.main = imgs.map((m, i) => clip(m, {
+        out: 3.2,
+        filter: ["warm", "golden", "cinema", "vintage", "soft"][i % 5],
+        transitionIn: i === 0 ? "none" : "crossfade",
+        transitionDur: 0.65,
+        effect: i % 2 === 0 ? "kenburns" : "sway",
+      }));
+      const total = imgs.length * 3.2;
+      p.tracks[0].clips.push(
+        {
+          id: uid("tc"), kind: "text", start: 0.25, duration: 2.6,
+          text: "THE LITTLE MOMENTS", size: 76, color: "#ffffff", bg: "#1c1917aa",
+          bold: true, pos: "tc", anim: "fade", radius: 20,
+        },
+        {
+          id: uid("tc"), kind: "text", start: Math.max(0, total - 2.5), duration: 2.4,
+          text: "MEMORIES THAT STAY", size: 58, color: "#fff7ed", bg: "#7c2d12aa",
+          bold: true, pos: "bc", anim: "rise", radius: 18,
+        },
+      );
+      return p;
+    },
   },
 ];
 
