@@ -2472,6 +2472,7 @@ export function Editor({
         <Assist
           engine={engineRef.current}
           project={engineRef.current.project}
+          initialTab={assistInitialTab}
           media={media}
           onUndoable={undoable}
           onCanvas={() => canvasWrapRef.current?.querySelector("canvas") ?? null}
