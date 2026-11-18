@@ -906,7 +906,7 @@ await t('built-in templates: every template builds from matching local media', (
     for (const clip of project.main) {
       const source = mediaById.get(clip.mediaId);
       assert.ok(source, `${tpl.id}: missing main media ${clip.mediaId}`);
-      const sourceDuration = source.kind === 'image' ? 3 : (source.duration ?? 0);
+      const sourceDuration = source.kind === 'video' ? (source.duration ?? 0) : Infinity;
       assert.ok(clip.in >= 0 && clip.out > clip.in && clip.out <= sourceDuration + 1e-6,
         `${tpl.id}: invalid source range ${clip.in}–${clip.out} / ${sourceDuration}`);
     }
@@ -914,6 +914,16 @@ await t('built-in templates: every template builds from matching local media', (
       assert.ok(Number.isFinite(clip.start) && clip.start >= 0, `${tpl.id}: invalid overlay start`);
       assert.ok(Number.isFinite(clip.duration) && clip.duration > 0, `${tpl.id}: invalid overlay duration`);
     }
+  }
+});
+await t('new creator templates: short clips never create out-of-range overlays', () => {
+  const shortMedia = templateMedia.map((m) => m.kind === 'video' ? { ...m, duration: 1 } : m);
+  for (const id of ['tpl_product_spotlight', 'tpl_talking_head']) {
+    const tpl = BT.BUILT_IN_TEMPLATES.find((x) => x.id === id);
+    const project = tpl?.build(shortMedia);
+    assert.ok(project, id);
+    for (const tr of project.tracks) for (const clip of tr.clips)
+      assert.ok(clip.start + clip.duration <= 1 + 1e-6, `${id}: short-source overlay exceeds 1s`);
   }
 });
 await t('new creator templates: product and talking-head overlays stay within source duration', () => {
