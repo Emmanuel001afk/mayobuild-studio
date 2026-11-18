@@ -19,7 +19,7 @@ const RegisterInput = z.object({
 
 export const registerCustomDomain = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => RegisterInput.parse(d))
+  .validator((d: unknown) => RegisterInput.parse(d))
   .handler(async ({ data }) => {
     const apiKey = process.env.WHOGOHOST_API_KEY;
     if (!apiKey) {
@@ -42,7 +42,7 @@ const SubInput = z.object({ projectId: z.string().uuid(), preferred: z.string().
 
 export const assignFreeSubdomain = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => SubInput.parse(d))
+  .validator((d: unknown) => SubInput.parse(d))
   .handler(async ({ data }) => {
     const label = data.preferred
       .toLowerCase()
@@ -56,7 +56,7 @@ export const assignFreeSubdomain = createServerFn({ method: "POST" })
 
 export const getDefaultProjectSubdomain = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({ projectId: z.string().uuid(), projectName: z.string().min(1).max(120) }).parse(d))
+  .validator((d: unknown) => z.object({ projectId: z.string().uuid(), projectName: z.string().min(1).max(120) }).parse(d))
   .handler(async ({ data }) => {
     const preferred = data.projectName
       .toLowerCase()

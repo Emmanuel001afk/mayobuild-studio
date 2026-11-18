@@ -243,7 +243,7 @@ function wrapperPackageJson(name: string) {
 
 export const wrapWebsiteAsApp = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => WrapInput.parse(d))
+  .validator((d: unknown) => WrapInput.parse(d))
   .handler(async ({ data, context }) => {
     const { default: JSZip } = await import("jszip");
     const html = responsiveWrap(data.html);
@@ -287,7 +287,7 @@ export const wrapWebsiteAsApp = createServerFn({ method: "POST" })
 
 export const generateMobileApp = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => GenInput.parse(d))
+  .validator((d: unknown) => GenInput.parse(d))
   .handler(async ({ data, context }) => {
     const { default: JSZip } = await import("jszip");
     const result = await routeChat("mobile_code", [

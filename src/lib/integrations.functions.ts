@@ -47,7 +47,7 @@ const SaveInput = z.object({
 
 export const saveIntegration = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => SaveInput.parse(d))
+  .validator((d: unknown) => SaveInput.parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     const row: Record<string, unknown> = {
@@ -73,7 +73,7 @@ export const saveIntegration = createServerFn({ method: "POST" })
 
 export const deleteIntegration = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({ provider: ProviderEnum }).parse(d))
+  .validator((d: unknown) => z.object({ provider: ProviderEnum }).parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     await admin

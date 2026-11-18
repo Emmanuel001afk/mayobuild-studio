@@ -12,6 +12,7 @@ import { Toaster } from "sonner";
 import { getSupabase } from "@/integrations/mysupabase/client";
 
 import appCss from "../styles.css?url";
+import { isShellApp } from "@/lib/shell";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
 function NotFoundComponent() {
@@ -36,7 +37,7 @@ function NotFoundComponent() {
   );
 }
 
-function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
+function ErrorComponent({ error, reset }: { error: unknown; reset: () => void }) {
   console.error(error);
   const router = useRouter();
   useEffect(() => {
@@ -102,7 +103,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "icon", type: "image/png", href: "/icons/icon-192.png" },
     ],
   }),
-  shellComponent: RootShell,
+  // The document shell (<html>/<head>/<body>) is only valid for the SSR web
+  // build, where the router owns the document. The native shell (APK/EXE)
+  // mounts the router into <div id="root"> inside its OWN document — rendering
+  // a nested <html> there breaks React's first commit (blank screen on device).
+  ...(isShellApp() ? {} : { shellComponent: RootShell }),
   component: RootComponent,
   notFoundComponent: NotFoundComponent,
   errorComponent: ErrorComponent,
@@ -142,6 +147,11 @@ function RootComponent() {
   }, []);
 
   useEffect(() => {
+    // Native shell (APK/EXE): there is no server endpoint providing the
+    // Supabase config — the app is offline-first by design. Subscribing to
+    // auth here would just produce an unhandled rejection (and a bogus
+    // "failed to start" overlay) on every launch.
+    if (isShellApp()) return;
     let unsubscribe: (() => void) | undefined;
 
     void (async () => {

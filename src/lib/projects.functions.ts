@@ -48,7 +48,7 @@ const CreateInput = z.object({
 
 export const createProject = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => CreateInput.parse(d))
+  .validator((d: unknown) => CreateInput.parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     let { data: ws } = await admin
@@ -83,7 +83,7 @@ export const createProject = createServerFn({ method: "POST" })
 
 export const getProject = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .validator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const admin = getAdmin();
     const { data: project, error } = await admin
@@ -116,7 +116,7 @@ export const getProject = createServerFn({ method: "POST" })
 const SaveOutput = z.object({ id: z.string().uuid(), preview_html: z.string().max(500000) });
 export const savePreview = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => SaveOutput.parse(d))
+  .validator((d: unknown) => SaveOutput.parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     const { error } = await admin
@@ -135,7 +135,7 @@ const InviteInput = z.object({
 });
 export const inviteCollaborator = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => InviteInput.parse(d))
+  .validator((d: unknown) => InviteInput.parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     const { data: p } = await admin
@@ -179,7 +179,7 @@ const PublishInput = z.object({
  */
 export const publishSite = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => PublishInput.parse(d))
+  .validator((d: unknown) => PublishInput.parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
 
@@ -363,7 +363,7 @@ export const publishSite = createServerFn({ method: "POST" })
 
 export const deleteProject = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .validator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     const { data: p } = await admin
@@ -412,7 +412,7 @@ const ApiKeyInput = z.object({
 });
 export const saveApiKey = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => ApiKeyInput.parse(d))
+  .validator((d: unknown) => ApiKeyInput.parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     // Ownership check — prevent any authenticated user from overwriting another owner's
@@ -436,7 +436,7 @@ export const saveApiKey = createServerFn({ method: "POST" })
 
 export const listApiKeys = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({ projectId: z.string().uuid() }).parse(d))
+  .validator((d: unknown) => z.object({ projectId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     const { data: rows } = await admin
@@ -456,7 +456,7 @@ export const listApiKeys = createServerFn({ method: "POST" })
  */
 export const runProjectSQL = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     sql: z.string().min(1).max(50_000),
   }).parse(d))
@@ -523,7 +523,7 @@ export const runProjectSQL = createServerFn({ method: "POST" })
  */
 export const linkGitHubRepo = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     github_repo: z.string().min(1).max(200),
   }).parse(d))
@@ -545,7 +545,7 @@ export const linkGitHubRepo = createServerFn({ method: "POST" })
  */
 export const readGitHubFile = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     filePath: z.string().min(1).max(500),
   }).parse(d))
@@ -576,7 +576,7 @@ export const readGitHubFile = createServerFn({ method: "POST" })
  */
 export const listGitHubFiles = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({ projectId: z.string().uuid() }).parse(d))
+  .validator((d: unknown) => z.object({ projectId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     const { data: project } = await admin
@@ -609,7 +609,7 @@ export const listGitHubFiles = createServerFn({ method: "POST" })
  */
 export const selfFixCommit = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     files: z.record(z.string(), z.string()),
     reason: z.string().max(500),
@@ -673,7 +673,7 @@ export const selfFixCommit = createServerFn({ method: "POST" })
  */
 export const adminAICommand = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     command: z.string().min(1).max(2000),
     autoMode: z.boolean().default(true),
@@ -719,7 +719,7 @@ export const adminAICommand = createServerFn({ method: "POST" })
  */
 export const checkVercelDeployment = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     github_repo: z.string(),
   }).parse(d))
@@ -792,7 +792,7 @@ export const checkVercelDeployment = createServerFn({ method: "POST" })
  */
 export const autoFixFromVercelError = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     errorLog: z.string(),
     github_repo: z.string(),
@@ -936,7 +936,7 @@ export const autoFixFromVercelError = createServerFn({ method: "POST" })
  */
 export const runScheduledHealthCheck = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({ userId: z.string() }).parse(d))
+  .validator((d: unknown) => z.object({ userId: z.string() }).parse(d))
   .handler(async ({ data, context }) => {
     const { admin } = context;
     const { data: projects } = await admin
@@ -996,7 +996,7 @@ export const runScheduledHealthCheck = createServerFn({ method: "POST" })
  */
 export const pullFromGitHub = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({ projectId: z.string().uuid() }).parse(d))
+  .validator((d: unknown) => z.object({ projectId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const { admin, user } = context;
     const { data: project } = await admin
@@ -1048,7 +1048,7 @@ export const pullFromGitHub = createServerFn({ method: "POST" })
  */
 export const pushToCloudflare = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     files: z.record(z.string(), z.string()),
     projectName: z.string(),
@@ -1128,7 +1128,7 @@ export const pushToCloudflare = createServerFn({ method: "POST" })
  */
 export const saveProjectKnowledge = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     description: z.string().max(1000),
     importantFiles: z.array(z.string()).optional(),
@@ -1159,7 +1159,7 @@ export const saveProjectKnowledge = createServerFn({ method: "POST" })
  */
 export const generateDiffPreview = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     oldFiles: z.record(z.string(), z.string()),
     newFiles: z.record(z.string(), z.string()),
@@ -1194,7 +1194,7 @@ export const generateDiffPreview = createServerFn({ method: "POST" })
  */
 export const remixProject = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     sourceProjectId: z.string().uuid(),
     newName: z.string().min(1).max(100),
   }).parse(d))
@@ -1229,7 +1229,7 @@ export const remixProject = createServerFn({ method: "POST" })
 // confirms the live site is reachable. Called automatically by projects.$id.tsx.
 export const runFullVerificationLoop = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) => z.object({
+  .validator((d: unknown) => z.object({
     projectId: z.string().uuid(),
     github_repo: z.string(),
     expectedChanges: z.array(z.string()).optional(),

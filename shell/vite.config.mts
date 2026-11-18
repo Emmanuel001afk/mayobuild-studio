@@ -31,6 +31,7 @@ function shellStartStubs(): Plugin {
   const V_START_ENTRY = "\0shell:tanstack-start-entry";
   const V_ROUTER_ENTRY = "\0shell:tanstack-router-entry";
   const V_MANIFEST = "\0shell:tanstack-start-manifest";
+  const V_STORAGE_CTX = "\0shell:start-storage-context";
   return {
     name: "shell-start-stubs",
     enforce: "pre",
@@ -38,6 +39,12 @@ function shellStartStubs(): Plugin {
       if (id === "#tanstack-start-entry") return V_START_ENTRY;
       if (id === "#tanstack-router-entry") return V_ROUTER_ENTRY;
       if (id === "tanstack-start-manifest:v") return V_MANIFEST;
+      // start-storage-context's real module does `new AsyncLocalStorage()`
+      // (node:async_hooks) at TOP LEVEL — that throws in the browser bundle
+      // (externalized node builtin = undefined) and blanks the whole app.
+      // Its only exports are used inside server-only closures, so a browser
+      // stub with identical throwing semantics is safe.
+      if (id === "@tanstack/start-storage-context") return V_STORAGE_CTX;
       return null;
     },
     load(id) {
@@ -46,6 +53,15 @@ function shellStartStubs(): Plugin {
         return "export async function getRouter() { throw new Error('shell build: TanStack Start router entry is not used by the SPA shell'); }";
       if (id === V_MANIFEST)
         return "export function tsrStartManifest() { return { routes: { __root: {} } }; }";
+      if (id === V_STORAGE_CTX)
+        return `
+function noContext(opts) {
+  if (opts?.throwIfNotFound !== false) throw new Error("No Start context (offline shell build — server functions are unavailable)");
+  return undefined;
+}
+export function getStartContext(opts) { return noContext(opts); }
+export function runWithStartContext(_context, fn) { return fn(); }
+`;
       return null;
     },
   };

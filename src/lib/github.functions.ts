@@ -78,7 +78,7 @@ const RepoInput = z.object({ repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/) });
 /** Read a repo's file tree + text file contents (bidirectional sync: the "pull" half). */
 export const githubImportRepo = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) =>
+  .validator((d: unknown) =>
     RepoInput.extend({ maxFiles: z.number().min(1).max(200).optional() }).parse(d),
   )
   .handler(async ({ data, context }) => {
@@ -116,7 +116,7 @@ export const githubImportRepo = createServerFn({ method: "POST" })
 /** Push files to any repo the token can reach (bidirectional sync: the "push" half). */
 export const githubPushFiles = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .inputValidator((d: unknown) =>
+  .validator((d: unknown) =>
     RepoInput.extend({
       files: z.record(z.string(), z.string()),
       message: z.string().max(200).optional(),
