@@ -16,10 +16,15 @@ on:
   push:
     branches: ["main"]
     paths:
+      - "src/**"
+      - "android/**"
+      - "desktop/**"
+      - "shell/**"
+      - "scripts/**"
       - "package.json"
       - "package-lock.json"
-      - "src/mayocut/background.ts"
-      - "scripts/onnx-assets.mjs"
+      - "tsconfig*.json"
+      - "vite.config.*"
       - ".github/workflows/verify.yml"
     tags:
       - "mc-*"
@@ -113,15 +118,16 @@ jobs:
       - name: Verify on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 35
+          target: google_apis
           arch: x86_64
-          profile: pixel_7
+          profile: pixel_2
           disable-verbose-logging: true
           disable-animations: true
-          boot-timeout: 300000
+          boot-timeout: 600000
           emulator-options: >-
             -no-snapshot -gpu swiftshader_indirect
-            -no-window -no-audio -no-boot-anim -headless
+            -no-window -no-audio -no-boot-anim
           install-apk: android/app/build/outputs/apk/debug/app-debug.apk
           script: |
             set -e
