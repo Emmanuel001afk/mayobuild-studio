@@ -31,7 +31,7 @@ on:
         default: "v0.1.0"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: distribute
@@ -63,6 +63,8 @@ jobs:
     # windows-latest: NSIS + rcedit run natively (no Wine needed for
     # resource/icon editing, which is what Linux runners lack).
     runs-on: windows-latest
+    env:
+      MAYOBUILD_RELEASE_TOKEN: ${{ secrets.MAYOBUILD_RELEASE_TOKEN }}
     needs: shell
     steps:
       - uses: actions/checkout@v4
@@ -88,19 +90,33 @@ jobs:
           git config user.email "ci@mayobuild" && git config user.name "Mayobuild CI"
           git add .diag/windows.txt && git commit -m "diag: windows failure run ${GITHUB_RUN_ID}" --allow-empty
           git push origin "HEAD:refs/heads/diag-windows" --force 2>&1 || true
-      - name: Upload to release
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mayobuild-studio-windows-${{ needs.shell.outputs.version }}
+          path: desktop/release/*.exe
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload to GitHub Release
+        if: ${{ env.MAYOBUILD_RELEASE_TOKEN != '' }}
         shell: bash # pwsh (windows-latest default) does not expand *.exe globs
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ env.MAYOBUILD_RELEASE_TOKEN }}
           RELEASE_TAG: ${{ github.event.inputs.release || format('v{0}', needs.shell.outputs.version) }}
         run: |
           ls -la desktop/release
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "Mayobuild Studio $RELEASE_TAG" --notes "Mayobuild Studio (full app, incl. the MayoCut video editor) — $RELEASE_TAG" --target "$GITHUB_SHA"
           gh release upload "$RELEASE_TAG" desktop/release/*.exe --clobber
+      - name: Explain release upload configuration
+        if: ${{ env.MAYOBUILD_RELEASE_TOKEN == '' }}
+        shell: bash
+        run: echo "Installer artifact uploaded. Configure MAYOBUILD_RELEASE_TOKEN with repository Contents write access to publish release assets automatically."
 
   android:
     name: Android .apk
     runs-on: ubuntu-latest
+    env:
+      MAYOBUILD_RELEASE_TOKEN: ${{ secrets.MAYOBUILD_RELEASE_TOKEN }}
     needs: shell
     steps:
       - uses: actions/checkout@v4
@@ -131,13 +147,29 @@ jobs:
           git config user.email "ci@mayobuild" && git config user.name "Mayobuild CI"
           git add .diag/android.txt && git commit -m "diag: android failure run ${GITHUB_RUN_ID}" --allow-empty
           git push origin "HEAD:refs/heads/diag-android" --force 2>&1 || true
-      - name: Upload to release
+      - name: Prepare APK artifact
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APK_NAME: mayobuild-studio-android-${{ needs.shell.outputs.version }}.apk
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk "./$APK_NAME"
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mayobuild-studio-android-${{ needs.shell.outputs.version }}
+          path: mayobuild-studio-android-*.apk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload to GitHub Release
+        if: ${{ env.MAYOBUILD_RELEASE_TOKEN != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ env.MAYOBUILD_RELEASE_TOKEN }}
           RELEASE_TAG: ${{ github.event.inputs.release || format('v{0}', needs.shell.outputs.version) }}
           APK_NAME: mayobuild-studio-android-${{ needs.shell.outputs.version }}.apk
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "Mayobuild Studio $RELEASE_TAG" --notes "Mayobuild Studio (full app, incl. the MayoCut video editor) — $RELEASE_TAG" --target "$GITHUB_SHA"
-          cp android/app/build/outputs/apk/debug/app-debug.apk "./$APK_NAME"
           gh release upload "$RELEASE_TAG" "./$APK_NAME" --clobber
+      - name: Explain release upload configuration
+        if: ${{ env.MAYOBUILD_RELEASE_TOKEN == '' }}
+        shell: bash
+        run: echo "APK artifact uploaded. Configure MAYOBUILD_RELEASE_TOKEN with repository Contents write access to publish release assets automatically."
