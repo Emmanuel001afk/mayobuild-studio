@@ -66,17 +66,6 @@ export function Timeline(p: Props) {
     ...spans.flatMap((s) => [s.start, s.end]),
     ...project.tracks.flatMap((tr) => tr.clips.flatMap((clip) => [clip.start, clip.start + clip.duration])),
   ];
-  const snapTime = (value: number) => {
-    if (!snapEnabled) return value;
-    const threshold = 8 / pps;
-    let best = value;
-    let distance = threshold;
-    for (const point of snapPoints) {
-      const delta = Math.abs(point - value);
-      if (delta <= distance) { best = point; distance = delta; }
-    }
-    return best;
-  };
   const fitTimeline = () => {
     const el = scrollRef.current;
     if (!el) return;
