@@ -33,6 +33,7 @@ import {
   smartColor,
 } from "../assist";
 import { db } from "../idb";
+import { removeImageBackground } from "../background";
 import type { Engine } from "../engine";
 import { fmtTime } from "../utils";
 import type { MediaItem, OverlayClip, Project } from "../types";
@@ -83,8 +84,12 @@ export function Assist({
   const [beats, setBeats] = useState<number[] | null>(null);
   const [silenceMediaId, setSilenceMediaId] = useState("");
   const [silence, setSilence] = useState<{ lead: number; trail: number } | null>(null);
+  const [backgroundStatus, setBackgroundStatus] = useState<{ msg: string; pct?: number } | null>(null);
   const audioMedia = media.filter((m) => m.kind === "audio" || m.kind === "video");
   const audioOnly = media.filter((m) => m.kind === "audio");
+  const selectedImage = selectedClip?.mediaId
+    ? media.find((item) => item.id === selectedClip.mediaId && item.kind === "image")
+    : undefined;
 
   // --- local captions (Whisper) ---
   const [capModel, setCapModel] = useState<WhisperModelId>("Xenova/whisper-tiny");
@@ -333,6 +338,39 @@ export function Assist({
     toast.success(`Look applied: ${sc.reason}`);
   }
 
+  async function runBackgroundRemoval() {
+    if (!selectedImage) return;
+    setBusy("background");
+    setBackgroundStatus({ msg: "Preparing image…" });
+    try {
+      const source = await db.getBlob(selectedImage.id);
+      if (!source) throw new Error("The selected image is not stored on this device");
+      const result = await removeImageBackground(source, (msg, pct) =>
+        setBackgroundStatus({ msg, pct }),
+      );
+      const output: MediaItem = {
+        id: uid("med"),
+        name: `${selectedImage.name.replace(/\\.[^.]+$/, "")}-no-background.png`,
+        kind: "image",
+        size: result.blob.size,
+        createdAt: Date.now(),
+        width: result.width,
+        height: result.height,
+      };
+      await db.putMedia(output, result.blob);
+      onUndoable((eng) => {
+        eng.setMedia([...media, output]);
+        eng.addImageOverlay("t_overlay", output, eng.t);
+      });
+      toast.success("Transparent cutout added as a new overlay — your original image is unchanged");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Background removal failed");
+    } finally {
+      setBusy(null);
+      setBackgroundStatus(null);
+    }
+  }
+
   async function runSilence(apply: boolean) {
     const m = media.find((x) => x.id === silenceMediaId);
     if (!m || m.kind !== "audio") return;
@@ -477,6 +515,39 @@ export function Assist({
                 </ToolBtn>
               </div>
             </Tool>
+
+            <FeatureGate gate={can("ai")} label="AI background removal">
+              <Tool
+                icon={<Sparkles className="h-4 w-4" />}
+                title="Remove image background"
+                desc="Portrait matting runs on this device. The model downloads once, is cached for offline use, and adds a transparent copy as a new overlay without changing your original."
+              >
+                <div className="text-[10px] text-muted-foreground">
+                  {selectedImage ? `Selected: ${selectedImage.name}` : "Select an image clip on the timeline first."}
+                </div>
+                <ToolBtn
+                  primary
+                  busy={busy === "background"}
+                  disabled={!selectedImage}
+                  onClick={() => void runBackgroundRemoval()}
+                >
+                  Remove background
+                </ToolBtn>
+                {backgroundStatus && (
+                  <div className="text-[10px] text-muted-foreground">
+                    {backgroundStatus.msg}
+                    {typeof backgroundStatus.pct === "number" && (
+                      <div className="h-1 bg-slate-800 rounded mt-1 overflow-hidden">
+                        <div
+                          className="h-full bg-primary"
+                          style={{ width: `${Math.round(backgroundStatus.pct * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Tool>
+            </FeatureGate>
 
             <Tool
               icon={<Palette className="h-4 w-4" />}
