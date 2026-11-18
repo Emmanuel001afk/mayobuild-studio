@@ -36,7 +36,7 @@ async function getSegmenter(
       env.backends.onnx.wasm.wasmPaths = assetBase() + "onnx/";
       const pipe = await pipeline("image-segmentation", MODEL_ID, {
         revision: MODEL_REVISION,
-        dtype: "fp32",
+        quantized: false,
         progress_callback: (event: Progress) => {
           if (event.status === "progress" && typeof event.progress === "number") {
             onProgress?.(`Downloading ${event.file ?? "background model"}…`, event.progress);
@@ -85,11 +85,7 @@ export async function removeImageBackground(
     ctx.drawImage(bitmap, 0, 0);
     const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const rgba = applyAlphaMask(frame.data, mask.data, canvas.width, canvas.height, mask.channels);
-    ctx.putImageData(
-      new ImageData(new Uint8ClampedArray(rgba), canvas.width, canvas.height),
-      0,
-      0,
-    );
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), canvas.width, canvas.height), 0, 0);
     const blob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((value) => {
         if (value) resolve(value);
