@@ -60,3 +60,40 @@ console.log(
   `MODNET SMOKE PASS — output [${matte.dims.join("×")}], range ${min.toFixed(3)}–${max.toFixed(3)}, foreground ${(foregroundRatio * 100).toFixed(1)}%`,
 );
 
+
+let webInferencePassed = false;
+process.on("exit", () => {
+  // ORT Web 1.14's Node-only worker teardown can set exitCode=7 after a
+  // successful run. Do not mask inference/assertion failures.
+  if (webInferencePassed && process.exitCode === 7) process.exitCode = 0;
+});
+const webModule = await import("onnxruntime-web");
+const webRuntime = webModule.default ?? webModule;
+webRuntime.env.wasm.numThreads = 1;
+webRuntime.env.wasm.proxy = false;
+webRuntime.env.wasm.wasmPaths = new URL("../node_modules/onnxruntime-web/dist/", import.meta.url).href;
+const webSession = await webRuntime.InferenceSession.create(model, {
+  executionProviders: ["wasm"],
+  graphOptimizationLevel: "all",
+});
+const webInput = new webRuntime.Tensor("float32", pixels, [1, 3, height, width]);
+console.log("Running MODNet through ONNX Runtime Web/WASM…");
+const webOutput = await webSession.run({ [webSession.inputNames[0]]: webInput });
+const webMatte = webOutput[webSession.outputNames[0]];
+assert.ok(webMatte, "ONNX Runtime Web returned no matte");
+assert.deepEqual(webMatte.dims, [1, 1, height, width], "Unexpected ONNX Runtime Web matte dimensions");
+let webMin = Infinity;
+let webMax = -Infinity;
+let webForeground = 0;
+for (const value of webMatte.data) {
+  webMin = Math.min(webMin, value);
+  webMax = Math.max(webMax, value);
+  if (value > 0.5) webForeground++;
+}
+const webForegroundRatio = webForeground / webMatte.data.length;
+assert.ok(webMax - webMin > 0.1, "WASM matte has no foreground/background variation");
+assert.ok(webForegroundRatio > 0.03 && webForegroundRatio < 0.9, `Unexpected WASM foreground ratio: ${webForegroundRatio}`);
+webInferencePassed = true;
+console.log(
+  `WEB-WASM MODNET PASS — output [${webMatte.dims.join("×")}], foreground ${(webForegroundRatio * 100).toFixed(1)}%`,
+);
