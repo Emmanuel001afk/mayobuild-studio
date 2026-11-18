@@ -260,22 +260,59 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
       if (!v) return null;
       const p = base("Product Spotlight", "9:16", "Product Spotlight");
       const dur = Math.max(0.5, Math.min(v.duration ?? 12, 18));
-      p.main = [clip(v, { out: dur, filter: "vivid", adjust: { ...DEFAULT_ADJUST, contrast: 108, saturation: 112 } })];
+      const featureStart = Math.min(Math.max(0.25, dur * 0.38), Math.max(0, dur - 0.25));
+      const featureDuration = Math.max(0.2, Math.min(dur * 0.28, dur - featureStart));
+      const outroDuration = Math.min(2, dur * 0.35);
+      p.main = [
+        clip(v, {
+          out: dur,
+          filter: "vivid",
+          adjust: { ...DEFAULT_ADJUST, contrast: 108, saturation: 112 },
+        }),
+      ];
       p.tracks[0].clips.push(
         {
-          id: uid("tc"), kind: "text", start: 0.25, duration: Math.min(2.8, dur * 0.28),
-          text: "MADE TO STAND OUT", size: 76, color: "#ffffff", bg: "#07111dcc",
-          bold: true, pos: "tc", anim: "rise", radius: 24, shadow: 0.45,
+          id: uid("tc"),
+          kind: "text",
+          start: 0.25,
+          duration: Math.min(2.8, dur * 0.28),
+          text: "MADE TO STAND OUT",
+          size: 76,
+          color: "#ffffff",
+          bg: "#07111dcc",
+          bold: true,
+          pos: "tc",
+          anim: "rise",
+          radius: 24,
+          shadow: 0.45,
         },
         {
-          id: uid("tc"), kind: "text", start: Math.min(Math.max(0.25, dur * 0.38), Math.max(0, dur - 0.25)), duration: Math.max(0.2, Math.min(dur * 0.28, dur - Math.min(Math.max(0.25, dur * 0.38), Math.max(0, dur - 0.25)))),
-          text: "DESIGNED FOR EVERY DAY", size: 52, color: "#ecfeff", bg: "#0e7490bb",
-          bold: true, pos: "mc", anim: "slideleft", radius: 20,
+          id: uid("tc"),
+          kind: "text",
+          start: featureStart,
+          duration: featureDuration,
+          text: "DESIGNED FOR EVERY DAY",
+          size: 52,
+          color: "#ecfeff",
+          bg: "#0e7490bb",
+          bold: true,
+          pos: "mc",
+          anim: "slideleft",
+          radius: 20,
         },
         {
-          id: uid("tc"), kind: "text", start: Math.max(0, dur - Math.min(2, dur * 0.35)), duration: Math.min(2, dur * 0.35),
-          text: "DISCOVER MORE  →", size: 58, color: "#ffffff", bg: "#16a34acc",
-          bold: true, pos: "bc", anim: "zoom-in", radius: 24,
+          id: uid("tc"),
+          kind: "text",
+          start: Math.max(0, dur - outroDuration),
+          duration: outroDuration,
+          text: "DISCOVER MORE  →",
+          size: 58,
+          color: "#ffffff",
+          bg: "#16a34acc",
+          bold: true,
+          pos: "bc",
+          anim: "zoom-in",
+          radius: 24,
         },
       );
       return p;
@@ -296,14 +333,32 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
       p.main = [clip(v, { out: dur, filter: "none", fit: "contain" })];
       p.tracks[0].clips.push(
         {
-          id: uid("tc"), kind: "text", start: 0.1, duration: Math.max(0.2, Math.min(3.2, dur - 0.1)),
-          text: "YOUR NEXT BIG IDEA", size: 68, color: "#ffffff", bg: "#312e81cc",
-          bold: true, pos: "tc", anim: "slideup", radius: 16,
+          id: uid("tc"),
+          kind: "text",
+          start: 0.1,
+          duration: Math.max(0.2, Math.min(3.2, dur - 0.1)),
+          text: "YOUR NEXT BIG IDEA",
+          size: 68,
+          color: "#ffffff",
+          bg: "#312e81cc",
+          bold: true,
+          pos: "tc",
+          anim: "slideup",
+          radius: 16,
         },
         {
-          id: uid("tc"), kind: "text", start: 0.2, duration: Math.max(0.2, dur - 0.2),
-          text: "YOUR NAME  •  CREATOR", size: 32, color: "#f5f3ff", bg: "#111827bb",
-          bold: true, pos: "bl", anim: "fade", radius: 12,
+          id: uid("tc"),
+          kind: "text",
+          start: 0.2,
+          duration: Math.max(0.2, dur - 0.2),
+          text: "YOUR NAME  •  CREATOR",
+          size: 32,
+          color: "#f5f3ff",
+          bg: "#111827bb",
+          bold: true,
+          pos: "bl",
+          anim: "fade",
+          radius: 12,
         },
       );
       return p;
@@ -320,24 +375,44 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
       const imgs = media.filter((m) => m.kind === "image").slice(0, 10);
       if (imgs.length < 2) return null;
       const p = base("Memory Reel", "9:16", "Memory Reel");
-      p.main = imgs.map((m, i) => clip(m, {
-        out: 3.2,
-        filter: ["warm", "golden", "cinema", "vintage", "soft"][i % 5],
-        transitionIn: i === 0 ? "none" : "crossfade",
-        transitionDur: 0.65,
-        effect: i % 2 === 0 ? "kenburns" : "sway",
-      }));
+      p.main = imgs.map((m, i) =>
+        clip(m, {
+          out: 3.2,
+          filter: ["warm", "golden", "cinema", "vintage", "soft"][i % 5],
+          transitionIn: i === 0 ? "none" : "crossfade",
+          transitionDur: 0.65,
+          effect: i % 2 === 0 ? "kenburns" : "sway",
+        }),
+      );
       const total = imgs.length * 3.2;
       p.tracks[0].clips.push(
         {
-          id: uid("tc"), kind: "text", start: 0.25, duration: 2.6,
-          text: "THE LITTLE MOMENTS", size: 76, color: "#ffffff", bg: "#1c1917aa",
-          bold: true, pos: "tc", anim: "fade", radius: 20,
+          id: uid("tc"),
+          kind: "text",
+          start: 0.25,
+          duration: 2.6,
+          text: "THE LITTLE MOMENTS",
+          size: 76,
+          color: "#ffffff",
+          bg: "#1c1917aa",
+          bold: true,
+          pos: "tc",
+          anim: "fade",
+          radius: 20,
         },
         {
-          id: uid("tc"), kind: "text", start: Math.max(0, total - 2.5), duration: 2.4,
-          text: "MEMORIES THAT STAY", size: 58, color: "#fff7ed", bg: "#7c2d12aa",
-          bold: true, pos: "bc", anim: "rise", radius: 18,
+          id: uid("tc"),
+          kind: "text",
+          start: Math.max(0, total - 2.5),
+          duration: 2.4,
+          text: "MEMORIES THAT STAY",
+          size: 58,
+          color: "#fff7ed",
+          bg: "#7c2d12aa",
+          bold: true,
+          pos: "bc",
+          anim: "rise",
+          radius: 18,
         },
       );
       return p;
