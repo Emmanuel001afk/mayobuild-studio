@@ -24,50 +24,108 @@ export function kindFromMime(mime: string, name: string): MediaKind | null {
   if (mime.startsWith("audio/")) return "audio";
   if (mime.startsWith("image/")) return "image";
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["mp4", "mov", "webm", "mkv", "avi"].includes(ext)) return "video";
+  if (
+    [
+      "mp4", "m4v", "mov", "webm", "mkv", "avi", "3gp", "3g2", "flv", "ts", "mts",
+      "m2ts", "mpg", "mpeg", "wmv", "vob", "ogv", "hevc", "h265", "h264",
+    ].includes(ext)
+  )
+    return "video";
   if (["mp3", "wav", "ogg", "m4a", "aac", "flac"].includes(ext)) return "audio";
   if (["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(ext)) return "image";
   return null;
 }
 
-function probeDuration(el: HTMLVideoElement | HTMLAudioElement): Promise<number> {
+function probeAudioDuration(el: HTMLAudioElement, url: string): Promise<number> {
   return new Promise((resolve) => {
-    const done = (v: number) => resolve(isFinite(v) && v > 0 ? v : 0);
-    const to = setTimeout(() => done(el.duration), 4000);
-    el.onloadedmetadata = () => {
-      clearTimeout(to);
-      done(el.duration);
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      el.removeEventListener("loadedmetadata", onMetadata);
+      el.removeEventListener("error", onError);
+      resolve(Number.isFinite(el.duration) && el.duration > 0 ? el.duration : 0);
     };
-    el.onerror = () => {
-      clearTimeout(to);
-      done(0);
-    };
+    const onMetadata = () => finish();
+    const onError = () => finish();
+    const timeout = window.setTimeout(finish, 5000);
+    el.preload = "metadata";
+    el.addEventListener("loadedmetadata", onMetadata, { once: true });
+    el.addEventListener("error", onError, { once: true });
+    el.src = url;
+    el.load();
   });
 }
 
+interface VideoProbe {
+  duration: number;
+  width: number;
+  height: number;
+  playable: boolean;
+  thumb?: string;
+}
+
 /**
- * Can this device actually DECODE and play the video (not just read its
- * metadata)? Metadata loads fine for many formats the WebView can't render
- * (e.g. HEVC camera clips) — checking `loadeddata` (a real decoded frame) is
- * what separates "plays" from "reads a header but stays a placeholder".
+ * Probe metadata and a real decoded frame in one load. Event handlers are
+ * attached BEFORE src/load: attaching them afterwards can miss cached,
+ * synchronous media events and incorrectly classify supported clips.
  */
-function probePlayable(el: HTMLVideoElement, timeoutMs = 4500): Promise<boolean> {
-  return new Promise((resolve) => {
+async function probeVideo(url: string, timeoutMs = 8000): Promise<VideoProbe> {
+  const video = document.createElement("video");
+  video.preload = "auto";
+  video.muted = true;
+  video.playsInline = true;
+  const result = await new Promise<VideoProbe>((resolve) => {
     let settled = false;
-    const finish = (v: boolean) => {
+    let metadataSeen = false;
+    let timeout = 0;
+    const finish = (playable: boolean) => {
       if (settled) return;
       settled = true;
-      clearTimeout(to);
-      resolve(v);
+      window.clearTimeout(timeout);
+      video.removeEventListener("loadedmetadata", onMetadata);
+      video.removeEventListener("loadeddata", onData);
+      video.removeEventListener("error", onError);
+      let thumb: string | undefined;
+      if (playable && video.videoWidth > 0 && video.videoHeight > 0) {
+        try {
+          const canvas = document.createElement("canvas");
+          const scale = Math.min(1, 320 / Math.max(video.videoWidth, video.videoHeight));
+          canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+          canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+          canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+          thumb = canvas.toDataURL("image/jpeg", 0.55);
+        } catch {
+          /* thumbnail generation is best-effort */
+        }
+      }
+      resolve({
+        duration: Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0,
+        width: video.videoWidth || 0,
+        height: video.videoHeight || 0,
+        playable,
+        thumb,
+      });
     };
-    const to = setTimeout(() => finish(false), timeoutMs);
-    if (el.readyState >= 2) {
-      finish(true);
-      return;
-    }
-    el.onloadeddata = () => finish(true);
-    el.onerror = () => finish(false);
+    const onMetadata = () => {
+      metadataSeen = true;
+    };
+    const onData = () => finish(true);
+    const onError = () => finish(false);
+    timeout = window.setTimeout(() => finish(false), timeoutMs);
+    video.addEventListener("loadedmetadata", onMetadata);
+    video.addEventListener("loadeddata", onData);
+    video.addEventListener("error", onError);
+    video.src = url;
+    video.load();
+    if (video.readyState >= 2) finish(true);
+    else if (metadataSeen && video.error) finish(false);
   });
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+  return result;
 }
 
 export async function makeThumb(kind: MediaKind, url: string): Promise<string | undefined> {
@@ -140,7 +198,8 @@ export async function importFiles(
     let duration: number | undefined;
     let width: number | undefined;
     let height: number | undefined;
-    let playable: boolean | undefined; // video: decodable on THIS device
+    let playable: boolean | undefined;
+    let thumb: string | undefined;
     try {
       if (kind === "image") {
         const img = await new Promise<HTMLImageElement>((res, rej) => {
@@ -152,23 +211,21 @@ export async function importFiles(
         width = img.naturalWidth;
         height = img.naturalHeight;
         duration = 0;
+        thumb = await makeThumb(kind, url);
+      } else if (kind === "video") {
+        const probe = await probeVideo(url);
+        duration = probe.duration;
+        width = probe.width || undefined;
+        height = probe.height || undefined;
+        playable = probe.playable;
+        thumb = probe.thumb;
       } else {
-        const el = document.createElement(kind === "video" ? "video" : "audio") as HTMLVideoElement;
-        el.preload = "auto";
-        if (kind === "video") el.muted = true;
-        el.src = url;
-        duration = await probeDuration(el);
-        if (kind === "video") {
-          width = el.videoWidth;
-          height = el.videoHeight;
-          playable = await probePlayable(el);
-        }
+        duration = await probeAudioDuration(document.createElement("audio"), url);
       }
     } catch {
       duration = 0;
       if (kind === "video") playable = false;
     }
-    const thumb = kind === "video" && playable === false ? undefined : await makeThumb(kind, url);
     URL.revokeObjectURL(url);
     const item: MediaItem = {
       id,
