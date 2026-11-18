@@ -892,10 +892,17 @@ export function Editor({
       const badVideos = items.filter((item) => item.kind === "video" && item.unplayable);
       toast.success(`Added ${items.length} media item${items.length === 1 ? "" : "s"}`);
       if (badVideos.length) {
-        toast.warning(
-          `${badVideos.length} video file(s) could not be decoded here. MP4/MOV files can still contain HEVC/H.265; convert those clips to MP4 with H.264 video and AAC audio for broad compatibility.`,
-          { duration: 10000 },
-        );
+        const hevcCount = badVideos.filter((item) => item.codecHint === "HEVC/H.265").length;
+        const knownCodecs = badVideos
+          .map((item) => item.codecHint)
+          .filter((codec) => codec && codec !== "Unknown");
+        const detail =
+          hevcCount > 0
+            ? `Detected HEVC/H.265 in ${hevcCount} clip(s). This browser cannot decode that codec here. Convert to MP4 with H.264 video and AAC audio for broad compatibility.`
+            : knownCodecs.length > 0
+              ? `Detected ${Array.from(new Set(knownCodecs)).join(", ")} in media that this device could not decode. Use MP4 with H.264 video and AAC audio for broad compatibility.`
+              : "The browser could not decode these video files. Their container or codec may not be supported, or the files may be damaged.";
+        toast.warning(detail, { duration: 12000 });
       }
     } catch (error) {
       console.error("MayoCut media import failed:", error);
@@ -1590,7 +1597,11 @@ export function Editor({
       {m.unplayable && (
         <div
           className="absolute top-1 left-1 text-[9px] leading-tight text-amber-300 bg-black/75 border border-amber-400/30 rounded px-1 max-w-[70%] truncate"
-          title="This device could not decode the video. Audio may still be available if its codec is supported."
+          title={
+            m.codecHint && m.codecHint !== "Unknown"
+              ? `${m.codecHint} detected; this device could not decode the video. Audio may still be available if its codec is supported.`
+              : "This device could not decode the video. Audio may still be available if its codec is supported."
+          }
         >
           ⚠ won't play here
         </div>
