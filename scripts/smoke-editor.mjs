@@ -188,6 +188,13 @@ const html = document.body.innerHTML;
 const checks = [
   ["editor chrome rendered", text.length > 400],
   [
+    "CapCut-style tool shelf categories",
+    ["Media", "Audio", "Text", "Stickers", "Effects", "Filters", "Transitions", "Captions", "AI Studio"].every(
+      (label) =>
+        [...document.querySelectorAll("button")].some((button) => button.textContent?.trim() === label),
+    ),
+  ],
+  [
     "project name in title field",
     [...document.querySelectorAll("input")].some((i) => i.value === "Smoke project"),
   ],
