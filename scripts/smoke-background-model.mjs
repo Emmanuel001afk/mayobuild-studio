@@ -14,7 +14,7 @@ assert.ok(model.byteLength > 1_000_000, "MODNet ONNX model download is unexpecte
 console.log(`Model downloaded: ${(model.byteLength / 1024 / 1024).toFixed(1)} MB`);
 
 const session = await ort.InferenceSession.create(model, {
-  executionProviders: ["wasm"],
+  executionProviders: ["cpu"],
   graphOptimizationLevel: "all",
 });
 assert.equal(session.inputNames.length, 1, "Expected one MODNet input");
