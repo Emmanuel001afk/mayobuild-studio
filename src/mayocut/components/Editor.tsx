@@ -1691,6 +1691,17 @@ export function Editor({
         )}
         {workspaceTab === "audio" && (
           <>
+            <input
+              ref={fileRef}
+              type="file"
+              multiple
+              accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+              className="hidden"
+              onChange={(e) => {
+                void onImport(e.target.files);
+                e.target.value = "";
+              }}
+            />
             <div className="p-2 border-b border-border space-y-1.5">
               <button
                 className="mb-btn w-full h-8 text-xs"
