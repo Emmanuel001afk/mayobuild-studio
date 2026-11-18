@@ -55,5 +55,4 @@ assert.ok(max - min > 0.1, "MODNet matte has no useful foreground/background var
 console.log(
   `MODNET SMOKE PASS — output [${matte.dims.join("×")}], ${matte.data.length} values, full range ${min.toFixed(3)}–${max.toFixed(3)}`,
 );
-await session.release();
 
