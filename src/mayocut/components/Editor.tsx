@@ -1485,7 +1485,11 @@ export function Editor({
       </span>
       <button
         className="mb-chip hidden lg:flex items-center gap-1 hover:border-primary"
-        onClick={() => {\n          setAssistInitialTab("tools");\n          setAssistOpen(true);\n        }}\n        title="Assist: on-device tools (beats, loudness, color) + optional local AI"
+        onClick={() => {
+          setAssistInitialTab("tools");
+          setAssistOpen(true);
+        }}
+        title="Assist: on-device tools (beats, loudness, color) + optional local AI"
       >
         <Sparkles className="h-3 w-3" /> Assist
       </button>
@@ -2188,7 +2192,9 @@ export function Editor({
             b.id === "assist" || sheet === b.id ? "text-cyan-300" : "text-muted-foreground"
           }`}
           onClick={() =>
-            b.id === "assist"\n              ? (setAssistInitialTab("tools"), setAssistOpen(true))\n              : setSheet(sheet === b.id ? null : b.id)
+            b.id === "assist"
+              ? (setAssistInitialTab("tools"), setAssistOpen(true))
+              : setSheet(sheet === b.id ? null : b.id)
           }
         >
           <b.icon className="h-5 w-5" />
