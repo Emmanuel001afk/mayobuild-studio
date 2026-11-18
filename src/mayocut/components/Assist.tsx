@@ -77,8 +77,9 @@ export function Assist({
   onClose: () => void;
   selectedClip: { id: string; kind: string; mediaId?: string } | null;
   onAddTts: (audio: TtsAudio, name: string) => void;
+  initialTab?: "tools" | "ai" | "cloud" | "captions" | "voice";
 }) {
-  const [tab, setTab] = useState<"tools" | "ai" | "cloud" | "captions" | "voice">("tools");
+  const [tab, setTab] = useState<"tools" | "ai" | "cloud" | "captions" | "voice">(initialTab);
   const [busy, setBusy] = useState<string | null>(null);
   const [beatMediaId, setBeatMediaId] = useState("");
   const [beatCount, setBeatCount] = useState(8);
