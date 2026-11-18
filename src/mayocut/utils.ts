@@ -73,6 +73,28 @@ function probeAudioDuration(el: HTMLAudioElement, url: string): Promise<number> 
   });
 }
 
+export type VideoCodecHint = "HEVC/H.265" | "H.264/AVC" | "AV1" | "VP9" | "VP8" | "Unknown";
+
+export async function detectVideoCodecHint(blob: Blob): Promise<VideoCodecHint> {
+  const windowSize = 2 * 1024 * 1024;
+  const head = await blob.slice(0, windowSize).arrayBuffer();
+  const tail =
+    blob.size > windowSize
+      ? await blob.slice(Math.max(windowSize, blob.size - windowSize)).arrayBuffer()
+      : new ArrayBuffer(0);
+  const decoder = new TextDecoder("latin1");
+  const sample = `${decoder.decode(head)}\u0000${decoder.decode(tail)}`;
+  // ISO-BMFF sample-entry FourCCs (MP4/MOV/M4V), Matroska CodecIDs and
+  // common AVI FourCCs. This is diagnostic only; the real decoder probe is
+  // authoritative because container metadata can be malformed or absent.
+  if (/hvc1|hev1|V_MPEGH\/ISO\/HEVC|H265|HEVC|X265/i.test(sample)) return "HEVC/H.265";
+  if (/avc1|avc3|V_MPEG4\/ISO\/AVC|H264|X264/i.test(sample)) return "H.264/AVC";
+  if (/av01|V_AV1/i.test(sample)) return "AV1";
+  if (/vp09|V_VP9/i.test(sample)) return "VP9";
+  if (/vp08|V_VP8/i.test(sample)) return "VP8";
+  return "Unknown";
+}
+
 interface VideoProbe {
   duration: number;
   width: number;
@@ -215,6 +237,7 @@ export async function importFiles(
     let height: number | undefined;
     let playable: boolean | undefined;
     let thumb: string | undefined;
+    let itemCodecHint: VideoCodecHint | undefined;
     try {
       if (kind === "image") {
         const img = await new Promise<HTMLImageElement>((res, rej) => {
@@ -234,6 +257,7 @@ export async function importFiles(
         height = probe.height || undefined;
         playable = probe.playable;
         thumb = probe.thumb;
+        if (!probe.playable) itemCodecHint = await detectVideoCodecHint(f);
       } else {
         duration = await probeAudioDuration(document.createElement("audio"), url);
       }
@@ -253,7 +277,10 @@ export async function importFiles(
       height,
       thumb,
     };
-    if (kind === "video") item.unplayable = playable === false;
+    if (kind === "video") {
+      item.unplayable = playable === false;
+      if (itemCodecHint) item.codecHint = itemCodecHint;
+    }
     if (kind === "audio") {
       // waveform + true loudness, computed locally at import time
       const audio = await analyzeAudioFile(f);
