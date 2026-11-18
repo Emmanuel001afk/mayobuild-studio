@@ -148,6 +148,7 @@ export function Editor({
   const [exportFps, setExportFps] = useState(30);
   const [exportKbps, setExportKbps] = useState(8000);
   const [exportRes, setExportRes] = useState<1 | 2>(1);
+  const [previewQuality, setPreviewQuality] = useState<"auto" | "540" | "720" | "1080">("auto");
   const devProfile = device(); // memoized; drives export/feature gating
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -260,6 +261,21 @@ export function Editor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
+
+  useEffect(() => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    const deviceCap = devProfile.limits.previewMaxSide;
+    const requested =
+      previewQuality === "auto"
+        ? deviceCap
+        : Number(previewQuality);
+    eng.previewMaxSide =
+      previewQuality === "auto" || deviceCap <= 0
+        ? requested
+        : Math.min(deviceCap, requested);
+    eng.draw();
+  }, [previewQuality, devProfile.limits.previewMaxSide]);
 
   const scheduleAutosave = useCallback(() => {
     if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
@@ -2067,9 +2083,25 @@ export function Editor({
         </div>
       )}
       <div className="ml-auto flex items-center gap-2">
+        <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+          Preview
+          <select
+            className="h-7 rounded border border-border bg-card px-1 text-[10px] text-foreground"
+            value={previewQuality}
+            onChange={(event) =>
+              setPreviewQuality(event.target.value as "auto" | "540" | "720" | "1080")
+            }
+            title="Preview render resolution. Export quality is unaffected."
+          >
+            <option value="auto">Auto</option>
+            <option value="540">540p</option>
+            <option value="720">720p</option>
+            <option value="1080">1080p</option>
+          </select>
+        </label>
         <button
           className="mb-btn-ghost h-7 px-2"
-          onClick={() => setPps((v) => Math.max(16, v - 12))}
+          onClick={() => setPps((v) => Math.max(16, v - 12))
           title="Zoom out"
         >
           −
