@@ -55,7 +55,7 @@ type ExportFmt = "auto" | "mp4" | "webm" | "gif" | "png" | "wav";
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string; need?: "mp4" | null; note?: string }[] = [
   { id: "auto", label: "Auto" },
-  { id: "mp4", label: "MP4 · H.264", need: "mp4" },
+  { id: "mp4", label: "MP4 · H.264 + AAC", need: "mp4" },
   { id: "webm", label: "WebM · VP9" },
   { id: "gif", label: "GIF · animated" },
   { id: "png", label: "PNG · this frame" },
