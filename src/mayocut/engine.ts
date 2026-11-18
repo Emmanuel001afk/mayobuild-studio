@@ -254,6 +254,8 @@ interface ElRecord {
    */
   videoBroken?: boolean;
   audioFallback?: HTMLAudioElement;
+  videoLoadRequested?: boolean;
+  videoLoadTimer?: number;
 }
 
 export interface ExportOptions {
@@ -330,6 +332,8 @@ export class Engine {
   loop = true;
   private raf = 0;
   private lastNow = 0;
+  private lastPaintAt = 0;
+  private lastUiTimeAt = 0;
 
   private audioCtx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -414,7 +418,8 @@ export class Engine {
     if (media.kind === "video") {
       el = document.createElement("video");
       const v = el as HTMLVideoElement;
-      v.preload = "auto";
+      // Active clips are promoted to auto-preload by requestVideoLoad().
+      v.preload = "metadata";
       v.playsInline = true;
     } else if (media.kind === "audio") {
       el = document.createElement("audio");
@@ -434,9 +439,9 @@ export class Engine {
     const media = this.media.get(mediaId);
     if (!media) return;
     const rec = this.ensureEl(media);
+    if (rec.url && rec.url !== url) URL.revokeObjectURL(rec.url);
     rec.url = url;
     this.chromaCache.forEach((c, k) => {
-      // invalidate cached keyframes-of-keycolor when a media element changes
       void c;
       if (this.clipUsingMedia(k, mediaId)) {
         this.chromaCache.delete(k);
@@ -446,48 +451,63 @@ export class Engine {
     if (rec.el instanceof HTMLImageElement) {
       rec.el.src = url;
     } else {
-      (rec.el as HTMLVideoElement).src = url;
-    }
-    if (media.kind === "video") {
-      const v = rec.el as HTMLVideoElement;
-      v.addEventListener("loadedmetadata", () => {
-        if (media.duration == null) {
-          media.duration = isFinite(v.duration) ? v.duration : 0;
-          this.bump();
-        }
-      });
-      // Decode failure (e.g. HEVC on a WebView without HEVC) can arrive as an
-      // error event or as a silent stall — watch for both.
-      v.addEventListener("error", () => this.markVideoBroken(media.id, "video error event"));
-      const watchdog = window.setTimeout(() => {
-        const r2 = this.els.get(media.id);
-        if (!r2) return;
-        if (!r2.videoBroken && (r2.el as HTMLVideoElement).readyState < 2) {
-          this.markVideoBroken(
-            media.id,
-            "no decoded frame after 8 s (codec not supported on this device?)",
-          );
-        }
-      }, 8000);
-      v.addEventListener("canplay", () => window.clearTimeout(watchdog), { once: true });
-      v.addEventListener("error", () => window.clearTimeout(watchdog), { once: true });
-    }
-    if (media.isGif && !rec.gif) {
-      // decode all frames once (capped size) so stickers animate on the canvas
-      void fetch(url)
-        .then((r) => r.blob())
-        .then((blob) => decodeGifFrames(blob))
-        .then((frames) => {
-          const rec2 = this.els.get(mediaId);
-          if (frames && rec2 && frames.frames.length > 0) {
-            rec2.gif = frames;
+      const element = rec.el as HTMLVideoElement | HTMLAudioElement;
+      if (media.kind === 'video') {
+        const video = element as HTMLVideoElement;
+        video.preload = 'metadata';
+        video.playsInline = true;
+        // Attach listeners before src: cached object URLs may dispatch quickly.
+        video.addEventListener('loadedmetadata', () => {
+          if (Number.isFinite(video.duration) && video.duration > 0 && (!media.duration || media.duration <= 0)) {
+            media.duration = video.duration;
             this.bump();
           }
-        })
-        .catch(() => undefined);
+          if (video.readyState >= 2 && rec.videoLoadTimer) {
+            window.clearTimeout(rec.videoLoadTimer);
+            rec.videoLoadTimer = undefined;
+          }
+        });
+        const clearWatchdog = () => {
+          if (rec.videoLoadTimer) window.clearTimeout(rec.videoLoadTimer);
+          rec.videoLoadTimer = undefined;
+        };
+        video.addEventListener('loadeddata', clearWatchdog);
+        video.addEventListener('canplay', clearWatchdog);
+        video.addEventListener('error', () => {
+          clearWatchdog();
+          this.markVideoBroken(mediaId, 'video decoder rejected this media file');
+        });
+      }
+      element.src = url;
+      element.load();
+    }
+    if (media.isGif && !rec.gif) {
+      void fetch(url).then((r) => r.blob()).then((blob) => decodeGifFrames(blob)).then((frames) => {
+        const rec2 = this.els.get(mediaId);
+        if (frames && rec2 && frames.frames.length > 0) {
+          rec2.gif = frames;
+          this.bump();
+        }
+      }).catch(() => undefined);
     }
   }
 
+  /** Load full video data only when a clip becomes active on the timeline. */
+  private requestVideoLoad(mediaId: string) {
+    const rec = this.els.get(mediaId);
+    if (!rec || rec.videoBroken || !(rec.el instanceof HTMLVideoElement)) return;
+    const video = rec.el;
+    if (video.readyState >= 2 || rec.videoLoadRequested) return;
+    rec.videoLoadRequested = true;
+    video.preload = 'auto';
+    try { video.load(); } catch { /* browser rejected a redundant load */ }
+    rec.videoLoadTimer = window.setTimeout(() => {
+      rec.videoLoadTimer = undefined;
+      if (this.els.get(mediaId) === rec && !rec.videoBroken && video.readyState < 2) {
+        this.markVideoBroken(mediaId, 'no decoded frame after 12 s (unsupported codec or damaged file)');
+      }
+    }, 12000);
+  }
   /** A video track can't be decoded here: switch its sound to a shadow
    *  <audio> element so the editor stays fully usable (audio, captions,
    *  export audio) while the preview shows a clear placeholder. */
@@ -495,6 +515,10 @@ export class Engine {
     const rec = this.els.get(mediaId);
     if (!rec || rec.videoBroken) return;
     rec.videoBroken = true;
+    if (rec.videoLoadTimer) {
+      window.clearTimeout(rec.videoLoadTimer);
+      rec.videoLoadTimer = undefined;
+    }
     console.warn(
       `[mayocut] video not playable on this device — ${why}: ${this.media.get(mediaId)?.name ?? mediaId}`,
     );
@@ -770,6 +794,8 @@ export class Engine {
     if (this.t >= this.duration() - 0.02) this.t = 0;
     this.playing = true;
     this.lastNow = performance.now();
+    this.lastPaintAt = 0;
+    this.lastUiTimeAt = 0;
     this.onPlayingChange?.(true);
     this.syncElements(true);
     const els = this.activeAudioEls();
@@ -821,9 +847,17 @@ export class Engine {
           return;
         }
       }
-      this.syncElements(false);
-      this.draw();
-      this.onTime?.(this.t);
+      // Keep clock precision at display refresh; composite preview at 30 fps
+      // and update React's timeline state at 15 fps to avoid render thrashing.
+      if (now - this.lastPaintAt >= 1000 / 30) {
+        this.lastPaintAt = now;
+        this.syncElements(false);
+        this.draw();
+      }
+      if (now - this.lastUiTimeAt >= 1000 / 15) {
+        this.lastUiTimeAt = now;
+        this.onTime?.(this.t);
+      }
       this.raf = requestAnimationFrame(step);
     };
     this.raf = requestAnimationFrame(step);
@@ -855,6 +889,7 @@ export class Engine {
       const el = this.audioEl(s.clip.mediaId);
       if (!el) continue;
       if (el instanceof HTMLVideoElement || rec?.videoBroken) {
+        if (el instanceof HTMLVideoElement) this.requestVideoLoad(s.clip.mediaId);
         if (s.clip.freeze) {
           // held frame: hold this exact frame, silent
           const at = s.clip.in + 1 / 60;
@@ -929,6 +964,7 @@ export class Engine {
             activeIds.add(c.mediaId);
             const el = this.audioEl(c.mediaId);
             if (el instanceof HTMLVideoElement) {
+              this.requestVideoLoad(c.mediaId);
               let local = (t - c.start) * (c.speed ?? 1);
               if (c.loop) {
                 const md = this.media.get(c.mediaId)?.duration ?? 0;
@@ -3311,6 +3347,7 @@ export class Engine {
     this.pause();
     for (const [id, rec] of this.els) {
       this.stopBufSource(id);
+      if (rec.videoLoadTimer) window.clearTimeout(rec.videoLoadTimer);
       const e = rec.el as Partial<AudioEl>;
       if (e) e.pause?.();
       if (rec.audioFallback) rec.audioFallback.pause();
