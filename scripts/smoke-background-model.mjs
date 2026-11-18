@@ -47,12 +47,16 @@ assert.ok(matte.dims.length >= 2 && matte.dims.every((d) => d > 0), "MODNet outp
 assert.ok(matte.data.length > 0, "MODNet returned an empty matte");
 let min = Infinity;
 let max = -Infinity;
+let foregroundPixels = 0;
 for (const value of matte.data) {
   min = Math.min(min, value);
   max = Math.max(max, value);
+  if (value > 0.5) foregroundPixels++;
 }
+const foregroundRatio = foregroundPixels / matte.data.length;
 assert.ok(max - min > 0.1, "MODNet matte has no useful foreground/background variation");
+assert.ok(foregroundRatio > 0.03 && foregroundRatio < 0.9, `Unexpected foreground ratio: ${foregroundRatio}`);
 console.log(
-  `MODNET SMOKE PASS — output [${matte.dims.join("×")}], ${matte.data.length} values, full range ${min.toFixed(3)}–${max.toFixed(3)}`,
+  `MODNET SMOKE PASS — output [${matte.dims.join("×")}], range ${min.toFixed(3)}–${max.toFixed(3)}, foreground ${(foregroundRatio * 100).toFixed(1)}%`,
 );
 
