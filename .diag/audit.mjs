@@ -967,6 +967,20 @@ await t("video containers include common mobile and desktop camera formats", () 
     assert.equal(U.kindFromMime("application/octet-stream", `sample.${ext}`), "video", ext);
   }
 });
+await t("detect unsupported HEVC/H.265 from MP4/MOV sample-entry markers", async () => {
+  const blob = new Blob([new TextEncoder().encode("ftypisom moov trak stsd hvc1")]);
+  assert.equal(await U.detectVideoCodecHint(blob), "HEVC/H.265");
+});
+await t("detect H.264/AVC and AV1 codec markers", async () => {
+  const h264 = new Blob([new TextEncoder().encode("ftypisom avc1")]);
+  const av1 = new Blob([new TextEncoder().encode("ftypisom av01")]);
+  assert.equal(await U.detectVideoCodecHint(h264), "H.264/AVC");
+  assert.equal(await U.detectVideoCodecHint(av1), "AV1");
+});
+await t("unknown or incomplete codec metadata remains explicitly unknown", async () => {
+  const blob = new Blob([new TextEncoder().encode("ftypisom moov mdat")]);
+  assert.equal(await U.detectVideoCodecHint(blob), "Unknown");
+});
 await t("MIME-based video detection works without a filename extension", () => {
   assert.equal(U.kindFromMime("video/mp4", "camera-file"), "video");
   assert.equal(U.kindFromMime("video/quicktime", "clip.bin"), "video");
