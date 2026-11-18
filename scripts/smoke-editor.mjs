@@ -192,6 +192,7 @@ const checks = [
   ["undo/redo present", /undo|redo/i.test(html) || document.querySelectorAll("button").length > 10],
   ["inspector visible (desktop)", /canvas format|inspector|tune|shortcuts/i.test(text)],
   ["aspect picker", /16:9|9:16/.test(text)],
+  ["sticker categories visible", /Sticker library/i.test(text) && /Reactions/.test(text) && /Creator/.test(text) && /Lifestyle/.test(text)],
   ["no fatal render error", !/cannot read|is not a function|Minified React error/i.test(text)],
 ];
 
@@ -207,6 +208,18 @@ const textClipBtn = buttons.find((b) => /hello/i.test(b.textContent || "") || /f
 if (textClipBtn) {
   textClipBtn.click();
   await wait(600);
+}
+const lifestyleTab = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Lifestyle");
+if (lifestyleTab) {
+  lifestyleTab.click();
+  await wait(250);
+  const selected = lifestyleTab.getAttribute("aria-pressed") === "true";
+  const lifestyleEmojiVisible = /🌊|🌙|☀️|🍕|🏖️|🎮|🛹/.test(textOf());
+  console.log(selected && lifestyleEmojiVisible ? "  PASS sticker category switches" : "  FAIL sticker category switches");
+  if (!selected || !lifestyleEmojiVisible) failed++;
+} else {
+  console.log("  FAIL sticker category button missing");
+  failed++;
 }
 
 console.log("BODY TEXT (first 500):", text.slice(0, 500));
