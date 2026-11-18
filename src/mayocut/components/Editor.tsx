@@ -153,7 +153,9 @@ export function Editor({
   // visible instead of being squeezed out by the timeline + tab bar.
   const compact = isMobile && landscape;
   const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
-  const [workspaceTab, setWorkspaceTab] = useState<\n    "media" | "audio" | "text" | "stickers" | "effects" | "filters" | "transitions" | "ai"\n  >("media");
+  const [workspaceTab, setWorkspaceTab] = useState<
+    "media" | "audio" | "text" | "stickers" | "effects" | "filters" | "transitions" | "ai"
+  >("media");
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(
