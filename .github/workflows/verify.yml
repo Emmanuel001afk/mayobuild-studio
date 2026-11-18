@@ -4,7 +4,7 @@
 #   - Windows: builds the NSIS/unpacked app, launches the packaged Electron
 #     binary with a CDP endpoint, asserts the DOM has real content,
 #     screenshots it (scripts/verify-electron.mjs).
-#   - Android: builds the debug APK, installs it on a real API-34 emulator
+#   - Android: builds the debug APK, installs it on a real API-35 emulator
 #     (reactivecircus/android-emulator-runner), launches the app, screenshots
 #     it and asserts the screenshot is not a blank frame.
 #
@@ -94,7 +94,7 @@ jobs:
           retention-days: 14
 
   verify-android:
-    name: Install APK on API-34 emulator + verify render
+    name: Install APK on API-35 emulator + verify render
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: shell
