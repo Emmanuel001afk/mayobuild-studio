@@ -1,6 +1,7 @@
 import { applyAlphaMask } from "./background-math";
 
 const MODEL_ID = "Xenova/modnet";
+// Pin the v2-compatible model snapshot so this feature reuses the Whisper runtime.
 const MODEL_REVISION = "1630fe9ce1a780c85c1f7ca1f919379ee1480e1a";
 
 type Progress = { status?: string; file?: string; progress?: number };
