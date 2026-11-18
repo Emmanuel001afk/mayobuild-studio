@@ -1063,6 +1063,27 @@ export function Editor({
     ],
     [],
   );
+  const [stickerCategory, setStickerCategory] = useState("All");
+  const stickerGroups = useMemo(
+    () => [
+      { name: "All", items: EMOJI_STICKERS },
+      {
+        name: "Reactions",
+        items: ["🔥", "❤️", "😂", "😮", "👀", "👏", "💯", "🥶", "😍", "🤯", "🙌", "💪"],
+      },
+      {
+        name: "Creator",
+        items: ["✨", "⚡", "🎉", "🚀", "💰", "📈", "🏆", "🎯", "🍿", "✅", "❌", "⭐", "🎵", "🎬", "📱", "💬", "🧠", "👑", "📸"],
+      },
+      {
+        name: "Lifestyle",
+        items: ["👉", "👆", "🌊", "🌙", "☀️", "🍕", "🏖️", "🎮", "🛹"],
+      },
+    ],
+    [EMOJI_STICKERS],
+  );
+  const visibleStickers =
+    stickerGroups.find((group) => group.name === stickerCategory)?.items ?? EMOJI_STICKERS;
 
   // ------------------------------------------------------------- export
 
@@ -1522,9 +1543,21 @@ export function Editor({
           <Plus className="h-3 w-3" /> Add text at playhead
         </button>
         <div className="mt-2">
-          <div className="text-[10px] text-muted-foreground mb-1">Stickers (emoji, instant)</div>
+          <div className="text-[10px] text-muted-foreground mb-1">Sticker library</div>
+          <div className="flex gap-1 flex-wrap mb-1.5" role="group" aria-label="Sticker categories">
+            {stickerGroups.map((group) => (
+              <button
+                key={group.name}
+                className={`px-1.5 py-0.5 rounded text-[10px] ${stickerCategory === group.name ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-slate-700"}`}
+                aria-pressed={stickerCategory === group.name}
+                onClick={() => setStickerCategory(group.name)}
+              >
+                {group.name}
+              </button>
+            ))}
+          </div>
           <div className="flex gap-0.5 flex-wrap">
-            {EMOJI_STICKERS.map((em) => (
+            {visibleStickers.map((em) => (
               <button
                 key={em}
                 className="h-7 w-7 rounded hover:bg-slate-700 text-base leading-none"
