@@ -1866,7 +1866,7 @@ export function Editor({
                   selectedMainClip?.effect === effect.id
                     ? "border-primary bg-primary/10"
                     : "border-border hover:border-primary"
-                }` }
+                }`}
                 onClick={() => applyMainEffect(effect.id)}
               >
                 {effect.name}
@@ -1883,7 +1883,7 @@ export function Editor({
                   selectedMainClip?.filter === filter.id
                     ? "border-primary bg-primary/10"
                     : "border-border hover:border-primary"
-                }` }
+                }`}
                 onClick={() => applyMainFilter(filter.id)}
               >
                 {filter.name}
@@ -1894,7 +1894,8 @@ export function Editor({
         {workspaceTab === "transitions" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
             <p className="text-[10px] text-muted-foreground mb-2">
-              Choose the incoming transition for the selected clip. The first clip has no incoming\n              transition.
+              Choose the incoming transition for the selected clip. The first clip has no incoming
+              transition.
             </p>
             {TRANSITIONS.map((transition) => (
               <button
@@ -1903,7 +1904,7 @@ export function Editor({
                   selectedMainClip?.transitionIn === transition.id
                     ? "border-primary bg-primary/10"
                     : "border-border hover:border-primary"
-                }` }
+                }`}
                 onClick={() => applyMainTransition(transition.id)}
               >
                 {transition.name}
@@ -1916,7 +1917,8 @@ export function Editor({
             <Clapperboard className="h-7 w-7 text-primary" />
             <p className="text-xs font-semibold">Auto captions</p>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Generate editable, timed subtitles from your main-track audio using the on-device\n              Whisper workflow.
+              Generate editable, timed subtitles from your main-track audio using the on-device
+              Whisper workflow.
             </p>
             <button
               className="mb-btn w-full h-8 text-xs"
