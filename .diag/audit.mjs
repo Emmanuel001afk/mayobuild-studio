@@ -974,6 +974,8 @@ await t("MIME-based video detection works without a filename extension", () => {
 await t("audio and image file types remain correctly classified", () => {
   assert.equal(U.kindFromMime("application/octet-stream", "voice.m4a"), "audio");
   assert.equal(U.kindFromMime("application/octet-stream", "photo.webp"), "image");
+  assert.equal(U.kindFromMime("application/octet-stream", "scan.bmp"), "image");
+  assert.equal(U.kindFromMime("application/octet-stream", "camera.heif"), "image");
   assert.equal(U.kindFromMime("application/octet-stream", "notes.txt"), null);
 });
 
