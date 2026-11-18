@@ -151,7 +151,9 @@ export function Editor({
   const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
-  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
   const [importing, setImporting] = useState(false);
   const [recState, setRecState] = useState<{ active: boolean; secs: number; error?: string }>({
     active: false,
