@@ -1598,105 +1598,231 @@ export function Editor({
       </button>
     </div>
   );
+  const selectedMainClip =
+    selection?.lane === "main" ? project.main.find((clip) => clip.id === selection.id) : undefined;
+  const workspaceTabs = [
+    { id: "media", label: "Media", icon: Film },
+    { id: "audio", label: "Audio", icon: Music },
+    { id: "text", label: "Text", icon: Plus },
+    { id: "stickers", label: "Stickers", icon: ImageIcon },
+    { id: "effects", label: "Effects", icon: Sparkles },
+    { id: "filters", label: "Filters", icon: SlidersHorizontal },
+    { id: "transitions", label: "Transitions", icon: Scissors },
+    { id: "ai", label: "AI Studio", icon: Clapperboard },
+  ] as const;
   const mediaPanel = (
-    <div className="w-52 md:w-60 border-r border-border flex flex-col shrink-0">
-      <div className="p-2 border-b border-border">
-        <button
-          className="mb-btn w-full h-8 text-xs"
-          onClick={() => fileRef.current?.click()}
-          disabled={importing}
-        >
-          {importing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Upload className="h-3.5 w-3.5" />
-          )}
-          {importing && importProgress
-            ? `Checking ${importProgress.done}/${importProgress.total}…`
-            : importing
-              ? "Importing…"
-              : "Import media"}
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept="video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.3gp,.3g2,.flv,.ts,.mts,.m2ts,.mpg,.mpeg,.wmv,.vob,.ogv,image/*,.bmp,.heic,.heif,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
-          className="hidden"
-          onChange={(e) => {
-            void onImport(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <button
-          className={`mb-btn-ghost w-full h-7 mt-1 text-[11px] ${recState.active ? "text-red-400 border-red-400/50" : ""}`}
-          onClick={startRecording}
-          title="Record voiceover or music from the microphone"
-        >
-          {recState.active ? (
-            <span className="flex items-center justify-center gap-1">
-              <Square className="h-3 w-3" /> Stop · {recState.secs}s
-            </span>
-          ) : (
-            <span className="flex items-center justify-center gap-1">
-              <Mic className="h-3 w-3" /> Record audio
-            </span>
-          )}
-        </button>
-        <div className="flex gap-1 mt-2">
+    <div className="w-52 md:w-60 border-r border-border flex shrink-0 min-h-0">
+      <nav className="w-12 shrink-0 border-r border-border flex flex-col py-1 gap-0.5 overflow-y-auto" aria-label="Editing tools">
+        {workspaceTabs.map((tab) => (
           <button
-            className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "main" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-            onClick={() => setAddMode("main")}
+            key={tab.id}
+            className={`h-12 flex flex-col items-center justify-center gap-0.5 text-[9px] rounded mx-0.5 ${workspaceTab === tab.id ? "text-primary bg-primary/10" : "text-muted-foreground hover:bg-card"}`}
+            aria-pressed={workspaceTab === tab.id}
+            title={tab.label}
+            onClick={() => setWorkspaceTab(tab.id)}
           >
-            + clip → timeline
+            <tab.icon className="h-4 w-4" />
+            {tab.label}
           </button>
-          <button
-            className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "overlay" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-            onClick={() => setAddMode("overlay")}
-          >
-            + sticker → overlay
-          </button>
+        ))}
+      </nav>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <div className="px-2 py-2 border-b border-border flex items-center justify-between">
+          <span className="text-xs font-semibold">{workspaceTabs.find((tab) => tab.id === workspaceTab)?.label}</span>
+          {workspaceTab === "ai" && (
+            <button className="mb-btn h-6 px-2 text-[10px]" onClick={() => setAssistOpen(true)}>
+              Open
+            </button>
+          )}
         </div>
-        <button className="mb-btn-ghost w-full h-7 mt-1 text-[11px]" onClick={addText}>
-          <Plus className="h-3 w-3" /> Add text at playhead
-        </button>
-        <div className="mt-2">
-          <div className="text-[10px] text-muted-foreground mb-1">Sticker library</div>
-          <div className="flex gap-1 flex-wrap mb-1.5" role="group" aria-label="Sticker categories">
-            {stickerGroups.map((group) => (
+        {workspaceTab === "media" && (
+          <>
+            <div className="p-2 border-b border-border space-y-1.5">
               <button
-                key={group.name}
-                className={`px-1.5 py-0.5 rounded text-[10px] ${stickerCategory === group.name ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-slate-700"}`}
-                aria-pressed={stickerCategory === group.name}
-                onClick={() => setStickerCategory(group.name)}
+                className="mb-btn w-full h-8 text-xs"
+                onClick={() => fileRef.current?.click()}
+                disabled={importing}
               >
-                {group.name}
+                {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                {importing && importProgress
+                  ? `Checking ${importProgress.done}/${importProgress.total}…`
+                  : importing
+                    ? "Importing…"
+                    : "Import media"}
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                accept="video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.3gp,.3g2,.flv,.ts,.mts,.m2ts,.mpg,.mpeg,.wmv,.vob,.ogv,image/*,.bmp,.heic,.heif,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+                className="hidden"
+                onChange={(e) => {
+                  void onImport(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <div className="text-[9px] leading-snug text-muted-foreground">
+                Best compatibility: MP4 with H.264 video and AAC audio. Some HEVC/H.265 clips need conversion.
+              </div>
+              <div className="flex gap-1">
+                <button
+                  className={`flex-1 text-[10px] rounded px-1 py-1 border ${addMode === "main" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
+                  onClick={() => setAddMode("main")}
+                >
+                  Main clip
+                </button>
+                <button
+                  className={`flex-1 text-[10px] rounded px-1 py-1 border ${addMode === "overlay" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
+                  onClick={() => setAddMode("overlay")}
+                >
+                  Overlay
+                </button>
+              </div>
+            </div>
+            <div className={`flex-1 min-h-0 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}>
+              {media.filter((item) => item.kind !== "audio").map(mediaCard)}
+              {media.every((item) => item.kind === "audio") && (
+                <div className="col-span-2 text-[10px] text-muted-foreground text-center py-6">
+                  Import videos or images to start editing
+                </div>
+              )}
+            </div>
+          </>
+        )}
+        {workspaceTab === "audio" && (
+          <>
+            <div className="p-2 border-b border-border space-y-1.5">
+              <button
+                className="mb-btn w-full h-8 text-xs"
+                onClick={() => fileRef.current?.click()}
+                disabled={importing}
+              >
+                {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                {importing ? "Importing…" : "Import audio"}
+              </button>
+              <button
+                className={`mb-btn-ghost w-full h-8 text-xs ${recState.active ? "text-red-400 border-red-400/50" : ""}`}
+                onClick={startRecording}
+              >
+                {recState.active ? <Square className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+                {recState.active ? `Stop recording · ${recState.secs}s` : "Record voice / music"}
+              </button>
+              <p className="text-[10px] text-muted-foreground">
+                Add music, voiceovers and sound effects. Select an audio clip to edit volume, fades and audio effects.
+              </p>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-2 grid grid-cols-2 gap-2 content-start">
+              {media.filter((item) => item.kind === "audio").map(mediaCard)}
+              {!media.some((item) => item.kind === "audio") && (
+                <div className="col-span-2 text-[10px] text-muted-foreground text-center py-6">
+                  No audio imported yet
+                </div>
+              )}
+            </div>
+          </>
+        )}
+        {workspaceTab === "text" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
+            <button className="mb-btn w-full h-8 text-xs" onClick={addText}>
+              <Plus className="h-3.5 w-3.5" /> Add text at playhead
+            </button>
+            <div className="text-[10px] text-muted-foreground">Text styles · adds a styled title to the timeline</div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {TEXT_PRESETS.map((preset) => (
+                <button
+                  key={preset.name}
+                  className="min-h-10 border border-border rounded px-2 py-1.5 text-[10px] text-left hover:border-primary"
+                  onClick={() => addTextPreset(preset)}
+                >
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {workspaceTab === "stickers" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <div className="flex gap-1 flex-wrap mb-2" role="group" aria-label="Sticker categories">
+              {stickerGroups.map((group) => (
+                <button
+                  key={group.name}
+                  className={`px-1.5 py-1 rounded text-[10px] ${stickerCategory === group.name ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-slate-700"}`}
+                  aria-pressed={stickerCategory === group.name}
+                  onClick={() => setStickerCategory(group.name)}
+                >
+                  {group.name}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-5 gap-1">
+              {visibleStickers.map((emoji) => (
+                <button
+                  key={emoji}
+                  className="h-8 rounded hover:bg-slate-700 text-lg"
+                  title={`Add ${emoji}`}
+                  onClick={() => addEmoji(emoji)}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {workspaceTab === "effects" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
+            <p className="text-[10px] text-muted-foreground mb-2">
+              Apply a motion or visual effect to the selected main-track clip.
+            </p>
+            {EFFECTS.map((effect) => (
+              <button
+                key={effect.id}
+                className={`w-full text-left px-2 py-2 rounded border text-[11px] ${selectedMainClip?.effect === effect.id ? "border-primary bg-primary/10" : "border-border hover:border-primary"}`}
+                onClick={() => applyMainEffect(effect.id)}
+              >
+                {effect.name}
               </button>
             ))}
           </div>
-          <div className="flex gap-0.5 flex-wrap">
-            {visibleStickers.map((em) => (
+        )}
+        {workspaceTab === "filters" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 grid grid-cols-2 gap-1.5 content-start">
+            {FILTER_PRESETS.map((filter) => (
               <button
-                key={em}
-                className="h-7 w-7 rounded hover:bg-slate-700 text-base leading-none"
-                title={`Add ${em}`}
-                onClick={() => addEmoji(em)}
+                key={filter.id}
+                className={`min-h-10 border rounded px-2 py-1 text-[10px] text-left ${selectedMainClip?.filter === filter.id ? "border-primary bg-primary/10" : "border-border hover:border-primary"}`}
+                onClick={() => applyMainFilter(filter.id)}
               >
-                {em}
+                {filter.name}
               </button>
             ))}
           </div>
-        </div>
-      </div>
-      <div
-        className={`flex-1 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}
-      >
-        {media.map(mediaCard)}
-        {media.length === 0 && (
-          <div className="col-span-2 text-[11px] text-muted-foreground text-center py-6">
-            Library empty.
-            <br />
-            Import media to start.
+        )}
+        {workspaceTab === "transitions" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
+            <p className="text-[10px] text-muted-foreground mb-2">
+              Choose the incoming transition for the selected clip. The first clip has no incoming transition.
+            </p>
+            {TRANSITIONS.map((transition) => (
+              <button
+                key={transition.id}
+                className={`w-full text-left px-2 py-2 rounded border text-[11px] ${selectedMainClip?.transitionIn === transition.id ? "border-primary bg-primary/10" : "border-border hover:border-primary"}`}
+                onClick={() => applyMainTransition(transition.id)}
+              >
+                {transition.name}
+              </button>
+            ))}
+          </div>
+        )}
+        {workspaceTab === "ai" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+            <Sparkles className="h-7 w-7 text-primary" />
+            <p className="text-xs font-semibold">AI Studio</p>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Open the assistant for project-aware editing help, voice tools, captions and AI workflows.
+            </p>
+            <button className="mb-btn w-full h-8 text-xs" onClick={() => setAssistOpen(true)}>
+              <Sparkles className="h-3.5 w-3.5" /> Open AI Studio
+            </button>
           </div>
         )}
       </div>
