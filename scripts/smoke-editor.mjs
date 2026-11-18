@@ -193,6 +193,7 @@ const checks = [
   ["inspector visible (desktop)", /canvas format|inspector|tune|shortcuts/i.test(text)],
   ["aspect picker", /16:9|9:16/.test(text)],
   ["sticker categories visible", /Sticker library/i.test(text) && /Reactions/.test(text) && /Creator/.test(text) && /Lifestyle/.test(text)],
+  ["AI background removal tool is discoverable", /AI background removal|Remove image background/i.test(text)],
   ["no fatal render error", !/cannot read|is not a function|Minified React error/i.test(text)],
 ];
 
