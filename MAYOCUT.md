@@ -70,9 +70,13 @@ pulse, sway) plus **keyframes on x/y/scale/rotation/opacity for every clip**.
 - Export settings are remembered per project
 - Finished exports are kept in an on-device library with **inline preview**
 
+**Editing workspace**
+- Desktop tool shelf separates Media, Audio, Text, Stickers, Effects, Filters, Transitions, Captions and AI Studio while keeping the central preview, timeline and context-sensitive inspector in place
+- Main clips and image/video overlays support horizontal and vertical mirroring; crop/framing, scale, position and rotation remain available in the inspector
+
 **Media compatibility**
 - Imports common video containers (MP4, MOV, M4V, WebM, MKV, AVI, 3GP, FLV, MPEG/TS variants and others), then probes for a real decoded frame instead of trusting the filename extension
-- Container support is not codec support: MP4/MOV files may contain HEVC/H.265, which some browsers/WebViews cannot decode. The library marks unsupported clips rather than pretending they play; the portable interchange target is MP4 with H.264 video and AAC audio
+- Container support is not codec support: MP4/MOV files may contain HEVC/H.265, which some browsers/WebViews cannot decode. The importer checks for a decoded frame and best-effort identifies common codec markers (HEVC, H.264, AV1, VP9, VP8); unsupported media is clearly flagged instead of silently added as a blank clip. The portable interchange target is MP4 with H.264 video and AAC audio
 - Preview loads active video sources on demand, not every source in the project at once; preview compositing is capped at 30 fps and timeline React updates at 15 fps to reduce playback overhead
 
 **Platform**
