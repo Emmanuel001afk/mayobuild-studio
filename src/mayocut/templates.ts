@@ -247,7 +247,7 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
       p.tracks[0].clips.push(line1, line2);
       return p;
     },
-  },,
+  },
   {
     id: "tpl_product_spotlight",
     name: "Product Spotlight",
@@ -259,7 +259,7 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
       const v = media.find((m) => m.kind === "video");
       if (!v) return null;
       const p = base("Product Spotlight", "9:16", "Product Spotlight");
-      const dur = Math.max(2.5, Math.min(v.duration ?? 12, 18));
+      const dur = Math.max(0.5, Math.min(v.duration ?? 12, 18));
       p.main = [clip(v, { out: dur, filter: "vivid", adjust: { ...DEFAULT_ADJUST, contrast: 108, saturation: 112 } })];
       p.tracks[0].clips.push(
         {
@@ -268,12 +268,12 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
           bold: true, pos: "tc", anim: "rise", radius: 24, shadow: 0.45,
         },
         {
-          id: uid("tc"), kind: "text", start: Math.max(0.8, dur * 0.38), duration: Math.max(1, dur * 0.28),
+          id: uid("tc"), kind: "text", start: Math.min(Math.max(0.25, dur * 0.38), Math.max(0, dur - 0.25)), duration: Math.max(0.2, Math.min(dur * 0.28, dur - Math.min(Math.max(0.25, dur * 0.38), Math.max(0, dur - 0.25)))),
           text: "DESIGNED FOR EVERY DAY", size: 52, color: "#ecfeff", bg: "#0e7490bb",
           bold: true, pos: "mc", anim: "slideleft", radius: 20,
         },
         {
-          id: uid("tc"), kind: "text", start: Math.max(1.2, dur - 2.2), duration: Math.min(2, dur - Math.max(1.2, dur - 2.2)),
+          id: uid("tc"), kind: "text", start: Math.max(0, dur - Math.min(2, dur * 0.35)), duration: Math.min(2, dur * 0.35),
           text: "DISCOVER MORE  →", size: 58, color: "#ffffff", bg: "#16a34acc",
           bold: true, pos: "bc", anim: "zoom-in", radius: 24,
         },
@@ -292,16 +292,16 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
       const v = media.find((m) => m.kind === "video");
       if (!v) return null;
       const p = base("Talking-Head Creator", "16:9", "Talking-Head Creator");
-      const dur = Math.max(2.5, Math.min(v.duration ?? 30, 60));
+      const dur = Math.max(0.5, Math.min(v.duration ?? 30, 60));
       p.main = [clip(v, { out: dur, filter: "none", fit: "contain" })];
       p.tracks[0].clips.push(
         {
-          id: uid("tc"), kind: "text", start: 0.2, duration: Math.min(3.2, dur),
+          id: uid("tc"), kind: "text", start: 0.1, duration: Math.max(0.2, Math.min(3.2, dur - 0.1)),
           text: "YOUR NEXT BIG IDEA", size: 68, color: "#ffffff", bg: "#312e81cc",
           bold: true, pos: "tc", anim: "slideup", radius: 16,
         },
         {
-          id: uid("tc"), kind: "text", start: 1, duration: Math.max(1, dur - 1),
+          id: uid("tc"), kind: "text", start: 0.2, duration: Math.max(0.2, dur - 0.2),
           text: "YOUR NAME  •  CREATOR", size: 32, color: "#f5f3ff", bg: "#111827bb",
           bold: true, pos: "bl", anim: "fade", radius: 12,
         },
