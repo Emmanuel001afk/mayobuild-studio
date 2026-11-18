@@ -64,7 +64,9 @@ export function Timeline(p: Props) {
     t,
     ...beatsForSnap(project.beats ?? []),
     ...spans.flatMap((s) => [s.start, s.end]),
-    ...project.tracks.flatMap((tr) => tr.clips.flatMap((clip) => [clip.start, clip.start + clip.duration])),
+    ...project.tracks.flatMap((tr) =>
+      tr.clips.flatMap((clip) => [clip.start, clip.start + clip.duration]),
+    ),
   ];
   const fitTimeline = () => {
     const el = scrollRef.current;
@@ -194,7 +196,11 @@ export function Timeline(p: Props) {
         </button>
         <button
           className={`px-1.5 h-5 rounded flex items-center gap-1 ${snapEnabled ? "text-cyan-300 bg-cyan-400/10" : "text-muted-foreground hover:bg-slate-700/70"}`}
-          title={snapEnabled ? "Snapping on — align clips to the playhead, beats and clip edges" : "Snapping off"}
+          title={
+            snapEnabled
+              ? "Snapping on — align clips to the playhead, beats and clip edges"
+              : "Snapping off"
+          }
           aria-pressed={snapEnabled}
           onClick={() => setSnapEnabled((v) => !v)}
         >
@@ -506,7 +512,9 @@ export function Timeline(p: Props) {
                     denoised={c.kind === "audio" ? mediaById(c.mediaId)?.denoised : undefined}
                     lanes={project.tracks.map((x) => ({ id: x.id, name: x.name }))}
                     snapEnabled={snapEnabled}
-                    snapPoints={snapPoints.filter((point) => point < c.start - 0.001 || point > c.start + c.duration + 0.001)}
+                    snapPoints={snapPoints.filter(
+                      (point) => point < c.start - 0.001 || point > c.start + c.duration + 0.001,
+                    )}
                     onSelect={() => p.onSelect({ lane: "overlay", trackId: tr.id, id: c.id })}
                     onPatch={(patch) => p.onOverlayPatch(tr.id, c.id, patch)}
                     onMoveTrack={(tid) => p.onOverlayMoveTrack?.(c.id, tid)}
@@ -632,7 +640,10 @@ function OverlayClipBox({
         let distance = limit;
         for (const point of snapPoints) {
           const delta = Math.abs(point - value);
-          if (delta <= distance) { best = point; distance = delta; }
+          if (delta <= distance) {
+            best = point;
+            distance = delta;
+          }
         }
         return best;
       };
@@ -657,7 +668,8 @@ function OverlayClipBox({
         const raw = Math.max(0, Math.min(total - base.duration, base.start + d));
         const snappedStart = snap(raw);
         const snappedEnd = snap(raw + base.duration) - base.duration;
-        const ns = Math.abs(snappedStart - raw) <= Math.abs(snappedEnd - raw) ? snappedStart : snappedEnd;
+        const ns =
+          Math.abs(snappedStart - raw) <= Math.abs(snappedEnd - raw) ? snappedStart : snappedEnd;
         onPatch({ start: Math.max(0, Math.min(total - base.duration, ns)) });
       } else if (mode === "in") {
         const rawStart = Math.max(0, Math.min(base.start + base.duration - 0.2, base.start + d));
