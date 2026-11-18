@@ -91,6 +91,7 @@ jobs:
   verify-android:
     name: Install APK on API-34 emulator + verify render
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: shell
     steps:
       - uses: actions/checkout@v4
@@ -116,9 +117,11 @@ jobs:
           arch: x86_64
           profile: pixel_7
           disable-verbose-logging: true
+          disable-animations: true
+          boot-timeout: 300000
           emulator-options: >-
             -no-snapshot -gpu swiftshader_indirect
-            -no-window -headless
+            -no-window -no-audio -no-boot-anim -headless
           install-apk: android/app/build/outputs/apk/debug/app-debug.apk
           script: |
             set -e
