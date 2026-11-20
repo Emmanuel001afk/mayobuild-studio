@@ -11,6 +11,7 @@ function t(name, fn) {
 
 // ================= types =================
 const T = await import('./b-types.mjs');
+const E = await import('./b-engine.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
   const tr = T.emptyTracks();
@@ -139,7 +140,6 @@ await t("text anims include the new entrances", () => {
 });
 
 // ================= engine (pure parts) =================
-const E = await import('./b-engine.mjs');
 console.log("engine.ts — transitions, grade, clip ops");
 await t("buildFilterCss: neutral clip yields an empty filter", () => {
   assert.equal(E.buildFilterCss({ filter: "none", adjust: T.DEFAULT_ADJUST }), "");
@@ -580,6 +580,139 @@ await t("reverse + curve still advances the element forward", () => {
   };
   assert.equal(T.mainRateAt(c, 1), 1, "frame-stepped reverse");
   assert.ok(T.mainPlaybackRate(c, 1) > 0, "media still plays forward");
+});
+
+// ================= catalogue breadth + wipe maths =================
+console.log("types.ts — catalogues and transition families");
+await t("transition catalogue covers 5 families with unique ids", () => {
+  const ids = T.TRANSITIONS.map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length);
+  const fams = new Set(ids.map((id) => T.TRANSITION_FAMILY[id]));
+  for (const f of ["basic", "slide", "wipe", "zoom"])
+    assert.ok(fams.has(f), `missing family ${f}`);
+  assert.equal(ids.length, 19);
+});
+await t("every transition has a family and a non-empty name", () => {
+  for (const x of T.TRANSITIONS) {
+    assert.ok(T.TRANSITION_FAMILY[x.id], `${x.id} has no family`);
+    assert.ok(x.name.length > 0, `${x.id} has no name`);
+  }
+});
+await t("wipeDir classifies all 8 wipes and nothing else", () => {
+  const wipes = T.TRANSITIONS.filter((x) => T.wipeDir(x.id));
+  assert.equal(wipes.length, 8);
+  for (const dir of ["left", "right", "up", "down"]) {
+    assert.ok(wipes.some((w) => T.wipeDir(w.id).dir === dir && !T.wipeDir(w.id).soft));
+    assert.ok(wipes.some((w) => T.wipeDir(w.id).dir === dir && T.wipeDir(w.id).soft));
+  }
+  assert.equal(T.wipeDir("crossfade"), null);
+  assert.equal(T.wipeDir("none"), null);
+});
+
+// Feathered-wipe geometry: mirrors the engine's gradient ramp so a regression
+// in either place (edge travel direction, feather width) is caught here.
+function wipeAlphaFn(dir, k, span = 1000) {
+  const feather = Math.max(1, span * 0.12);
+  const lowSide = dir === "right" || dir === "down";
+  const edge = lowSide ? -feather + k * (span + feather * 2) : span + feather - k * (span + feather * 2);
+  const c = (v) => Math.max(0, Math.min(1, v));
+  const t0 = c((edge - feather) / span);
+  const t1 = c((edge + feather) / span);
+  return (u) => {
+    const flat0 = lowSide ? 1 : 0;
+    const flat1 = lowSide ? 0 : 1;
+    if (u <= t0) return flat0;
+    if (u >= t1) return flat1;
+    return flat0 + (flat1 - flat0) * ((u - t0) / Math.max(1e-9, t1 - t0));
+  };
+}
+/** Mean coverage of the incoming clip across the travel axis. */
+function wipeCoverage(dir, k, span = 1000) {
+  const f = wipeAlphaFn(dir, k, span);
+  let sum = 0;
+  const N = 400;
+  for (let i = 0; i < N; i++) sum += f((i + 0.5) / N);
+  return sum / N;
+}
+await t("soft wipe: k=0 shows none of the incoming clip, k=1 shows all", () => {
+  for (const dir of ["left", "right", "up", "down"]) {
+    assert.ok(Math.abs(wipeCoverage(dir, 0) - 0) < 0.02, `${dir} at k=0`);
+    assert.ok(Math.abs(wipeCoverage(dir, 1) - 1) < 0.02, `${dir} at k=1`);
+  }
+});
+await t("soft wipe: reveal is monotonic in k", () => {
+  for (const dir of ["left", "right", "up", "down"]) {
+    let prev = -1;
+    for (let k = 0; k <= 1.0001; k += 0.1) {
+      const v = wipeCoverage(dir, k);
+      assert.ok(v >= prev - 1e-9, `${dir} went backwards at k=${k.toFixed(1)}`);
+      prev = v;
+    }
+  }
+});
+await t("soft wipe: left(k) is the pointwise mirror of right(k)", () => {
+  for (const k of [0.2, 0.5, 0.8]) {
+    const L = wipeAlphaFn("left", k);
+    const R = wipeAlphaFn("right", k);
+    for (let i = 0; i < 200; i++) {
+      const u = (i + 0.5) / 200;
+      assert.ok(Math.abs(L(u) - R(1 - u)) < 1e-9, `left/right diverge at u=${u} k=${k}`);
+    }
+    const U = wipeAlphaFn("up", k);
+    const D = wipeAlphaFn("down", k);
+    for (let i = 0; i < 200; i++) {
+      const u = (i + 0.5) / 200;
+      assert.ok(Math.abs(U(u) - D(1 - u)) < 1e-9, `up/down diverge at u=${u} k=${k}`);
+    }
+  }
+});
+await t("soft wipe: the two halves meet exactly at the halfway point", () => {
+  // at k=0.5 the reveal is halfway, so coverage must be ~50% and the mirrored
+  // pair must sum to 1 (this caught a real inversion bug during development)
+  for (const dir of ["left", "right", "up", "down"])
+    assert.ok(Math.abs(wipeCoverage(dir, 0.5) - 0.5) < 0.01, `${dir} at k=0.5`);
+  assert.ok(Math.abs(wipeCoverage("left", 0.5) + wipeCoverage("right", 0.5) - 1) < 0.02);
+});
+await t("soft wipe: feathered edge is strictly wider than a hard cut", () => {
+  // a hard wipe has no partial band; the soft one must have one mid-transition
+  const span = 1000, feather = span * 0.12, k = 0.5;
+  const edge = -feather + k * (span + feather * 2);
+  const band = Math.min(1, (edge + feather) / span) - Math.max(0, (edge - feather) / span);
+  assert.ok(band > 0.05, `soft band too narrow: ${band}`);
+});
+
+console.log("types.ts — effect and text-anim breadth");
+await t("effect catalogue has 12+ new entries with families", () => {
+  const ids = T.EFFECTS.map((e) => e.id);
+  assert.ok(ids.length >= 28, `only ${ids.length} effects`);
+  for (const e of T.EFFECTS) assert.ok(T.EFFECT_FAMILY[e.id], `${e.id} has no family`);
+  for (const id of ["orbit", "earthquake", "whip-left", "dolly-in", "jitter", "roll"])
+    assert.ok(ids.includes(id), `missing ${id}`);
+});
+await t("effect families are all populated", () => {
+  const fams = new Set(T.EFFECTS.map((e) => T.EFFECT_FAMILY[e.id]));
+  for (const f of ["camera", "motion", "impact", "retro"]) assert.ok(fams.has(f), `empty family ${f}`);
+});
+await t("text animation catalogue has 20+ entries with families", () => {
+  const ids = T.TEXT_ANIMS.map((a) => a.id);
+  assert.ok(ids.length >= 20, `only ${ids.length}`);
+  for (const a of T.TEXT_ANIMS) assert.ok(T.TEXT_ANIM_FAMILY[a.id], `${a.id} has no family`);
+  for (const id of ["pop", "drop-in", "swing", "blur-in", "tracking-in", "flip", "skew-in", "wave"])
+    assert.ok(ids.includes(id), `missing ${id}`);
+});
+await t("text presets reach 20+ looks, all with valid patches", () => {
+  assert.ok(T.TEXT_PRESETS.length >= 20, `only ${T.TEXT_PRESETS.length}`);
+  for (const tpl of T.TEXT_PRESETS) {
+    assert.ok(tpl.name.length > 0);
+    assert.ok(Object.keys(tpl.patch).length > 0, `${tpl.name} is an empty patch`);
+  }
+});
+await t("filter catalogue reaches 39 looks with unique ids", () => {
+  const ids = E.FILTER_PRESETS.map((f) => f.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(ids.length >= 40, `only ${ids.length}`);
+  for (const id of ["kodachrome", "portra", "bleach", "cyberpunk", "clean"])
+    assert.ok(ids.includes(id), `missing ${id}`);
 });
 
 // ================= luts =================

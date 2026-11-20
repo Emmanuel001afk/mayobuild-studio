@@ -30,10 +30,21 @@ function scoreDevice(env) {
   const m = env.memoryGB;
   score += m === null ? 1.5 : m >= 16 ? 3 : m >= 8 ? 2.5 : m >= 4 ? 1.5 : m >= 2 ? 0.75 : 0.3;
   score += env.webgl === 2 ? 1 : env.webgl === 1 ? 0.5 : 0;
-  if (env.platform === "windows" || env.platform === "macos" || env.platform === "linux") score += 0.5;
+  if (env.platform === "windows" || env.platform === "macos" || env.platform === "linux")
+    score += 0.5;
   if (env.crossOriginIsolated) score += 0.5;
   const tier = score >= 6 ? "high" : score >= 3.5 ? "medium" : "low";
-  const limits = tier === "high" ? { previewMaxSide: 1920, exportMaxScale: 2, maxExportFps: 60, features: featureGates(tier) } : tier === "medium" ? { previewMaxSide: 1280, exportMaxScale: 2, maxExportFps: 30, features: featureGates(tier) } : { previewMaxSide: 960, exportMaxScale: 1, maxExportFps: 30, features: featureGates(tier) };
+  const limits = tier === "high" ? { previewMaxSide: 1920, exportMaxScale: 2, maxExportFps: 60, features: featureGates(tier) } : tier === "medium" ? {
+    previewMaxSide: 1280,
+    exportMaxScale: 2,
+    maxExportFps: 30,
+    features: featureGates(tier)
+  } : {
+    previewMaxSide: 960,
+    exportMaxScale: 1,
+    maxExportFps: 30,
+    features: featureGates(tier)
+  };
   return {
     tier,
     score: Math.round(score * 10) / 10,
@@ -68,7 +79,8 @@ function getFeaturePrefs() {
 }
 function setFeaturePref(f, on) {
   const prefs = readPrefs();
-  if (on) delete prefs[f];
+  if (on)
+    delete prefs[f];
   else prefs[f] = false;
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -79,7 +91,8 @@ function setFeaturePref(f, on) {
 function gateFor(p, f, prefs) {
   const deviceGate = p.limits.features[f];
   if (!deviceGate.ok) return deviceGate;
-  if (prefs[f] === false) return { ok: false, reason: "You switched this off in Assist \u2192 Local tools." };
+  if (prefs[f] === false)
+    return { ok: false, reason: "You switched this off in Assist \u2192 Local tools." };
   return deviceGate;
 }
 var memo = null;

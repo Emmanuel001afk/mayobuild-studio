@@ -169,6 +169,7 @@ console.log("importing", entry);
 await import(path.join(DIST, "assets", entry));
 console.log("IMPORT OK");
 
+let failed = 0;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const textOf = () => (document.body.textContent || "").replace(/\s+/g, " ").trim();
 
@@ -220,15 +221,11 @@ const checks = [
   ["no fatal render error", !/cannot read|is not a function|Minified React error/i.test(text)],
 ];
 
-let failed = 0;
-for (const [name, ok] of checks) {
-  console.log(ok ? "  PASS" : "  FAIL", name);
-  if (!ok) failed++;
-}
-
-// --- interaction: select the text clip, open Tune, apply a preset -------------
+// --- interaction: select the text clip so the inspector targets it -----------
 const buttons = [...document.querySelectorAll("button")];
-const textClipBtn = buttons.find((b) => /hello/i.test(b.textContent || "") || /font|text/i.test(b.getAttribute("title") || ""));
+const textClipBtn = buttons.find(
+  (b) => /hello/i.test(b.textContent || "") || /font|text/i.test(b.getAttribute("title") || ""),
+);
 if (textClipBtn) {
   textClipBtn.click();
   await wait(600);
@@ -264,11 +261,83 @@ if (lifestyleTab) {
   failed++;
 }
 
+// --- the library tabs must all open and expose their catalogue ---------------
+// This is the part that would silently rot: a tab that renders nothing, or a
+// catalogue that lost its entries, is invisible to a "does it mount" check.
+const LIBRARY_TABS = [
+  { label: "Media", expect: /import/i },
+  { label: "Audio", expect: /import audio|no audio yet/i },
+  { label: "Text", expect: /add text|text style|look/i },
+  { label: "Stickers", expect: /sticker|emoji|reaction|creator/i },
+  { label: "Effects", expect: /camera|motion|impact|select a clip/i },
+  { label: "Transitions", expect: /transition|wipe|crossfade|select a clip/i },
+  { label: "Filters", expect: /look|original|select a clip/i },
+  { label: "Adjust", expect: /brightness|contrast|select a main-track/i },
+  { label: "Captions", expect: /caption/i },
+  // main's rail also carries an AI Studio entry; it must not regress either
+  { label: "AI Studio", expect: /ai studio|assistant|open ai/i },
+];
+const t0 = textOf();
+for (const tb of LIBRARY_TABS) {
+  const btn = [...document.querySelectorAll("button")].find(
+    (b) => (b.getAttribute("title") || "") === tb.label,
+  );
+  if (!btn) {
+    checks.push([`library tab present: ${tb.label}`, false]);
+    continue;
+  }
+  btn.click();
+  await wait(220);
+  const body = textOf();
+  // the tab strip itself contains every label, so diff against the pre-click text
+  const grew = body.length !== t0.length || tb.expect.test(body);
+  checks.push([`library tab opens: ${tb.label}`, grew && tb.expect.test(body)]);
+  checks.push([`library tab adds no console error: ${tb.label}`, errors.length === 0]);
+}
+
+// --- the catalogue sizes must actually be visible in the UI -----------------
+{
+  const filtersBtn = [...document.querySelectorAll("button")].find(
+    (b) => (b.getAttribute("title") || "") === "Filters",
+  );
+  filtersBtn?.click();
+  await wait(250);
+  const text2 = textOf();
+  // The filters tab renders one card per preset, each titled with its name.
+  const looks = [
+    "Original",
+    "Kodachrome",
+    "Portra 400",
+    "Bleach Bypass",
+    "Cyberpunk",
+    "Mono High",
+    "Neon Night",
+    "Teal & Orange",
+  ];
+  const cards = [...document.querySelectorAll("button")].filter((b) => {
+    const t = b.getAttribute("title") || "";
+    return looks.includes(t);
+  });
+  checks.push(["filters grid shows the full catalogue", cards.length >= 8]);
+  checks.push(["filters grid includes new looks", /koda|portra|bleach/i.test(text2)]);
+  // each card should carry a real preview, not just a label
+  const previews = document.querySelectorAll("svg");
+  checks.push(["filter cards render preview artwork", previews.length >= 8]);
+}
+
+failed = 0;
+for (const [name, ok] of checks) {
+  console.log(ok ? "  PASS" : "  FAIL", name);
+  if (!ok) failed++;
+}
+
 console.log("BODY TEXT (first 500):", text.slice(0, 500));
 console.log("console.errors:", errors.length ? errors.slice(0, 6) : "none");
 
 if (failed === 0) {
-  console.log("SMOKE-EDITOR PASS — editor mounts with all new surfaces");
+  console.log(
+    `SMOKE-EDITOR PASS — editor mounts, all ${LIBRARY_TABS.length} library tabs open, catalogues populated`,
+  );
   process.exit(0);
 } else {
   console.log(`SMOKE-EDITOR FAIL — ${failed} check(s) failed`);

@@ -170,3 +170,65 @@
   .mb-btn, .mb-btn-ghost { transition: none; }
   .mb-btn:hover, .mb-btn:active, .mb-btn-ghost:active { transform: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   MayoCut library previews.
+
+   The asset grid shows real motion previews instead of static placeholders, so
+   a "Whip pan" card actually whips and a "Soft wipe" card actually wipes. These
+   are pure CSS so they cost nothing on the canvas and pause for reduced-motion
+   users.
+--------------------------------------------------------------------------- */
+@keyframes mc-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.25); }
+}
+@keyframes mc-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px) rotate(-2deg); }
+  75% { transform: translateX(3px) rotate(2deg); }
+}
+@keyframes mc-hue {
+  0% { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}
+@keyframes mc-slide-x {
+  0% { transform: translateX(100%); opacity: 0.2; }
+  50% { transform: translateX(0); opacity: 1; }
+  100% { transform: translateX(-100%); opacity: 0.2; }
+}
+@keyframes mc-slide-y {
+  0% { transform: translateY(100%); opacity: 0.2; }
+  50% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-100%); opacity: 0.2; }
+}
+@keyframes mc-wipe-x {
+  0% { clip-path: inset(0 100% 0 0); }
+  50%, 100% { clip-path: inset(0 0 0 0); }
+}
+@keyframes mc-wipe-y {
+  0% { clip-path: inset(100% 0 0 0); }
+  50%, 100% { clip-path: inset(0 0 0 0); }
+}
+@keyframes mc-fade {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 1; }
+}
+
+/* hide scrollbars on the library tab strip without losing scrollability */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  [class*="mc-"] { animation: none !important; }
+}
+
+@keyframes mc-diag {
+  0% { transform: translate(100%, 100%); opacity: 0.15; }
+  55% { transform: translate(0, 0); opacity: 1; }
+  100% { transform: translate(-100%, -100%); opacity: 0.15; }
+}
+@keyframes mc-punch {
+  0%, 100% { transform: scale(1); opacity: 0.4; }
+  45% { transform: scale(1.35); opacity: 1; }
+}

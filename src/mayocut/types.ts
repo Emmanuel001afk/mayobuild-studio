@@ -68,21 +68,84 @@ export type TransitionKind =
   | "wipeup"
   | "wipedown"
   | "zoom"
-  | "blur";
+  | "blur"
+  // --- additional families -------------------------------------------------
+  | "wipeleftsoft"
+  | "wiperightsoft"
+  | "wipeupsoft"
+  | "wipedownsoft"
+  /** diagonal push: B enters from bottom-right, A exits top-left */
+  | "slide";
+
+/** Transition families used to group the picker into tabs. */
+export type TransitionFamily = "basic" | "slide" | "wipe" | "zoom";
+
+export const TRANSITION_FAMILY: Record<TransitionKind, TransitionFamily> = {
+  none: "basic",
+  crossfade: "basic",
+  fadeblack: "basic",
+  fadewhite: "basic",
+  slideleft: "slide",
+  slideright: "slide",
+  slideup: "slide",
+  slidedown: "slide",
+  slide: "slide",
+  wipeleft: "wipe",
+  wiperight: "wipe",
+  wipeup: "wipe",
+  wipedown: "wipe",
+  wipeleftsoft: "wipe",
+  wiperightsoft: "wipe",
+  wipeupsoft: "wipe",
+  wipedownsoft: "wipe",
+  zoom: "zoom",
+  blur: "zoom",
+};
+
+/** Hard-edged or feathered wipe direction, or null when not a wipe. */
+export function wipeDir(
+  kind: TransitionKind,
+): { dir: "left" | "right" | "up" | "down"; soft: boolean } | null {
+  switch (kind) {
+    case "wipeleft":
+      return { dir: "left", soft: false };
+    case "wiperight":
+      return { dir: "right", soft: false };
+    case "wipeup":
+      return { dir: "up", soft: false };
+    case "wipedown":
+      return { dir: "down", soft: false };
+    case "wipeleftsoft":
+      return { dir: "left", soft: true };
+    case "wiperightsoft":
+      return { dir: "right", soft: true };
+    case "wipeupsoft":
+      return { dir: "up", soft: true };
+    case "wipedownsoft":
+      return { dir: "down", soft: true };
+    default:
+      return null;
+  }
+}
 
 export const TRANSITIONS: { id: TransitionKind; name: string }[] = [
   { id: "none", name: "None" },
   { id: "crossfade", name: "Crossfade" },
   { id: "fadeblack", name: "Dip to black" },
   { id: "fadewhite", name: "Dip to white" },
-  { id: "slideleft", name: "Slide left" },
-  { id: "slideright", name: "Slide right" },
-  { id: "slideup", name: "Slide up" },
-  { id: "slidedown", name: "Slide down" },
+  { id: "slideleft", name: "Push left" },
+  { id: "slideright", name: "Push right" },
+  { id: "slideup", name: "Push up" },
+  { id: "slidedown", name: "Push down" },
+  { id: "slide", name: "Diagonal push" },
   { id: "wipeleft", name: "Wipe left" },
   { id: "wiperight", name: "Wipe right" },
   { id: "wipeup", name: "Wipe up" },
   { id: "wipedown", name: "Wipe down" },
+  { id: "wipeleftsoft", name: "Soft wipe left" },
+  { id: "wiperightsoft", name: "Soft wipe right" },
+  { id: "wipeupsoft", name: "Soft wipe up" },
+  { id: "wipedownsoft", name: "Soft wipe down" },
   { id: "zoom", name: "Zoom punch" },
   { id: "blur", name: "Blur dissolve" },
 ];
@@ -131,7 +194,20 @@ export type EffectId =
   | "tilt-up"
   | "kenburns"
   | "pulse-color"
-  | "sway";
+  | "sway"
+  // --- second wave -------------------------------------------------------
+  | "tilt-down"
+  | "roll"
+  | "float"
+  | "breathe"
+  | "jitter"
+  | "whip-left"
+  | "whip-right"
+  | "dolly-in"
+  | "dolly-out"
+  | "tilt-shift"
+  | "earthquake"
+  | "orbit";
 
 export const EFFECTS: { id: EffectId; name: string }[] = [
   { id: "none", name: "None" },
@@ -150,7 +226,53 @@ export const EFFECTS: { id: EffectId; name: string }[] = [
   { id: "kenburns", name: "Ken Burns (slow drift)" },
   { id: "pulse-color", name: "Color pulse" },
   { id: "sway", name: "Sway" },
+  { id: "tilt-down", name: "Tilt down" },
+  { id: "roll", name: "Roll" },
+  { id: "float", name: "Float" },
+  { id: "breathe", name: "Breathe" },
+  { id: "jitter", name: "Jitter" },
+  { id: "whip-left", name: "Whip pan left" },
+  { id: "whip-right", name: "Whip pan right" },
+  { id: "dolly-in", name: "Dolly in" },
+  { id: "dolly-out", name: "Dolly out" },
+  { id: "tilt-shift", name: "Tilt shift" },
+  { id: "earthquake", name: "Earthquake" },
+  { id: "orbit", name: "Orbit" },
 ];
+
+/** Effect grouping for the Effects tab. */
+export type EffectFamily = "camera" | "motion" | "impact" | "retro";
+
+export const EFFECT_FAMILY: Record<EffectId, EffectFamily> = {
+  none: "camera",
+  "zoom-pulse": "motion",
+  heartbeat: "motion",
+  shake: "impact",
+  spin: "camera",
+  glitch: "retro",
+  "flash-in": "impact",
+  "blur-in": "camera",
+  vhs: "retro",
+  "zoom-out": "camera",
+  "pan-left": "camera",
+  "pan-right": "camera",
+  "tilt-up": "camera",
+  kenburns: "camera",
+  "pulse-color": "retro",
+  sway: "motion",
+  "tilt-down": "camera",
+  roll: "camera",
+  float: "motion",
+  breathe: "motion",
+  jitter: "impact",
+  "whip-left": "camera",
+  "whip-right": "camera",
+  "dolly-in": "camera",
+  "dolly-out": "camera",
+  "tilt-shift": "retro",
+  earthquake: "impact",
+  orbit: "camera",
+};
 
 /**
  * A drawable speed curve point. `at` is normalised position through the source
@@ -214,7 +336,16 @@ export type TextAnim =
   | "neon"
   | "zoom-in"
   | "rise"
-  | "wipe-in";
+  | "wipe-in"
+  // --- second wave -------------------------------------------------------
+  | "pop"
+  | "drop-in"
+  | "swing"
+  | "blur-in"
+  | "tracking-in"
+  | "flip"
+  | "skew-in"
+  | "wave";
 
 export const TEXT_ANIMS: { id: TextAnim; name: string }[] = [
   { id: "none", name: "None" },
@@ -229,7 +360,41 @@ export const TEXT_ANIMS: { id: TextAnim; name: string }[] = [
   { id: "slideleft", name: "Slide from left" },
   { id: "rise", name: "Rise + fade" },
   { id: "wipe-in", name: "Wipe in" },
+  { id: "pop", name: "Pop" },
+  { id: "drop-in", name: "Drop in" },
+  { id: "swing", name: "Swing" },
+  { id: "blur-in", name: "Blur in" },
+  { id: "tracking-in", name: "Tracking in" },
+  { id: "flip", name: "Flip in" },
+  { id: "skew-in", name: "Skew in" },
+  { id: "wave", name: "Wave" },
 ];
+
+/** Text animation grouping for the Animation picker. */
+export type TextAnimFamily = "in" | "loop" | "kinetic" | "style";
+
+export const TEXT_ANIM_FAMILY: Record<TextAnim, TextAnimFamily> = {
+  none: "in",
+  fade: "in",
+  slideup: "in",
+  slideleft: "in",
+  bounce: "in",
+  "zoom-in": "in",
+  rise: "in",
+  "wipe-in": "in",
+  pop: "in",
+  "drop-in": "in",
+  "blur-in": "in",
+  flip: "in",
+  "skew-in": "in",
+  swing: "in",
+  kenburns: "loop",
+  neon: "loop",
+  wave: "loop",
+  typewriter: "kinetic",
+  karaoke: "kinetic",
+  "tracking-in": "kinetic",
+};
 
 /** Text fonts — built from font stacks present on Android, iOS and desktop,
  *  so exports look the same on every device (no font downloads needed). */
@@ -369,6 +534,134 @@ export const TEXT_PRESETS: { name: string; patch: Partial<OverlayClip> }[] = [
       upper: true,
       tracking: 6,
       size: 44,
+    },
+  },
+  // --- second wave: social-native looks (CapCut sells these as "Styles") ---
+  {
+    name: "TikTok white",
+    patch: {
+      color: "#ffffff",
+      bg: "",
+      bold: true,
+      stroke: 6,
+      strokeColor: "#000000",
+      shadow: 0.9,
+      upper: false,
+      anim: "pop",
+    },
+  },
+  {
+    name: "Yellow bar",
+    patch: {
+      color: "#111111",
+      bg: "#ffe14d",
+      bold: true,
+      radius: 6,
+      shadow: 0,
+      upper: true,
+      tracking: 1,
+    },
+  },
+  {
+    name: "Pink sticker",
+    patch: {
+      color: "#ffffff",
+      bg: "#ff3d81",
+      bold: true,
+      radius: 60,
+      shadow: 0.5,
+      upper: true,
+      anim: "bounce",
+    },
+  },
+  {
+    name: "Mint chip",
+    patch: {
+      color: "#04241c",
+      bg: "#5eead4",
+      bold: true,
+      radius: 50,
+      shadow: 0,
+      upper: true,
+    },
+  },
+  {
+    name: "Gradient-ish glow",
+    patch: {
+      color: "#a78bfa",
+      bg: "",
+      bold: true,
+      stroke: 0,
+      shadow: 1,
+      anim: "neon",
+      upper: true,
+    },
+  },
+  {
+    name: "Subtitle line",
+    patch: {
+      color: "#ffffff",
+      bg: "rgba(0,0,0,0.45)",
+      bold: false,
+      radius: 12,
+      size: 34,
+      pos: "bc",
+      shadow: 0.4,
+    },
+  },
+  {
+    name: "Headline split",
+    patch: {
+      color: "#ffffff",
+      bg: "",
+      bold: true,
+      upper: true,
+      size: 96,
+      tracking: 6,
+      align: "left",
+      pos: "ml",
+      anim: "tracking-in",
+      shadow: 0.7,
+    },
+  },
+  {
+    name: "Retro chrome",
+    patch: {
+      color: "#fde68a",
+      bg: "",
+      bold: true,
+      stroke: 4,
+      strokeColor: "#7c2d12",
+      shadow: 0.8,
+      italic: true,
+      upper: true,
+      anim: "swing",
+    },
+  },
+  {
+    name: "Notebook",
+    patch: {
+      color: "#1e293b",
+      bg: "#fef9c3",
+      bold: false,
+      radius: 4,
+      underline: true,
+      shadow: 0,
+      italic: true,
+    },
+  },
+  {
+    name: "News lower third",
+    patch: {
+      color: "#ffffff",
+      bg: "#b91c1c",
+      bold: true,
+      radius: 0,
+      upper: true,
+      align: "left",
+      pos: "bl",
+      tracking: 1,
+      anim: "slideleft",
     },
   },
 ];

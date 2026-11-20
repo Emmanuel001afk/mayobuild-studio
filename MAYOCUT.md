@@ -14,7 +14,27 @@ assistive* — when AI is unavailable the platform is still 100% usable.
 | Android — `.apk` | Capacitor build (`android/`) of the same static shell. Side-loadable APK. |
 | Downloads page — `/downloads` | Central page hosting the EXE/APK links (GitHub Releases) + PWA install help. |
 
-## Feature set (v0.7)
+## Feature set (v0.8)
+
+**Workspace organisation** (v0.8)
+
+The layout follows CapCut desktop: library top-left, player centre, properties
+right, full-width timeline along the bottom.
+
+- **Tabbed asset library** (9 categories) — Media · Audio · Text · Stickers ·
+  Effects · Transitions · Filters · Adjust · Captions, each a scrollable grid of
+  *actionable* cards. Cards show a real miniature of the effect (a live CSS
+  filter over a sample scene, a moving arrow for a movement, a gradient swatch
+  that slides/wipes in the right axis for a transition) rather than a uniform
+  placeholder.
+- **Browse always, apply on selection** — every catalogue is scrollable with
+  nothing selected; only applying needs a target clip. (Hiding the grid behind
+  "select a clip first" made the default state a dead end.)
+- **Tabbed inspector** — Video / Audio / Speed / Anim / Adjust jump to the
+  matching group instead of one long scroll; the sections themselves are shared,
+  so a control can never exist in one tab and be missing from another.
+- **One library on every platform** — the mobile drawer renders the same
+  component, so phone users see the same 19 transitions and 40 looks.
 
 **Timeline & clips**
 - **Multi-track timeline** — main video lane + Text / Overlay / Audio lanes, per-lane
@@ -30,7 +50,8 @@ assistive* — when AI is unavailable the platform is still 100% usable.
 - **Reverse** — frame-stepped playback (audio muted, as CapCut does)
 
 **Look**
-- **Filters** — 19 presets (Vivid, Warm, Cinema, Noir, Teal & Orange, Retro Film, …)
+- **Filters** — **40 presets** grouped into Clean / Film / Warm-cool / Neon / Mono
+  (Kodachrome, Portra 400, Bleach Bypass, Cyanotype, Cyberpunk, Mono High, …)
 - **Adjust** — Brightness, Contrast, Saturation, Hue, **Temperature, Tint, Fade,
   Sharpen, Vignette and Split-tone** (the last five are a real pixel pass, so they
   also work on phones without CSS `filter` support for those effects)
@@ -39,19 +60,27 @@ assistive* — when AI is unavailable the platform is still 100% usable.
   background colour behind letterboxing
 - **Color match** — copy one clip's grade to every other clip in one tap
 
-**Transitions** (12) — crossfade, dip to black, dip to white, slide ←→↑↓,
-wipe ←→↑↓, zoom punch, blur dissolve; duration control and “apply to every cut”.
+**Transitions** (19) — crossfade, dip to black/white, push ←→↑↓, **diagonal
+push**, hard wipe ←→↑↓, **soft (feathered) wipe ←→↑↓**, zoom punch, blur
+dissolve. Duration control and “apply to every cut”. The feathered wipe is a
+real gradient-masked composite, verified in tests for direction, monotonic
+reveal and mirror symmetry — an inversion bug that made "wipe left" wipe the
+wrong way was caught this way.
 
 **Text** — 10 cross-platform font styles **+ imported .ttf/.otf fonts** (stored
 on-device), size, colour, pill background with adjustable radius, **outline,
 shadow strength, letter spacing, line height, alignment, italic/underline/
-uppercase, opacity**, 9-position grid + free drag on the preview, 12 animations
-(fade, slide-up/left, typewriter, karaoke, bounce, Ken Burns, neon, zoom-in,
-rise, wipe-in) and **10 one-tap text looks**.
+uppercase, opacity**, 9-position grid + free drag on the preview, **20 animations** grouped into
+In / Loop / Kinetic (fade, slide, typewriter, karaoke, bounce, Ken Burns, neon,
+zoom-in, rise, wipe-in, pop, drop-in, swing, blur-in, tracking-in, flip,
+skew-in, per-letter wave) and **20 one-tap text looks** (TikTok white, Yellow
+bar, Pink sticker, Mint chip, Headline split, News lower third, …).
 
-**Motion** — 15 built-in effects (zoom pulse, heartbeat, shake, spin, glitch,
-flash-in, blur-in, VHS, zoom-out, pan left/right, tilt-up, Ken Burns, colour
-pulse, sway) plus **keyframes on x/y/scale/rotation/opacity for every clip**.
+**Motion** — **28 effects** in four families (Camera / Motion / Impact / Retro):
+zoom pulse, heartbeat, shake, spin, glitch, flash-in, blur-in, VHS, zoom-out,
+pan, tilt up/down, Ken Burns, colour pulse, sway, roll, float, breathe, jitter,
+whip pan ←→, dolly in/out, tilt-shift, earthquake, orbit — plus **keyframes on
+x/y/scale/rotation/opacity for every clip**.
 
 **Audio**
 - Layered music/SFX/voiceover with volume, fade in/out, per-clip mute

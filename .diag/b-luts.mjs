@@ -48,8 +48,8 @@ var init_idb = __esm({
   "src/mayocut/idb.ts"() {
     "use strict";
     DB_NAME = "mayocut-db";
-    DB_VERSION = 2;
-    STORES = ["media", "blobs", "projects", "templates", "exports", "luts"];
+    DB_VERSION = 3;
+    STORES = ["media", "blobs", "projects", "templates", "exports", "luts", "fonts"];
     dbPromise = null;
     db = {
       // --- media ---
@@ -90,6 +90,10 @@ var init_idb = __esm({
       listLuts: () => tx("luts", "readonly", (s) => s.getAll()),
       saveLut: (r) => tx("luts", "readwrite", (s) => s.put(r)),
       deleteLut: (id) => tx("luts", "readwrite", (s) => s.delete(id)),
+      // --- imported fonts (ttf/otf bytes, kept on-device) ---
+      listFonts: () => tx("fonts", "readonly", (s) => s.getAll()),
+      saveFont: (f) => tx("fonts", "readwrite", (s) => s.put(f)),
+      deleteFont: (id) => tx("fonts", "readwrite", (s) => s.delete(id)),
       // --- exports ---
       listExports: () => tx("exports", "readonly", (s) => s.getAll()),
       saveExport: (item, blob) => open().then(
@@ -317,7 +321,13 @@ async function importLut(name, blob) {
   const text = await blob.text();
   const { size, data } = parseCube(text);
   const { db: db2 } = await Promise.resolve().then(() => (init_idb(), idb_exports));
-  await db2.saveLut({ id: name, name, size, data: data.buffer, createdAt: Date.now() });
+  await db2.saveLut({
+    id: name,
+    name,
+    size,
+    data: data.buffer,
+    createdAt: Date.now()
+  });
   return { name, size, data };
 }
 async function loadLut(name) {
