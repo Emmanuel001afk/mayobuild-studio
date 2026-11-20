@@ -100,6 +100,8 @@ interface VideoProbe {
   width: number;
   height: number;
   playable: boolean;
+  /** timed out before a frame arrived — unknown, explicitly NOT unplayable */
+  indeterminate?: boolean;
   thumb?: string;
 }
 
@@ -108,7 +110,17 @@ interface VideoProbe {
  * attached BEFORE src/load: attaching them afterwards can miss cached,
  * synchronous media events and incorrectly classify supported clips.
  */
-async function probeVideo(url: string, timeoutMs = 8000): Promise<VideoProbe> {
+/**
+ * Probe a video without ever condemning it on a timeout.
+ *
+ * `unplayable` is persisted on the media item, so a false positive is not a
+ * transient glitch: the clip shows the "can't be decoded" card and plays
+ * audio-only for the life of the project. Only a real decoder `error` event
+ * may set it. A slow/partial file gets a generous budget and, if it still has
+ * not produced a frame, is reported as `indeterminate` (playable, no thumb) so
+ * the engine can retry when the clip is actually reached.
+ */
+async function probeVideo(url: string, timeoutMs = 30000): Promise<VideoProbe> {
   const video = document.createElement("video");
   video.preload = "auto";
   video.muted = true;
@@ -117,9 +129,10 @@ async function probeVideo(url: string, timeoutMs = 8000): Promise<VideoProbe> {
     let settled = false;
     let metadataSeen = false;
     let timeout = 0;
-    const finish = (playable: boolean) => {
+    const finish = (outcome: "playable" | "error" | "unknown") => {
       if (settled) return;
       settled = true;
+      const playable = outcome !== "error";
       window.clearTimeout(timeout);
       video.removeEventListener("loadedmetadata", onMetadata);
       video.removeEventListener("loadeddata", onData);
@@ -142,22 +155,24 @@ async function probeVideo(url: string, timeoutMs = 8000): Promise<VideoProbe> {
         width: video.videoWidth || 0,
         height: video.videoHeight || 0,
         playable,
+        indeterminate: outcome === "unknown",
         thumb,
       });
     };
     const onMetadata = () => {
       metadataSeen = true;
     };
-    const onData = () => finish(true);
-    const onError = () => finish(false);
-    timeout = window.setTimeout(() => finish(false), timeoutMs);
+    const onData = () => finish("playable");
+    // A real decoder rejection is the ONLY thing that makes a file unplayable.
+    const onError = () => finish("error");
+    timeout = window.setTimeout(() => finish("unknown"), timeoutMs);
     video.addEventListener("loadedmetadata", onMetadata);
     video.addEventListener("loadeddata", onData);
     video.addEventListener("error", onError);
     video.src = url;
     video.load();
-    if (video.readyState >= 2) finish(true);
-    else if (metadataSeen && video.error) finish(false);
+    if (video.readyState >= 2) finish("playable");
+    else if (metadataSeen && video.error) finish("error");
   });
   video.pause();
   video.removeAttribute("src");

@@ -64,12 +64,23 @@ export function Timeline(p: Props) {
     t,
     ...beatsForSnap(project.beats ?? []),
     ...spans.flatMap((s) => [s.start, s.end]),
+    // Never snap a clip to its own edges: it is always sitting exactly on
+    // them, so every small drag would snap right back and the clip would
+    // appear impossible to move (or to resize by a few pixels).
     ...project.tracks.flatMap((tr) =>
       tr.clips
         .filter((clip) => clip.id !== clipId)
         .flatMap((clip) => [clip.start, clip.start + clip.duration]),
     ),
   ];
+  // A clip being resized must not snap to its own *other* edge/start either.
+  const snapPointsForEdge = (clip: OverlayClip, mode: "move" | "in" | "out") => {
+    const own = [clip.start, clip.start + clip.duration];
+    const pts = snapPointsFor(clip.id);
+    // for "in" the fixed edge is `start`; for "out" it is the end
+    const keep = mode === "in" ? own[0] : mode === "out" ? own[1] : null;
+    return keep == null ? pts : [keep, ...pts];
+  };
   const fitTimeline = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -293,13 +304,16 @@ export function Timeline(p: Props) {
                       : "border-white/15 hover:border-white/40"
                   } cursor-grab active:cursor-grabbing bg-slate-800 ${isDragging ? "opacity-60 ring-2 ring-cyan-300" : ""}`}
                   style={{ left: s.start * pps, width: Math.max(8, (s.end - s.start) * pps) }}
-                  onPointerDown={(e) =>
+                  onPointerDown={(e) => {
+                    // selecting is the click action; a real drag reorders
                     drag(
                       e,
-                      () => undefined,
+                      (dx) => {
+                        if (Math.abs(dx) > 6) beginReorder(e, s.clip.id);
+                      },
                       () => p.onSelect({ lane: "main", id: s.clip.id }),
-                    )
-                  }
+                    );
+                  }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
                     p.onSplit();
@@ -387,7 +401,7 @@ export function Timeline(p: Props) {
                   )}
                   {/* trim handles */}
                   <div
-                    className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-white/0 hover:bg-cyan-400/50"
+                    className="absolute left-0 top-0 bottom-0 w-3.5 cursor-ew-resize bg-cyan-400/30 hover:bg-cyan-400/70 border-r border-black/30 z-10"
                     onPointerDown={(e) => {
                       e.stopPropagation();
                       drag(
@@ -401,7 +415,7 @@ export function Timeline(p: Props) {
                     }}
                   />
                   <div
-                    className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-white/0 hover:bg-cyan-400/50"
+                    className="absolute right-0 top-0 bottom-0 w-3.5 cursor-ew-resize bg-cyan-400/30 hover:bg-cyan-400/70 border-l border-black/30 z-10"
                     onPointerDown={(e) => {
                       e.stopPropagation();
                       drag(
@@ -414,14 +428,10 @@ export function Timeline(p: Props) {
                       );
                     }}
                   />
-                  {/* reorder affordance: grab the clip body to move it */}
+                  {/* grab hint: the whole clip body is draggable to reorder */}
                   <div
-                    className="absolute left-1/2 -translate-x-1/2 top-0.5 h-1.5 w-6 rounded-full bg-black/40 pointer-events-auto cursor-grab"
-                    title="Drag to reorder this clip"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      beginReorder(e, s.clip.id);
-                    }}
+                    className="absolute left-1/2 -translate-x-1/2 top-0.5 h-1 w-6 rounded-full bg-white/25 pointer-events-none"
+                    aria-hidden
                   />
                 </div>
               );

@@ -850,10 +850,16 @@ export function Inspector(p: Props) {
         <>
           <Section label="Text" anchor="video">
             <textarea
-              className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs h-16 resize-none"
+              className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs min-h-24 resize-y leading-snug"
               value={over.text ?? ""}
+              placeholder="Type your text — Enter starts a new line"
+              spellCheck
               onChange={(e) => p.onPatchOverlay(trackId, { text: e.target.value })}
             />
+            <div className="text-[10px] text-muted-foreground">
+              {(over.text ?? "").length} characters · {(over.text ?? "").split("\n").length} line
+              {(over.text ?? "").split("\n").length === 1 ? "" : "s"}
+            </div>
           </Section>
           <Section label="Text presets" anchor="video">
             <div className="grid grid-cols-2 gap-1">
