@@ -1126,5 +1126,100 @@ await t("audio and image file types remain correctly classified", () => {
   assert.equal(U.kindFromMime("application/octet-stream", "notes.txt"), null);
 });
 
+// ================= playback regressions (audio doubling / speed) =================
+// These pin down three bugs that shipped and were audible:
+//  1. the FX echo path was summed 1:1 into the output, so every clip echoed
+//     itself even at echo 0 ("two voices at once")
+//  2. the outgoing clip never faded across a transition, so the overlap summed
+//     to ~2x loudness
+//  3. a clip with no `speed` produced NaN, and NaN playbackRate is silently
+//     ignored by browsers, so the element kept the previous clip's rate
+const mkClip = (o = {}) => ({
+  id: 'c', mediaId: 'm', in: 0, out: 10, speed: 1, reverse: false,
+  filter: 'none', adjust: {}, volume: 1, muted: false,
+  transitionIn: 'none', transitionDur: 0, ...o,
+});
+
+await t('clip duration is never NaN when speed is missing (legacy project)', () => {
+  const d = T.mainClipDuration(mkClip({ speed: undefined }));
+  assert.ok(Number.isFinite(d), `got ${d}`);
+  assert.equal(d, 10);
+});
+
+await t('clip duration is never NaN when out is missing', () => {
+  const d = T.mainClipDuration(mkClip({ out: undefined }));
+  assert.ok(Number.isFinite(d), `got ${d}`);
+});
+
+await t('playbackRate is always a finite positive number', () => {
+  for (const c of [
+    mkClip({ speed: undefined }),
+    mkClip({ speed: null }),
+    mkClip({ speed: 0 }),
+    mkClip({ speed: -3 }),
+    mkClip({ out: undefined }),
+    mkClip({ speed: 1 }),
+    mkClip({ speed: 2 }),
+    mkClip({ speed: 0.5 }),
+  ]) {
+    const r = T.mainPlaybackRate(c, 0.1);
+    assert.ok(Number.isFinite(r) && r > 0, `rate ${r} for speed=${c.speed}`);
+  }
+});
+
+await t('1x stays 1x and 2x stays 2x (no silent 2x drift)', () => {
+  assert.equal(T.mainPlaybackRate(mkClip({ speed: 1 }), 0.5), 1);
+  assert.equal(T.mainPlaybackRate(mkClip({ speed: 2 }), 0.5), 2);
+  assert.equal(T.mainClipDuration(mkClip({ speed: 1 })), 10);
+  assert.equal(T.mainClipDuration(mkClip({ speed: 2 })), 5);
+});
+
+await t('source position does not run backwards or past the clip', () => {
+  const c = mkClip({ in: 2, out: 8 });
+  const a = T.mainSrcAt(c, 0);
+  const b = T.mainSrcAt(c, 3);
+  assert.ok(b >= a, 'source must advance');
+  assert.ok(b <= 8 + 1e-6, 'source must stay inside out');
+});
+
+await t('transition overlap never sums above unity (no doubled audio)', () => {
+  // Two 5s clips with the default 0.5s crossfade. The outgoing clip MUST fade
+  // while the incoming one rises; otherwise both play at full volume and the
+  // mix is ~2x, which is heard as two voices.
+  const A = { clip: mkClip({ id: 'A', transitionIn: 'crossfade', transitionDur: 0.5 }), start: 0, end: 5 };
+  const B = { clip: mkClip({ id: 'B', transitionIn: 'crossfade', transitionDur: 0.5 }), start: 5, end: 10 };
+  let worst = 0;
+  for (let t = 4.0; t <= 5.2; t += 0.02) {
+    const g = T.mainClipGain(A.clip, A, B, t) + T.mainClipGain(B.clip, B, null, t);
+    worst = Math.max(worst, g);
+  }
+  assert.ok(worst <= 1.02, `overlap summed to ${worst.toFixed(2)}x (must stay ~1.0)`);
+});
+
+await t('crossfade is monotonic: incoming rises while outgoing falls', () => {
+  const A = { clip: mkClip({ id: 'A', transitionIn: 'crossfade', transitionDur: 0.5 }), start: 0, end: 5 };
+  const B = { clip: mkClip({ id: 'B', transitionIn: 'crossfade', transitionDur: 0.5 }), start: 5, end: 10 };
+  const a0 = T.mainClipGain(A.clip, A, B, 4.6);
+  const a1 = T.mainClipGain(A.clip, A, B, 4.9);
+  const b0 = T.mainClipGain(B.clip, B, null, 4.6);
+  const b1 = T.mainClipGain(B.clip, B, null, 4.9);
+  assert.ok(a1 < a0, 'outgoing clip must fade down');
+  assert.ok(b1 > b0, 'incoming clip must fade up');
+  assert.equal(T.mainClipGain(B.clip, B, null, 5.0), 1, 'incoming fully up at its start');
+});
+
+await t('a single clip plays at its own volume with no crossfade partner', () => {
+  const A = { clip: mkClip({ id: 'A', transitionIn: 'none', volume: 0.8 }), start: 0, end: 10 };
+  assert.equal(T.mainClipGain(A.clip, A, null, 5), 0.8);
+});
+
+await t('muted and reverse clips are silent regardless of transitions', () => {
+  const A = { clip: mkClip({ muted: true }), start: 0, end: 10 };
+  assert.equal(T.mainClipGain(A.clip, A, null, 5), 0);
+  const R = { clip: mkClip({ reverse: true }), start: 0, end: 10 };
+  assert.equal(T.mainClipGain(R.clip, R, null, 5), 0);
+});
+
+
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

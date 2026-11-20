@@ -10,6 +10,7 @@ import {
   DEFAULT_ANIM,
   fontCss,
   mainClipDuration,
+  mainClipGain,
   mainPlaybackRate,
   wipeDir,
   mainSpans,
@@ -305,6 +306,8 @@ interface FxChain {
   in: GainNode; // dry input
   out: GainNode; // → master
   delay: DelayNode;
+  /** wet level for the echo path — 0 unless the clip asks for echo */
+  delayWet: GainNode;
   feedback: GainNode;
   conv: ConvolverNode;
   convWet: GainNode;
@@ -695,6 +698,11 @@ export class Engine {
     const out = ctx.createGain();
     const delay = ctx.createDelay(1.5);
     delay.delayTime.value = 0.3;
+    // The echo must be a *send*: delay → delayWet → out. Without this gain
+    // stage the dry and delayed signals were summed 1:1 into the output,
+    // which is the "two voices at once" artefact.
+    const delayWet = ctx.createGain();
+    delayWet.gain.value = 0;
     const feedback = ctx.createGain();
     feedback.gain.value = 0;
     const conv = ctx.createConvolver();
@@ -721,14 +729,26 @@ export class Engine {
     mid.connect(high);
     high.connect(out); // dry
     inNode.connect(delay);
+    delay.connect(delayWet);
+    delayWet.connect(out);
     delay.connect(feedback);
     feedback.connect(delay);
-    delay.connect(out);
     inNode.connect(conv);
     conv.connect(convWet);
     convWet.connect(out);
     out.connect(this.master!);
-    const chain: FxChain = { in: inNode, out, delay, feedback, conv, convWet, low, mid, high };
+    const chain: FxChain = {
+      in: inNode,
+      out,
+      delay,
+      delayWet,
+      feedback,
+      conv,
+      convWet,
+      low,
+      mid,
+      high,
+    };
     if (rec) {
       if (rec.sourceNode) {
         try {
@@ -839,6 +859,8 @@ export class Engine {
       const reverb = a?.reverb ?? 0;
       const echo = a?.echo ?? 0;
       fx.delay.delayTime.value = 0.22 + 0.18 * echo;
+      // wet level scales with the amount; 0 means genuinely silent
+      fx.delayWet.gain.value = echo > 0 ? 0.65 * echo : 0;
       fx.feedback.gain.value = echo > 0 ? 0.45 * echo : 0;
       fx.convWet.gain.value = reverb;
       // voice shaping (dB: ±12 for a strong but usable range)
@@ -1033,8 +1055,15 @@ export class Engine {
             /* not seekable yet */
           }
         }
-        // reverse clips advance the element forward, so use the clock rate
-        el.playbackRate = mainPlaybackRate(s.clip, t - s.start);
+        // reverse clips advance the element forward, so use the clock rate.
+        // Guarded: assigning NaN to playbackRate is a silent no-op in every
+        // browser, which leaves the element at the previous clip's rate —
+        // "speed says 1x but it plays at 2x".
+        {
+          const rate = mainPlaybackRate(s.clip, t - s.start);
+          const safe = Number.isFinite(rate) && rate > 0 ? Math.min(16, rate) : 1;
+          if (el.playbackRate !== safe) el.playbackRate = safe;
+        }
         el.volume = this.effectiveVolume(s.clip, t, s);
         if (s.clip.reverse) {
           if (!el.paused) el.pause();
@@ -1124,6 +1153,14 @@ export class Engine {
       const winStart = s.clip.transitionIn !== "none" ? s.start - s.clip.transitionDur : s.start;
       if (t >= winStart && t < s.end) {
         if (s.clip.freeze) continue;
+        const rec = this.els.get(s.clip.mediaId);
+        // A video we had to swap to a shadow <audio> element cannot render,
+        // but its own element may still carry an audible track. Mute + pause
+        // it here or it doubles the fallback.
+        if (rec?.videoBroken && rec.el instanceof HTMLVideoElement) {
+          rec.el.muted = true;
+          if (!rec.el.paused) rec.el.pause();
+        }
         const el = this.audioEl(s.clip.mediaId);
         if (el) out.push({ el, clipReverse: !!s.clip.reverse });
       }
@@ -1143,16 +1180,18 @@ export class Engine {
   }
 
   private effectiveVolume(clip: MainClip, t: number, s: { start: number; end: number }): number {
-    if (clip.reverse || clip.freeze) return 0; // frame-stepped / held frames are silent
-    let v = clip.muted ? 0 : clip.volume;
-    if (clip.transitionIn !== "none" && t < s.start && clip.transitionDur > 0) {
-      const k = (t - (s.start - clip.transitionDur)) / clip.transitionDur;
-      v *= Math.max(0, Math.min(1, k));
-    }
-    if (s.end - t < 0.3 && clip.transitionIn === "none")
-      v *= Math.max(0, Math.min(1, (s.end - t) / 0.3));
+    // The transition crossfade maths lives in types.ts so it can be asserted
+    // without a DOM (see mainClipGain). Here we only add the runtime factors.
+    let v = mainClipGain(clip, s, this.nextMainSpan(s), t);
     v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
     return Math.max(0, Math.min(1, v));
+  }
+
+  /** The span immediately after `s`, or null when `s` is the last one. */
+  private nextMainSpan(s: { start: number; end: number }) {
+    const spans = mainSpans(this.project);
+    const i = spans.findIndex((x) => Math.abs(x.start - s.start) < 1e-6);
+    return i >= 0 && i + 1 < spans.length ? spans[i + 1] : null;
   }
 
   private overlayAudioVolume(c: OverlayClip, t: number): number {
@@ -1695,7 +1734,14 @@ export class Engine {
     if (el instanceof HTMLImageElement || el instanceof HTMLVideoElement) {
       const ready = el instanceof HTMLImageElement || (el.readyState >= 2 && el.videoWidth > 0);
       if (!ready) {
-        this.drawPlaceholder(ctx, W, H, c.mediaId, a, rec.videoBroken);
+        // Never paint the filename card over live playback: a seek or a
+        // dropped frame would flash text across the preview. Show it only
+        // when we genuinely have nothing (no dimensions yet) or the clip is
+        // known-broken, which is the case the card exists to explain.
+        const hasFrame = el instanceof HTMLVideoElement && el.videoWidth > 0;
+        if (rec.videoBroken || (!hasFrame && !this.playing)) {
+          this.drawPlaceholder(ctx, W, H, c.mediaId, a, rec.videoBroken);
+        }
         return;
       }
     } else {

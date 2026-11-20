@@ -916,6 +916,13 @@ export function speedCurveOf(c: MainClip): SpeedPoint[] | null {
 }
 
 /** Speed at normalised source position `x` (0..1) for a clip. */
+/** A finite, usable speed. Guards legacy/imported clips with no `speed`. */
+function safeSpeed(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.max(0.05, Math.min(100, n));
+}
+
 export function speedAt(c: MainClip, x: number): number {
   const curve = speedCurveOf(c);
   if (curve) {
@@ -931,8 +938,8 @@ export function speedAt(c: MainClip, x: number): number {
     }
     return curve[curve.length - 1].v;
   }
-  const v0 = Math.max(0.05, c.speed);
-  const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+  const v0 = safeSpeed(c.speed);
+  const v1 = c.rampTo != null ? safeSpeed(c.rampTo) : v0;
   return v0 + (v1 - v0) * clamp(x, 0, 1);
 }
 
@@ -948,8 +955,8 @@ function distanceAfter(c: MainClip, L: number, tau: number): number {
   if (tau <= 0) return 0;
   const curve = speedCurveOf(c);
   if (!curve) {
-    const v0 = Math.max(0.05, c.speed);
-    const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+    const v0 = safeSpeed(c.speed);
+    const v1 = c.rampTo != null ? safeSpeed(c.rampTo) : v0;
     if (Math.abs(v1 - v0) < 1e-9) return Math.min(L, tau * v0);
     const k = (v1 - v0) / L;
     return clamp((v0 / k) * (Math.exp(k * tau) - 1), 0, L);
@@ -988,8 +995,8 @@ function distanceAfter(c: MainClip, L: number, tau: number): number {
 function timeForDistance(c: MainClip, L: number, x: number): number {
   const curve = speedCurveOf(c);
   if (!curve) {
-    const v0 = Math.max(0.05, c.speed);
-    const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+    const v0 = safeSpeed(c.speed);
+    const v1 = c.rampTo != null ? safeSpeed(c.rampTo) : v0;
     if (Math.abs(v1 - v0) < 1e-9) return x / v0;
     const k = (v1 - v0) / L;
     return Math.log((k * x) / v0 + 1) / k;
@@ -1011,10 +1018,15 @@ function timeForDistance(c: MainClip, L: number, x: number): number {
 }
 
 export function mainClipDuration(c: MainClip): number {
-  if (c.freeze) return Math.max(0.1, c.out - c.in); // held frame length
-  const L = Math.max(0, c.out - c.in);
+  // Never return NaN: it poisons the transport clock, the seek maths and
+  // playbackRate (which browsers silently ignore when NaN).
+  const srcIn = Number.isFinite(c.in) ? c.in : 0;
+  const srcOut = Number.isFinite(c.out) ? c.out : Math.max(srcIn + 0.1, srcIn + 5);
+  if (c.freeze) return Math.max(0.1, srcOut - srcIn); // held frame length
+  const L = Math.max(0, srcOut - srcIn);
   if (L <= 0) return 0.1;
-  return Math.max(0.1, timeForDistance(c, L, L));
+  const d = timeForDistance(c, L, L);
+  return Number.isFinite(d) && d > 0 ? Math.max(0.1, d) : Math.max(0.1, L / safeSpeed(c.speed));
 }
 
 /**
@@ -1036,7 +1048,8 @@ export function mainRateAt(c: MainClip, localT: number): number {
   const L = Math.max(1e-6, c.out - c.in);
   const src = mainSrcAt(c, localT);
   const x = c.reverse ? c.out - src : src - c.in;
-  return Math.max(0.05, speedAt(c, x / L));
+  const r = speedAt(c, x / L);
+  return Number.isFinite(r) && r > 0 ? Math.max(0.05, r) : safeSpeed(c.speed);
 }
 
 /** Rate of change of the timeline clock — the media element plays at this
@@ -1047,7 +1060,43 @@ export function mainPlaybackRate(c: MainClip, localT: number): number {
   const L = Math.max(1e-6, c.out - c.in);
   const src = mainSrcAt(c, localT);
   const x = c.reverse ? c.out - src : src - c.in;
-  return Math.max(0.05, speedAt(c, x / L));
+  const r = speedAt(c, x / L);
+  // MUST be finite: assigning NaN to playbackRate is a silent no-op, leaving
+  // the element running at whatever rate the previous clip set.
+  return Number.isFinite(r) && r > 0 ? Math.max(0.05, Math.min(16, r)) : safeSpeed(c.speed);
+}
+
+/**
+ * Gain for a main clip at timeline time `t`, given the next clip in the
+ * sequence (null for the last one).
+ *
+ * Both halves of a transition must be shaped, or the overlap simply sums:
+ * with the incoming clip fading up and the outgoing clip still at 100%, the
+ * two together are ~2x loud — heard as two voices on top of each other.
+ * Pure so it can be asserted without a DOM.
+ */
+export function mainClipGain(
+  clip: MainClip,
+  span: { start: number; end: number },
+  next: { clip: MainClip; start: number; end: number } | null,
+  t: number,
+): number {
+  if (clip.reverse || clip.freeze) return 0; // frame-stepped / held frames are silent
+  let v = clip.muted ? 0 : clip.volume;
+  // incoming: fade up across this clip's own transition-in window
+  if (clip.transitionIn !== "none" && t < span.start && clip.transitionDur > 0) {
+    v *= Math.max(0, Math.min(1, (t - (span.start - clip.transitionDur)) / clip.transitionDur));
+  }
+  // outgoing: fade down across the NEXT clip's transition-in window
+  if (next && next.clip.transitionIn !== "none" && next.clip.transitionDur > 0) {
+    const winStart = next.start - next.clip.transitionDur;
+    if (t >= winStart) {
+      v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
+    }
+  } else if (span.end - t < 0.3 && clip.transitionIn === "none") {
+    v *= Math.max(0, Math.min(1, (span.end - t) / 0.3));
+  }
+  return Math.max(0, Math.min(1, v));
 }
 
 /** Sequential spans of main-track clips in timeline seconds. */
