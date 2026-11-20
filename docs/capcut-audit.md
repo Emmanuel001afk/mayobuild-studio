@@ -97,6 +97,59 @@ Already at or above CapCut parity for an *offline* editor:
 
 ---
 
+## 3c. v0.8 — breadth and organisation
+
+The honest read after v0.7 was that capability existed but was *buried*: the
+library was a flat media grid, so transitions/filters/effects/text-looks lived
+inside the inspector's scroll, and text animations had no browser at all. Breadth
+was also thin — 14 transitions, 19 filters, 16 effects, 12 text animations —
+against CapCut's category-per-tab library.
+
+**Organisation (the bigger win)**
+
+| Before | After |
+|---|---|
+| Flat media grid top-left | **9 category tabs**: Media, Audio, Text, Stickers, Effects, Transitions, Filters, Adjust, Captions |
+| Inspector = one long scroll | Inspector tabs: Video / Audio / Speed / Anim / Adjust, jumping to shared section anchors |
+| Catalogues hidden until a clip was selected | Browse always; only *applying* needs a selection (a discoverability dead end removed) |
+| Mobile had its own reduced drawers | Mobile renders the same `Library` component |
+| Cards were text buttons | Cards show a real miniature: live CSS filter over a sample scene, a moving arrow for a movement, a gradient swatch that slides/wipes in the right axis |
+
+New file: `src/mayocut/components/Library.tsx`. Preview animations are pure CSS
+(`src/styles.css`, `mc-*` keyframes) and pause under `prefers-reduced-motion`.
+
+**Breadth**
+
+| Catalogue | v0.7 | v0.8 |
+|---|---|---|
+| Filters | 19 | **40** (Clean / Film / Warm-cool / Neon / Mono groups) |
+| Transitions | 14 | **19** (+4 feathered wipes, +diagonal push), grouped into Basic / Slide / Wipe / Zoom |
+| Effects | 16 | **28** (Camera / Motion / Impact / Retro) |
+| Text animations | 12 | **20** (In / Loop / Kinetic) |
+| Text looks | 11 | **20** |
+| Shape stickers | 0 | **8** vector glyph stickers + 40 emoji |
+
+**Engine work behind it**
+
+- `drawFeatheredWipe` — gradient-masked (`destination-in`) soft wipe at preview
+  scale, with the edge travelling in the correct direction per axis.
+- 8 new effect transforms (roll, float, breathe, jitter, whip pan ×2, dolly ×2,
+  tilt-shift, earthquake, orbit).
+- 8 new text animations, including a **per-letter wave** drawn glyph-by-glyph,
+  tracking-collapse, and a horizontal squash "flip".
+- `TRANSITION_FAMILY`, `EFFECT_FAMILY`, `TEXT_ANIM_FAMILY`, `wipeDir()` exported
+  so the picker grouping can never drift from the engine's behaviour.
+
+**Caught by tests, not by eye**
+
+A wipe-direction inversion: the travelling edge always ran low→high regardless of
+direction, so "wipe left" and "wipe up" showed the incoming clip for the *whole*
+transition instead of revealing it. `audit.mjs` now asserts coverage is 0 at k=0
+and 1 at k=1 for all four directions, that the reveal is monotonic, and that
+left(k) is the pointwise mirror of right(k).
+
+---
+
 ## 3b. v0.7 — closing the gap list (shipped)
 
 Everything below was implemented in this pass, including the engine work that

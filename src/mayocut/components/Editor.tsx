@@ -52,6 +52,7 @@ import { fmtBytes, fmtTime, importFiles, kindFromMime } from "../utils";
 import { Timeline } from "./Timeline";
 import { Inspector } from "./Inspector";
 import { Assist } from "./Assist";
+import { Library } from "./Library";
 
 const MEDIA_ACCEPT =
   "video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.3gp,.3g2,.flv,.ts,.mts,.m2ts,.mpg,.mpeg,.wmv,.vob,.ogv,image/*,.bmp,.heic,.heif,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac";
@@ -161,7 +162,7 @@ export function Editor({
   // Rotated (landscape) phones: compact the fixed chrome so the preview stays
   // visible instead of being squeezed out by the timeline + tab bar.
   const compact = isMobile && landscape;
-  const [sheet, setSheet] = useState<null | "media" | "add" | "tune">(null);
+  const [sheet, setSheet] = useState<null | "media" | "tune">(null);
   const [workspaceTab, setWorkspaceTab] = useState<
     | "media"
     | "audio"
@@ -170,9 +171,13 @@ export function Editor({
     | "effects"
     | "filters"
     | "transitions"
+    | "adjust"
     | "captions"
     | "ai"
   >("media");
+  /** Inspector tab: CapCut splits clip properties into Video / Audio / Speed / Animation. */
+  const [inspectorTab, setInspectorTab] = useState<string>("video");
+  const inspectorBodyRef = useRef<HTMLDivElement>(null);
   const [denoise, setDenoise] = useState<{ mediaId: string; progress: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(
@@ -1114,7 +1119,8 @@ export function Editor({
     else toast.info("The first main-track clip has no incoming transition");
   }
 
-  function addEmoji(emoji: string) {
+  /** Add a text-layer sticker (emoji or shape glyph) at the playhead. */
+  function addEmoji(emoji: string, patch: Partial<OverlayClip> = {}) {
     const clip = mutateRet((e) =>
       e.addTextClip("t_text", Math.max(0, e.t), {
         text: emoji,
@@ -1122,7 +1128,34 @@ export function Editor({
         pos: "mc",
         bg: "",
         anim: "bounce",
+        ...patch,
       }),
+    );
+    if (clip) setSelection({ lane: "overlay", trackId: "t_text", id: clip.id });
+  }
+
+  /**
+   * Apply a one-tap text look. With a text clip selected it restyles that clip;
+   * otherwise it creates a new text clip already wearing the look, so clicking
+   * a style in the library always does something useful instead of erroring.
+   */
+  function applyTextPreset(patch: Partial<OverlayClip>) {
+    if (selection?.lane === "overlay") {
+      const eng = engineRef.current;
+      const tr = eng?.project.tracks.find((x) => x.id === selection.trackId);
+      const c = tr?.clips.find((x) => x.id === selection.id);
+      if (c && c.kind === "text") {
+        mutateVoid((e) => {
+          const t2 = e.project.tracks.find((x) => x.id === selection.trackId);
+          const c2 = t2?.clips.find((x) => x.id === selection.id);
+          if (!c2) return false;
+          Object.assign(c2, patch);
+        });
+        return;
+      }
+    }
+    const clip = mutateRet((e) =>
+      e.addTextClip("t_text", Math.max(0, e.t), { text: "Your text", ...patch }),
     );
     if (clip) setSelection({ lane: "overlay", trackId: "t_text", id: clip.id });
   }
@@ -2277,9 +2310,49 @@ export function Editor({
       projectFonts={project.fonts}
     />
   );
+  /**
+   * Desktop inspector. CapCut splits clip properties into tabs (Video / Audio /
+   * Speed / Animation) rather than one long scroll; the tab strip jumps to the
+   * matching section so the same sections are reused, not duplicated.
+   */
+  const INSPECTOR_TABS = [
+    { id: "video", label: "Video" },
+    { id: "audio", label: "Audio" },
+    { id: "speed", label: "Speed" },
+    { id: "anim", label: "Anim" },
+    { id: "adjust", label: "Adjust" },
+  ];
   const inspectorPanel = (
-    <div className="w-60 md:w-72 border-l border-border shrink-0 overflow-y-auto">
-      {renderInspector()}
+    <div className="w-64 md:w-80 border-l border-border shrink-0 flex flex-col min-h-0 bg-card/40">
+      <div className="shrink-0 border-b border-border flex items-stretch overflow-x-auto no-scrollbar">
+        {INSPECTOR_TABS.map((tb) => {
+          const on = inspectorTab === tb.id;
+          return (
+            <button
+              key={tb.id}
+              onClick={() => {
+                setInspectorTab(tb.id);
+                // scroll the matching section into view inside the inspector body
+                const el = inspectorBodyRef.current?.querySelector<HTMLElement>(
+                  `[data-sec~="${tb.id}"]`,
+                );
+                el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+              }}
+              className={`relative flex-1 shrink-0 py-1.5 text-[10px] transition-colors ${
+                on ? "text-cyan-300" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {tb.label}
+              {on && (
+                <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-cyan-400" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <div ref={inspectorBodyRef} className="flex-1 min-h-0 overflow-y-auto p-2.5">
+        {renderInspector()}
+      </div>
     </div>
   );
   const bottomBar = (
@@ -2314,6 +2387,101 @@ export function Editor({
       ))}
     </div>
   );
+  /** The Library, reused verbatim in the mobile drawer so both platforms match. */
+  const libraryNode = (
+    <Library
+      project={project}
+      media={media}
+      compact
+      mainClip={
+        selection?.lane === "main"
+          ? (project.main.find((c) => c.id === selection.id) ?? null)
+          : null
+      }
+      selectedOverlay={
+        selection?.lane === "overlay"
+          ? (project.tracks
+              .find((t) => t.id === selection.trackId)
+              ?.clips.find((c) => c.id === selection.id) ?? null)
+          : null
+      }
+      onImport={() => fileRef.current?.click()}
+      onAddMedia={addMediaToTimeline}
+      onDeleteMedia={(m) => void deleteMediaItem(m)}
+      onAddText={addText}
+      onAddSticker={(label, patch) =>
+        addEmoji(label, { size: 150, pos: "mc", bg: "", anim: "bounce", ...patch })
+      }
+      onApplyTextPreset={(patch) => applyTextPreset(patch)}
+      onSetTextAnim={(anim) => {
+        if (selection?.lane !== "overlay") {
+          toast.info("Select a text clip first");
+          return;
+        }
+        mutateVoid((eng) => {
+          const tr = eng.project.tracks.find((x) => x.id === selection.trackId);
+          const c = tr?.clips.find((x) => x.id === selection.id);
+          if (!c) return false;
+          c.anim = anim;
+        });
+      }}
+      onPatchMain={(patch) => {
+        if (selection?.lane !== "main") {
+          toast.info("Select a video clip on the timeline first");
+          return;
+        }
+        mutateVoid((eng) => {
+          const c = eng.project.main.find((x) => x.id === selection.id);
+          if (!c) return false;
+          Object.assign(c, patch);
+        });
+      }}
+      onSetTransition={(kind) => {
+        if (selection?.lane !== "main") {
+          toast.info("Select the clip that comes second");
+          return;
+        }
+        mutateVoid((eng) => {
+          const idx = eng.project.main.findIndex((c) => c.id === selection.id);
+          const dur =
+            eng.project.main[idx]?.transitionDur ||
+            Math.min(0.5, Math.max(0.2, mainSpans(eng.project)[idx]?.end ?? 0.5));
+          eng.setTransition(selection.id, kind, dur);
+        });
+      }}
+      onApplyTransitionAll={(kind) =>
+        mutateVoid((eng) => {
+          eng.setTransitionAll(kind, 0.4);
+        })
+      }
+      onApplyFilter={(id) => {
+        if (selection?.lane !== "main") {
+          toast.info("Select a video clip to give it a look");
+          return;
+        }
+        mutateVoid((eng) => {
+          const c = eng.project.main.find((x) => x.id === selection.id);
+          if (!c) return false;
+          c.filter = id;
+        });
+      }}
+      onSwitchToAdjust={() => {
+        setSheet("tune");
+      }}
+      onOpenCaptions={() => {
+        setSheet(null);
+        setAssistOpen(true);
+      }}
+      onRecord={startRecording}
+      onAddAtPlayhead={() => {
+        const first = media[0];
+        if (first) addMediaToTimeline(first);
+        else fileRef.current?.click();
+      }}
+      recording={recState.active}
+    />
+  );
+
   const bottomSheets = (
     <>
       <Drawer open={sheet === "media"} onClose={() => setSheet(null)}>

@@ -48,20 +48,8 @@ jobs:
       - name: Lint (mayocut only)
         run: npx eslint src/mayocut src/routes/mayocut
 
-      - name: Rebuild pure-logic bundles for the audit
-        run: |
-          npx esbuild src/mayocut/types.ts   --bundle --format=esm --outfile=.diag/b-types.mjs
-          npx esbuild src/mayocut/engine.ts  --bundle --format=esm --outfile=.diag/b-engine.mjs
-          npx esbuild src/mayocut/assist.ts  --bundle --format=esm --outfile=.diag/b-assist.mjs
-          npx esbuild src/mayocut/captions.ts --bundle --format=esm --outfile=.diag/b-captions.mjs
-          npx esbuild src/mayocut/device.ts  --bundle --format=esm --outfile=.diag/b-device.mjs
-          npx esbuild src/mayocut/luts.ts    --bundle --format=esm --outfile=.diag/b-luts.mjs
-          npx esbuild src/mayocut/templates.ts --bundle --format=esm --outfile=.diag/b-templates.mjs
-          npx esbuild src/mayocut/background-math.ts --bundle --format=esm --outfile=.diag/b-background-math.mjs
-          npx esbuild src/mayocut/utils.ts --bundle --format=esm --outfile=.diag/b-utils.mjs
-
-      - name: Logic audit
-        run: node .diag/audit.mjs
+      - name: Rebuild pure-logic bundles, then audit
+        run: node scripts/audit-build.mjs
 
       - name: Build offline shell bundle
         run: npm run build:shell

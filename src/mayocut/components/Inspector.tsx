@@ -340,7 +340,7 @@ export function Inspector(p: Props) {
             {p.media.find((m) => m.id === main.mediaId)?.name ?? "media"}
           </div>
 
-          <Section label="Speed & direction">
+          <Section label="Speed & direction" anchor="speed">
             <Slider
               label="Speed"
               min={0.25}
@@ -423,7 +423,7 @@ export function Inspector(p: Props) {
             />
           </Section>
 
-          <Section label="Effect">
+          <Section label="Effect" anchor="anim">
             <select
               className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
               value={main.effect ?? "none"}
@@ -437,7 +437,7 @@ export function Inspector(p: Props) {
             </select>
           </Section>
 
-          <Section label="Framing">
+          <Section label="Framing" anchor="video">
             <div className="grid grid-cols-3 gap-1">
               {(["cover", "contain", "blur"] as FrameFit[]).map((f) => (
                 <button
@@ -462,7 +462,7 @@ export function Inspector(p: Props) {
             </div>
           </Section>
 
-          <Section label="Color LUT">
+          <Section label="Color LUT" anchor="adjust">
             <select
               className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
               value={main.lut ?? ""}
@@ -491,7 +491,7 @@ export function Inspector(p: Props) {
             </label>
           </Section>
 
-          <Section label="Motion & keyframes">
+          <Section label="Motion & keyframes" anchor="anim">
             <p className="text-[10px] text-muted-foreground mb-2 leading-snug">
               Move the playhead, then drag a value — a keyframe is written where a ◆ already sits
               nearby, otherwise the clip starts a new animation from here.
@@ -562,7 +562,7 @@ export function Inspector(p: Props) {
             </div>
           </Section>
 
-          <Section label="Filter">
+          <Section label="Filter" anchor="adjust">
             <div className="grid grid-cols-2 gap-1.5">
               {p.filters.map((f) => (
                 <button
@@ -580,7 +580,7 @@ export function Inspector(p: Props) {
             </div>
           </Section>
 
-          <Section label="Adjust">
+          <Section label="Adjust" anchor="adjust">
             <Slider
               label="Brightness"
               min={50}
@@ -689,7 +689,7 @@ export function Inspector(p: Props) {
             </div>
           </Section>
 
-          <Section label="Transition in">
+          <Section label="Transition in" anchor="anim">
             <div className="grid grid-cols-2 gap-1">
               {TRANSITIONS.map((tr) => (
                 <button
@@ -732,7 +732,7 @@ export function Inspector(p: Props) {
             )}
           </Section>
 
-          <Section label="Audio">
+          <Section label="Audio" anchor="audio">
             <Slider
               label="Volume"
               min={0}
@@ -768,7 +768,7 @@ export function Inspector(p: Props) {
             />
           </Section>
 
-          <Section label="Voice shaping">
+          <Section label="Voice shaping" anchor="audio">
             <p className="text-[10px] text-muted-foreground mb-2 leading-snug">
               Bass / mid / treble shaping on this clip's own sound — the quick fix for thin or boomy
               voices.
@@ -814,7 +814,7 @@ export function Inspector(p: Props) {
             </div>
           </Section>
 
-          <Section label="Replace media">
+          <Section label="Replace media" anchor="video">
             <button
               className="mb-btn-ghost w-full text-xs h-7"
               onClick={() => setReplaceOpen((v) => !v)}
@@ -848,14 +848,14 @@ export function Inspector(p: Props) {
       {/* ---------------- text overlay ---------------- */}
       {over?.kind === "text" && (
         <>
-          <Section label="Text">
+          <Section label="Text" anchor="video">
             <textarea
               className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs h-16 resize-none"
               value={over.text ?? ""}
               onChange={(e) => p.onPatchOverlay(trackId, { text: e.target.value })}
             />
           </Section>
-          <Section label="Text presets">
+          <Section label="Text presets" anchor="video">
             <div className="grid grid-cols-2 gap-1">
               {TEXT_PRESETS.map((tp) => (
                 <button
@@ -869,7 +869,7 @@ export function Inspector(p: Props) {
               ))}
             </div>
           </Section>
-          <Section label="Style">
+          <Section label="Style" anchor="video">
             <Slider
               label="Size"
               min={24}
@@ -1071,7 +1071,7 @@ export function Inspector(p: Props) {
               onChange={(v) => p.onPatchOverlay(trackId, { radius: v })}
             />
           </Section>
-          <Section label="Animation">
+          <Section label="Animation" anchor="anim">
             <select
               className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
               value={over.anim ?? "none"}
@@ -1123,7 +1123,7 @@ export function Inspector(p: Props) {
       {/* ---------------- image / video overlay ---------------- */}
       {(over?.kind === "image" || over?.kind === "video") && (
         <>
-          <Section label="Transform & keyframes">
+          <Section label="Transform & keyframes" anchor="anim">
             <Slider
               label="Scale"
               min={0.05}
@@ -1189,7 +1189,7 @@ export function Inspector(p: Props) {
               </button>
             </div>
           </Section>
-          <Section label="Framing & motion">
+          <Section label="Framing & motion" anchor="video">
             <div className="grid grid-cols-3 gap-1">
               {(["cover", "contain", "blur"] as FrameFit[]).map((f) => (
                 <button
@@ -1227,7 +1227,7 @@ export function Inspector(p: Props) {
               </>
             )}
           </Section>
-          <Section label="Sticker filter">
+          <Section label="Sticker filter" anchor="adjust">
             <div className="grid grid-cols-2 gap-1">
               <button
                 className={`text-[10px] border rounded px-1 py-1 text-left ${!over.filter || over.filter === "none" ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
@@ -1252,7 +1252,7 @@ export function Inspector(p: Props) {
                 ))}
             </div>
           </Section>
-          <Section label="Audio ducking">
+          <Section label="Audio ducking" anchor="audio">
             <Slider
               label="Duck music under this clip"
               min={0}
@@ -1266,7 +1266,7 @@ export function Inspector(p: Props) {
               voiceover clear over music.
             </p>
           </Section>
-          <Section label="Green screen">
+          <Section label="Green screen" anchor="video">
             <label className="flex items-center gap-2 text-xs">
               <input
                 type="checkbox"
@@ -1293,7 +1293,7 @@ export function Inspector(p: Props) {
               </div>
             )}
           </Section>
-          <Section label="Blend & mask">
+          <Section label="Blend & mask" anchor="video">
             <div className="text-xs mb-1">Blend mode</div>
             <select
               className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
@@ -1338,7 +1338,7 @@ export function Inspector(p: Props) {
       {/* ---------------- audio ---------------- */}
       {over?.kind === "audio" && (
         <>
-          <Section label="Audio">
+          <Section label="Audio" anchor="audio">
             <Slider
               label="Volume"
               min={0}
@@ -1364,7 +1364,7 @@ export function Inspector(p: Props) {
               onChange={(v) => p.onPatchOverlay(trackId, { fadeOut: v })}
             />
           </Section>
-          <Section label="Audio FX">
+          <Section label="Audio FX" anchor="audio">
             <Slider
               label="Reverb"
               min={0}
@@ -1837,7 +1837,7 @@ function TimingSection({
   onPatch: (p: Partial<OverlayClip>) => void;
 }) {
   return (
-    <Section label="Timing">
+    <Section label="Timing" anchor="video">
       <Slider
         label="Start"
         min={0}
@@ -1858,9 +1858,24 @@ function TimingSection({
   );
 }
 
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * A titled group of controls.
+ *
+ * `anchor` marks which inspector tab (Video / Audio / Speed / Anim / Adjust)
+ * this section belongs to, so the tab strip can scroll straight to it — the
+ * sections stay single-source instead of being duplicated per tab.
+ */
+function Section({
+  label,
+  children,
+  anchor,
+}: {
+  label: string;
+  children: React.ReactNode;
+  anchor?: string;
+}) {
   return (
-    <div className="border-t border-border pt-3">
+    <div className="border-t border-border pt-3" data-sec={anchor}>
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">{label}</div>
       {children}
     </div>

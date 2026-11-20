@@ -11,6 +11,7 @@ import {
   fontCss,
   mainClipDuration,
   mainPlaybackRate,
+  wipeDir,
   mainSpans,
   mainSrcAt,
   projectDuration,
@@ -113,6 +114,72 @@ export const FILTER_PRESETS: { id: string; name: string; css: string }[] = [
     name: "Retro Film",
     css: "sepia(0.45) contrast(1.1) saturate(1.25) brightness(1.02) hue-rotate(-6deg)",
   },
+  // --- second wave: film stocks, moods and social looks -------------------
+  {
+    id: "kodachrome",
+    name: "Kodachrome",
+    css: "saturate(1.3) contrast(1.12) sepia(0.1) brightness(1.03)",
+  },
+  {
+    id: "portra",
+    name: "Portra 400",
+    css: "saturate(0.95) contrast(0.96) brightness(1.06) sepia(0.12)",
+  },
+  { id: "technicolor", name: "Technicolor", css: "saturate(1.6) contrast(1.2) hue-rotate(-4deg)" },
+  { id: "bleach", name: "Bleach Bypass", css: "saturate(0.45) contrast(1.42) brightness(1.05)" },
+  { id: "sepia", name: "Sepia", css: "sepia(0.85) contrast(1.05) brightness(1.02)" },
+  {
+    id: "cyanotype",
+    name: "Cyanotype",
+    css: "grayscale(1) sepia(1) hue-rotate(160deg) saturate(1.8) contrast(1.1)",
+  },
+  { id: "infrared", name: "Infrared", css: "hue-rotate(155deg) saturate(1.7) contrast(1.15)" },
+  {
+    id: "duotone",
+    name: "Duotone",
+    css: "grayscale(1) contrast(1.25) sepia(0.4) hue-rotate(180deg) saturate(1.6)",
+  },
+  {
+    id: "fifties",
+    name: "Fifties",
+    css: "sepia(0.3) saturate(0.9) contrast(0.95) brightness(1.08) hue-rotate(-10deg)",
+  },
+  { id: "grunge", name: "Grunge", css: "contrast(1.35) saturate(0.7) brightness(0.92) sepia(0.2)" },
+  {
+    id: "arctic",
+    name: "Arctic",
+    css: "hue-rotate(-18deg) saturate(1.2) brightness(1.08) contrast(1.05)",
+  },
+  {
+    id: "sunset",
+    name: "Sunset",
+    css: "sepia(0.3) saturate(1.5) hue-rotate(-18deg) brightness(1.06)",
+  },
+  {
+    id: "cyberpunk",
+    name: "Cyberpunk",
+    css: "contrast(1.3) saturate(1.6) hue-rotate(-25deg) brightness(0.95)",
+  },
+  { id: "darkmood", name: "Dark & Moody", css: "brightness(0.82) contrast(1.3) saturate(0.85)" },
+  { id: "clean", name: "Clean", css: "brightness(1.04) contrast(1.04) saturate(1.05)" },
+  { id: "clarity", name: "Clarity", css: "contrast(1.14) saturate(1.1) brightness(1.02)" },
+  { id: "silvertone", name: "Silver", css: "grayscale(0.85) contrast(1.2) brightness(1.04)" },
+  {
+    id: "winter",
+    name: "Winter",
+    css: "hue-rotate(8deg) saturate(0.88) brightness(1.06) contrast(1.05)",
+  },
+  {
+    id: "autumn",
+    name: "Autumn",
+    css: "sepia(0.22) saturate(1.35) hue-rotate(-12deg) brightness(1.02)",
+  },
+  { id: "mono-high", name: "Mono High", css: "grayscale(1) contrast(1.55) brightness(1.08)" },
+  {
+    id: "neon-night",
+    name: "Neon Night",
+    css: "hue-rotate(200deg) saturate(2) contrast(1.25) brightness(0.92)",
+  },
 ];
 
 export function presetCss(id: string): string {
@@ -171,6 +238,17 @@ function easeOutBounce(t: number): number {
   if (t < 2 / d1) return n1 * (t -= 1.5 / d1) * t + 0.75;
   if (t < 2.5 / d1) return n1 * (t -= 2.25 / d1) * t + 0.9375;
   return n1 * (t -= 2.625 / d1) * t + 0.984375;
+}
+
+/** Overshoot easing — the "pop" that settles slightly past its target. */
+function easeOutBack(t: number): number {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
 }
 
 function roundRectPath(
@@ -1462,8 +1540,19 @@ export class Engine {
     }
 
     // --- geometric transitions: draw A, then mask B in ---
-    this.drawMainItem(ctx, a, 1, W, H, t);
     const e = k; // linear is what an edit feels like; keep it frame-accurate
+    const soft = wipeDir(kind);
+
+    if (soft?.soft) {
+      // Feathered wipe: B is masked by a linear gradient whose soft edge travels
+      // across the frame. One extra offscreen buffer (at preview scale), so the
+      // cost is comparable to the blur transition and stays phone-friendly.
+      this.drawMainItem(ctx, a, 1, W, H, t);
+      this.drawFeatheredWipe(ctx, b, W, H, t, soft.dir, e);
+      return;
+    }
+
+    this.drawMainItem(ctx, a, 1, W, H, t);
     ctx.save();
     if (
       kind === "slideleft" ||
@@ -1482,14 +1571,28 @@ export class Engine {
       ctx.clip();
       ctx.translate(dx, dy);
       this.drawMainItem(ctx, b, 1, W, H, t);
-    } else {
-      // wipes: rectangular reveal growing from the side
+    } else if (kind === "slide") {
+      // Diagonal push: both frames travel along the ↘ axis, so the motion reads
+      // as a single camera move rather than two panels sliding independently.
+      const span = Math.hypot(W, H);
+      const ux = W / span;
+      const uy = H / span;
+      const d = span * e;
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.clip();
+      ctx.translate(d * ux, d * uy);
+      this.drawMainItem(ctx, a, 1, W, H, t);
+      ctx.translate(-span * ux, -span * uy);
+      this.drawMainItem(ctx, b, 1, W, H, t);
+    } else if (soft) {
+      // hard-edged wipes: rectangular reveal growing from the side
       const w = W * e;
       const h = H * e;
       ctx.beginPath();
-      if (kind === "wipeleft") ctx.rect(W - w, 0, w, H);
-      else if (kind === "wiperight") ctx.rect(0, 0, w, H);
-      else if (kind === "wipeup") ctx.rect(0, H - h, W, h);
+      if (soft.dir === "left") ctx.rect(W - w, 0, w, H);
+      else if (soft.dir === "right") ctx.rect(0, 0, w, H);
+      else if (soft.dir === "up") ctx.rect(0, H - h, W, h);
       else ctx.rect(0, 0, W, h);
       ctx.clip();
       this.drawMainItem(ctx, b, 1, W, H, t);
@@ -1498,11 +1601,74 @@ export class Engine {
       ctx.save();
       ctx.globalAlpha = 0.5 * Math.sin(Math.PI * k);
       ctx.fillStyle = "#fff";
-      if (kind === "wipeleft") ctx.fillRect(W - w - 1, 0, 2, H);
-      else if (kind === "wiperight") ctx.fillRect(w - 1, 0, 2, H);
-      else if (kind === "wipeup") ctx.fillRect(0, H - h - 1, W, 2);
+      if (soft.dir === "left") ctx.fillRect(W - w - 1, 0, 2, H);
+      else if (soft.dir === "right") ctx.fillRect(w - 1, 0, 2, H);
+      else if (soft.dir === "up") ctx.fillRect(0, H - h - 1, W, 2);
       else ctx.fillRect(0, h - 1, W, 2);
     }
+    ctx.restore();
+  }
+
+  /**
+   * Feathered (gradient-masked) wipe.
+   *
+   * The incoming frame renders into an offscreen buffer at preview scale and is
+   * composited back through a `destination-in` linear gradient, so the reveal
+   * edge is soft instead of a hard line — CapCut's "soft wipe". The edge
+   * travels from fully outside the near side to fully outside the far side, so
+   * k = 0 shows none of B and k = 1 shows all of it (no half-faded sliver).
+   */
+  private drawFeatheredWipe(
+    ctx: CanvasRenderingContext2D,
+    b: { clip: MainClip; start: number; end: number },
+    W: number,
+    H: number,
+    t: number,
+    dir: "left" | "right" | "up" | "down",
+    e: number,
+  ) {
+    // half-res buffer: a feathered edge hides the resampling completely
+    const scale = Math.min(1, 720 / Math.max(W, H));
+    const bw = Math.max(2, Math.round(W * scale));
+    const bh = Math.max(2, Math.round(H * scale));
+    const buf = document.createElement("canvas");
+    buf.width = bw;
+    buf.height = bh;
+    const bctx = buf.getContext("2d");
+    if (!bctx) return;
+    bctx.scale(bw / W, bh / H);
+    this.drawMainItem(bctx, b, 1, W, H, t);
+    bctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    const vertical = dir === "up" || dir === "down";
+    const span = vertical ? bh : bw;
+    const feather = Math.max(1, span * 0.12);
+    const k = clamp01(e);
+    // "right"/"down" reveal from the low edge of the axis, "left"/"up" from the
+    // high edge — so the travelling edge runs in the opposite direction there.
+    const lowSide = dir === "right" || dir === "down";
+    const edge = lowSide
+      ? -feather + k * (span + feather * 2)
+      : span + feather - k * (span + feather * 2);
+    const t0 = clamp01((edge - feather) / span);
+    const t1 = clamp01((edge + feather) / span);
+
+    const g = vertical
+      ? bctx.createLinearGradient(0, 0, 0, bh)
+      : bctx.createLinearGradient(0, 0, bw, 0);
+    const A = (v: number) => `rgba(0,0,0,${v})`;
+    g.addColorStop(0, A(lowSide ? 1 : 0));
+    g.addColorStop(t0, A(lowSide ? 1 : 0));
+    g.addColorStop(t1, A(lowSide ? 0 : 1));
+    g.addColorStop(1, A(lowSide ? 0 : 1));
+
+    bctx.globalCompositeOperation = "destination-in";
+    bctx.fillStyle = g;
+    bctx.fillRect(0, 0, bw, bh);
+    bctx.globalCompositeOperation = "source-over";
+
+    ctx.save();
+    ctx.drawImage(buf, 0, 0, W, H);
     ctx.restore();
   }
 
@@ -1689,6 +1855,75 @@ export class Engine {
         const seed = hashId(c.id);
         r.rot = Math.sin(localT * 1.6 + seed) * 0.012;
         r.tx = Math.sin(localT * 1.1 + seed) * W * 0.008;
+        break;
+      }
+      case "tilt-down":
+        r.ty = H * 0.045 * clamp01(localT / Math.max(0.6, dur));
+        r.scale = 1.06;
+        break;
+      case "roll":
+        // one full slow roll across the clip, starting flat
+        r.rot = (clamp01(localT / Math.max(0.001, dur)) - 1) * Math.PI * 2;
+        r.scale = 1.12;
+        break;
+      case "float": {
+        // gentle vertical hover, ~3 s period, deterministic per clip
+        const seed = hashId(c.id);
+        r.ty = Math.sin(localT * 2.1 + seed) * H * 0.012;
+        r.tx = Math.cos(localT * 1.4 + seed) * W * 0.004;
+        r.scale = 1.04;
+        break;
+      }
+      case "breathe":
+        // slow in/out push, 4 s cycle — reads as a calm "alive" frame
+        r.scale = 1.02 + 0.028 * (0.5 - 0.5 * Math.cos((localT / 4) * Math.PI * 2));
+        break;
+      case "jitter": {
+        // high-frequency noise, no smooth sine: feels handheld/impactful
+        const seed = hashId(c.id);
+        const n = (a: number) =>
+          Math.sin(localT * a + seed) * Math.sin(localT * (a * 0.37) + seed * 3);
+        r.tx = n(47) * W * 0.007;
+        r.ty = n(53) * H * 0.007;
+        r.rot = n(41) * 0.004;
+        break;
+      }
+      case "whip-left":
+      case "whip-right": {
+        // ease-in-out whip: fast through the middle, settled at both ends
+        const k = clamp01(localT / Math.max(0.001, dur));
+        const e2 = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+        const dirSign = (c.effect ?? "") === "whip-left" ? -1 : 1;
+        r.tx = dirSign * (1 - e2) * W * 0.5;
+        r.scale = 1.18;
+        break;
+      }
+      case "dolly-in":
+        r.scale = 1 + 0.16 * clamp01(localT / Math.max(0.001, dur));
+        break;
+      case "dolly-out":
+        r.scale = 1.16 - 0.16 * clamp01(localT / Math.max(0.001, dur));
+        break;
+      case "tilt-shift":
+        // a subtle "miniature" push plus a slight downward drift
+        r.scale = 1.08;
+        r.ty = (clamp01(localT / Math.max(0.001, dur)) - 0.5) * H * 0.03;
+        break;
+      case "earthquake": {
+        // low-frequency rumble with a burst-and-decay envelope
+        const seed = hashId(c.id);
+        const env = Math.exp(-((localT % 1.6) / 0.9));
+        r.tx = Math.sin(localT * 63 + seed) * W * 0.012 * env;
+        r.ty = Math.cos(localT * 57 + seed * 2) * H * 0.012 * env;
+        r.rot = Math.sin(localT * 39 + seed) * 0.006 * env;
+        break;
+      }
+      case "orbit": {
+        // the frame circles the centre while staying upright
+        const a2 = (localT / Math.max(0.001, dur)) * Math.PI * 2;
+        r.tx = Math.sin(a2) * W * 0.035;
+        r.ty = (1 - Math.cos(a2)) * H * 0.035;
+        r.scale = 1.12;
         break;
       }
       default:
@@ -2159,6 +2394,12 @@ export class Engine {
     let xOff = 0;
     let popScale = 1;
     let riseAlpha = 1;
+    let swingAngle = 0;
+    let blurPx2 = 0;
+    let flipScale = 1;
+    let skewX = 0;
+    let trackMul = 1;
+    let wavePhase = 0;
     if (anim2 === "bounce") yOff = -px * 0.9 * (1 - easeOutBounce(clamp01(localT / 0.55)));
     if (anim2 === "slideup") yOff = (1 - clamp01(localT / 0.4)) * H * 0.03;
     if (anim2 === "slideleft") xOff = (1 - clamp01(localT / 0.4)) * W * 0.06;
@@ -2169,11 +2410,30 @@ export class Engine {
       riseAlpha = k;
     }
     if (anim2 === "wipe-in") riseAlpha = 1; // handled by the clip mask below
+    // --- second wave entrances ---
+    if (anim2 === "pop") popScale = 0.4 + 0.6 * easeOutBack(clamp01(localT / 0.42));
+    if (anim2 === "drop-in") yOff = -H * 0.28 * (1 - easeOutBounce(clamp01(localT / 0.7)));
+    if (anim2 === "swing") swingAngle = (1 - easeOutBack(clamp01(localT / 0.75))) * -0.9;
+    if (anim2 === "blur-in") blurPx2 = (1 - clamp01(localT / 0.5)) * px * 0.55;
+    if (anim2 === "flip") {
+      // 3D-ish card flip faked by squashing the horizontal axis through zero:
+      // 0 → edge-on, 0.5 → back to full width, as if the card turned over.
+      const k = clamp01(localT / 0.5);
+      flipScale = Math.max(0.02, Math.abs(Math.cos(k * Math.PI)));
+    }
+    if (anim2 === "skew-in") skewX = (1 - clamp01(localT / 0.5)) * 0.55;
+    if (anim2 === "tracking-in") {
+      // letter-spacing collapses into place — the classic "wide to tight" title
+      const k = easeOutCubic(clamp01(localT / 0.8));
+      trackMul = 6 + (1 - 6) * k;
+      riseAlpha = clamp01(localT / 0.25);
+    }
+    if (anim2 === "wave") wavePhase = localT * 3.4;
 
     ctx.font = `${italic}${weight} ${Math.round(px)}px ${fontCss(c.font)}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    const tracking = ((c.tracking ?? 0) * px) / 100;
+    const tracking = ((c.tracking ?? 0) * trackMul * px) / 100;
 
     ctx.globalAlpha = alpha * clamp01(c.opacity ?? 1) * riseAlpha;
 
@@ -2223,9 +2483,13 @@ export class Engine {
       h: totalH + px * 0.56,
     });
     ctx.translate(xC, yC);
-    if (anim.rotation !== 0) ctx.rotate((anim.rotation * Math.PI) / 180);
+    const rot = anim.rotation + (swingAngle * 180) / Math.PI;
+    if (rot !== 0) ctx.rotate((rot * Math.PI) / 180);
+    if (skewX !== 0) ctx.transform(1, 0, skewX, 1, 0, 0);
     const sc = kbScale * popScale;
     if (sc !== 1) ctx.scale(sc, sc);
+    if (flipScale !== 1) ctx.scale(flipScale, 1);
+    if (blurPx2 > 0.05) ctx.filter = `blur(${blurPx2.toFixed(2)}px)`;
     if (c.bg && (anim2 !== "typewriter" || doneTyping)) {
       ctx.fillStyle = c.bg;
       const padX = px * 0.5;
@@ -2240,13 +2504,28 @@ export class Engine {
     // Draw one line with optional letter-tracking, outline and underline.
     const drawLine = (l: string, yy: number) => {
       const startX = -measure(l) / 2;
-      if (tracking > 0.01) {
-        // manual glyph advance keeps tracking exact on every device
+      if (tracking > 0.01 || anim2 === "wave") {
+        // manual glyph advance keeps tracking exact on every device, and gives
+        // "wave" a per-letter origin to bob around.
         let cx = startX;
+        let gi = 0;
         for (const ch of l) {
-          ctx.fillText(ch, cx + ctx.measureText(ch).width / 2, yy);
-          if (c.stroke && c.stroke > 0) ctx.strokeText(ch, cx + ctx.measureText(ch).width / 2, yy);
-          cx += ctx.measureText(ch).width + tracking;
+          const gw = ctx.measureText(ch).width;
+          const bob = anim2 === "wave" ? Math.sin(wavePhase + gi * 0.55) * px * 0.16 : 0;
+          const tilt = anim2 === "wave" ? Math.sin(wavePhase + gi * 0.55) * 0.09 : 0;
+          if (bob !== 0 || tilt !== 0) {
+            ctx.save();
+            ctx.translate(cx + gw / 2, yy + bob);
+            ctx.rotate(tilt);
+            ctx.fillText(ch, 0, 0);
+            if (c.stroke && c.stroke > 0) ctx.strokeText(ch, 0, 0);
+            ctx.restore();
+          } else {
+            ctx.fillText(ch, cx + gw / 2, yy);
+            if (c.stroke && c.stroke > 0) ctx.strokeText(ch, cx + gw / 2, yy);
+          }
+          cx += gw + tracking;
+          gi++;
         }
       } else {
         ctx.fillText(l, 0, yy);
