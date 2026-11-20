@@ -1,12 +1,28 @@
-# Builds the Mayobuild Studio binaries (Windows .exe + Android .apk) from
-# the single codebase and attaches them to a GitHub Release.
+# Builds the Mayobuild Studio binaries (Windows .exe + Android .apk) from the
+# single codebase and attaches them to a GitHub Release.
 #
-# Trigger manually (once the workflow exists on the default branch):
-#   Actions → distribute → Run workflow  (release tag input, e.g. v0.1.0)
-# Or push a tag:  mc-0.2.0  → binaries are attached to release
-#   v<version> (version from package.json — a semver tag so GitHub marks it
-#   "Latest" and the /releases/latest/download links on /downloads work),
-#   created if missing.
+# Trigger manually:  Actions → distribute → Run workflow (release tag input)
+# Or push a tag:     mc-0.7.0
+# Or automatically on any app-source push to main (release tag is derived from
+#                    package.json as v<version>).
+#
+# DESIGN NOTES — why it looks like this
+# -------------------------------------
+# The previous version had two failure modes that made finished binaries
+# invisible:
+#
+#   1. `gh release upload` ran *inside* each platform job. One platform failing
+#      meant its release step never ran, and because the whole run went red
+#      the other platform's artifact was easy to miss too. A green Android
+#      build was being thrown away because Windows failed.
+#   2. Publishing was gated on a custom secret (MAYOBUILD_RELEASE_TOKEN). If
+#      that secret is absent or expired, the upload is skipped with only a log
+#      line — the run can even look successful with no release assets.
+#
+# So publishing is now its own job that runs `if: always()`, publishes whatever
+# artifacts actually exist, and falls back to the built-in GITHUB_TOKEN when the
+# custom secret is not configured. A platform failure still shows red on its own
+# job (that is honest), but it can no longer erase the other platform's output.
 name: distribute
 
 on:
@@ -18,6 +34,7 @@ on:
       - "desktop/**"
       - "shell/**"
       - "scripts/**"
+      - "public/**"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/distribute.yml"
@@ -26,23 +43,25 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "GitHub release tag to attach the binaries to"
-        required: true
-        default: "v0.1.0"
+        description: "GitHub release tag to attach the binaries to (blank = v<package.json version>)"
+        required: false
+        default: ""
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: distribute
   cancel-in-progress: false
 
 jobs:
+  # ---------------------------------------------------------------- shell ---
   shell:
     name: Build static shell
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -51,20 +70,27 @@ jobs:
           cache: npm
       - id: ver
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - id: tag
+        run: |
+          # precedence: manual input → pushed tag → v<version>
+          TAG="${{ github.event.inputs.release }}"
+          if [ -z "$TAG" ] && [ "${{ github.ref_type }}" = "tag" ]; then TAG="${{ github.ref_name }}"; fi
+          if [ -z "$TAG" ]; then TAG="v${{ steps.ver.outputs.version }}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag: $TAG"
       - run: npm ci
       - run: npm run build:shell
       - uses: actions/upload-artifact@v4
         with:
           name: app-shell-dist
           path: app-shell-dist
+          retention-days: 14
 
+  # -------------------------------------------------------------- windows ---
   windows:
     name: Windows .exe (NSIS)
-    # windows-latest: NSIS + rcedit run natively (no Wine needed for
-    # resource/icon editing, which is what Linux runners lack).
+    # native Windows runner: NSIS + rcedit run without Wine
     runs-on: windows-latest
-    env:
-      MAYOBUILD_RELEASE_TOKEN: ${{ secrets.MAYOBUILD_RELEASE_TOKEN }}
     needs: shell
     steps:
       - uses: actions/checkout@v4
@@ -77,46 +103,47 @@ jobs:
           path: app-shell-dist
       # Full ci (with scripts): electron's postinstall fetches the binary, so
       # electron-builder uses the local dist and needs no extra downloads.
-      - run: npm --prefix desktop ci
-      - run: cd desktop && npx electron-builder --win --x64
-      - name: Diagnostics on failure
+      - name: Install desktop deps
+        run: npm --prefix desktop ci
+      - name: Package installer
+        shell: bash
+        run: |
+          mkdir -p build-logs
+          # tee so the failure detail survives in an artifact even when the
+          # Actions log endpoint is unavailable (it has been).
+          cd desktop && npx electron-builder --win --x64 2>&1 | tee ../build-logs/windows.log
+          exit "${PIPESTATUS[0]}"
+      - name: Summarise failure
         if: failure()
         shell: bash
         run: |
-          cd "$GITHUB_WORKSPACE"
-          echo "run: ${GITHUB_RUN_ID}" > /tmp/diag-windows.txt
-          { echo "=== env ==="; node -v; npm -v; echo "=== app-shell-dist ==="; ls app-shell-dist 2>/dev/null | head; echo "=== retry (verbose) ==="; (cd desktop && npx electron-builder --win --x64 2>&1 | tail -80); } >> /tmp/diag-windows.txt 2>&1 || true
-          mkdir -p .diag && cp /tmp/diag-windows.txt .diag/windows.txt
-          git config user.email "ci@mayobuild" && git config user.name "Mayobuild CI"
-          git add .diag/windows.txt && git commit -m "diag: windows failure run ${GITHUB_RUN_ID}" --allow-empty
-          git push origin "HEAD:refs/heads/diag-windows" --force 2>&1 || true
-      - name: Upload Windows installer artifact
+          {
+            echo "### Windows packaging failed"
+            echo '```'
+            grep -iE "error|⨯|cannot|ENOENT|failed|Exit code" build-logs/windows.log 2>/dev/null | head -60
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-log
+          path: build-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload Windows installer
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: mayobuild-studio-windows-${{ needs.shell.outputs.version }}
           path: desktop/release/*.exe
           if-no-files-found: error
           retention-days: 30
-      - name: Upload to GitHub Release
-        if: ${{ env.MAYOBUILD_RELEASE_TOKEN != '' }}
-        shell: bash # pwsh (windows-latest default) does not expand *.exe globs
-        env:
-          GH_TOKEN: ${{ env.MAYOBUILD_RELEASE_TOKEN }}
-          RELEASE_TAG: ${{ github.event.inputs.release || format('v{0}', needs.shell.outputs.version) }}
-        run: |
-          ls -la desktop/release
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "Mayobuild Studio $RELEASE_TAG" --notes "Mayobuild Studio (full app, incl. the MayoCut video editor) — $RELEASE_TAG" --target "$GITHUB_SHA"
-          gh release upload "$RELEASE_TAG" desktop/release/*.exe --clobber
-      - name: Explain release upload configuration
-        if: ${{ env.MAYOBUILD_RELEASE_TOKEN == '' }}
-        shell: bash
-        run: echo "Installer artifact uploaded. Configure MAYOBUILD_RELEASE_TOKEN with repository Contents write access to publish release assets automatically."
 
+  # -------------------------------------------------------------- android ---
   android:
     name: Android .apk
     runs-on: ubuntu-latest
-    env:
-      MAYOBUILD_RELEASE_TOKEN: ${{ secrets.MAYOBUILD_RELEASE_TOKEN }}
     needs: shell
     steps:
       - uses: actions/checkout@v4
@@ -135,41 +162,140 @@ jobs:
           path: app-shell-dist
       - run: npm ci
       - run: npx cap sync android
-      - run: cd android && ./gradlew assembleDebug --no-daemon
-      - name: Diagnostics on failure
+      - name: Build debug APK
+        shell: bash
+        run: |
+          mkdir -p build-logs
+          cd android && ./gradlew assembleDebug --no-daemon 2>&1 | tee ../build-logs/android.log
+          exit "${PIPESTATUS[0]}"
+      - name: Summarise failure
         if: failure()
         shell: bash
         run: |
-          cd "$GITHUB_WORKSPACE"
-          echo "run: ${GITHUB_RUN_ID}" > /tmp/diag-android.txt
-          { echo "=== env ==="; node -v; npm -v; java -version 2>&1 | head -2; echo "=== android sdk ==="; ls "$ANDROID_HOME/platforms" 2>/dev/null; echo "=== gradle retry ==="; (cd android && ./gradlew assembleDebug --no-daemon 2>&1 | tail -300 > /tmp/g.log; grep -B3 -A60 "What went wrong" /tmp/g.log; echo "--- tail ---"; tail -30 /tmp/g.log); } >> /tmp/diag-android.txt 2>&1 || true
-          mkdir -p .diag && cp /tmp/diag-android.txt .diag/android.txt
-          git config user.email "ci@mayobuild" && git config user.name "Mayobuild CI"
-          git add .diag/android.txt && git commit -m "diag: android failure run ${GITHUB_RUN_ID}" --allow-empty
-          git push origin "HEAD:refs/heads/diag-android" --force 2>&1 || true
-      - name: Prepare APK artifact
+          {
+            echo "### Android build failed"
+            echo '```'
+            grep -B2 -A25 "What went wrong" build-logs/android.log 2>/dev/null | head -80 || tail -40 build-logs/android.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-log
+          path: build-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Prepare APK
+        if: success()
         shell: bash
         env:
           APK_NAME: mayobuild-studio-android-${{ needs.shell.outputs.version }}.apk
         run: cp android/app/build/outputs/apk/debug/app-debug.apk "./$APK_NAME"
-      - name: Upload Android APK artifact
+      - name: Upload Android APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: mayobuild-studio-android-${{ needs.shell.outputs.version }}
           path: mayobuild-studio-android-*.apk
           if-no-files-found: error
           retention-days: 30
-      - name: Upload to GitHub Release
-        if: ${{ env.MAYOBUILD_RELEASE_TOKEN != '' }}
-        shell: bash
+
+  # -------------------------------------------------------------- publish ---
+  # Runs even when a platform job failed, so a finished binary is never thrown
+  # away because its sibling broke. Uses the custom token when configured and
+  # the built-in GITHUB_TOKEN otherwise — the old workflow silently skipped
+  # publishing whenever the secret was missing.
+  publish:
+    name: Publish release assets
+    runs-on: ubuntu-latest
+    needs: [shell, windows, android]
+    if: always()
+    steps:
+      - name: Which token will publish
         env:
-          GH_TOKEN: ${{ env.MAYOBUILD_RELEASE_TOKEN }}
-          RELEASE_TAG: ${{ github.event.inputs.release || format('v{0}', needs.shell.outputs.version) }}
-          APK_NAME: mayobuild-studio-android-${{ needs.shell.outputs.version }}.apk
+          CUSTOM: ${{ secrets.MAYOBUILD_RELEASE_TOKEN }}
         run: |
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "Mayobuild Studio $RELEASE_TAG" --notes "Mayobuild Studio (full app, incl. the MayoCut video editor) — $RELEASE_TAG" --target "$GITHUB_SHA"
-          gh release upload "$RELEASE_TAG" "./$APK_NAME" --clobber
-      - name: Explain release upload configuration
-        if: ${{ env.MAYOBUILD_RELEASE_TOKEN == '' }}
-        shell: bash
-        run: echo "APK artifact uploaded. Configure MAYOBUILD_RELEASE_TOKEN with repository Contents write access to publish release assets automatically."
+          if [ -n "$CUSTOM" ]; then
+            echo "Publishing with MAYOBUILD_RELEASE_TOKEN."
+          else
+            # Always present, and `permissions: contents: write` above grants it
+            # release access. The old workflow skipped publishing entirely when
+            # the custom secret was missing — that is one of the bugs this fixes.
+            echo "MAYOBUILD_RELEASE_TOKEN is not set — falling back to the built-in GITHUB_TOKEN."
+          fi
+
+      - name: Download built artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: mayobuild-studio-*
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.MAYOBUILD_RELEASE_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.shell.outputs.tag }}
+          VERSION: ${{ needs.shell.outputs.version }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          ASSETS=(dist/*.exe dist/*.apk)
+          echo "Found ${#ASSETS[@]} asset(s) to publish: ${ASSETS[*]:-none}"
+
+          {
+            echo "## Release $TAG"
+            echo ""
+            echo "| Platform | Job |"
+            echo "|---|---|"
+            echo "| Windows .exe | $WINDOWS_RESULT |"
+            echo "| Android .apk | $ANDROID_RESULT |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "::error::No binaries were produced, so there is nothing to publish. Check the windows/android build logs artifact."
+            {
+              echo "No binaries produced — nothing published."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "Mayobuild Studio $TAG" \
+              --notes "Mayobuild Studio (full app, incl. the MayoCut video editor) — $TAG.
+
+          Windows: \`mayobuild-studio-setup-${VERSION}.exe\`
+          Android: \`mayobuild-studio-android-${VERSION}.apk\`" \
+              --target "$GITHUB_SHA"
+          fi
+
+          gh release upload "$TAG" "${ASSETS[@]}" --clobber
+
+          {
+            echo "### Published to [\`$TAG\`](https://github.com/$GH_REPO/releases/tag/$TAG)"
+            echo ""
+            for a in "${ASSETS[@]}"; do
+              echo "- \`$(basename "$a")\` — $(du -h "$a" | cut -f1)"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report what is missing
+        if: always()
+        env:
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+        run: |
+          if [ "$WINDOWS_RESULT" != "success" ] || [ "$ANDROID_RESULT" != "success" ]; then
+            {
+              echo ""
+              echo "> **Note:** one platform did not build."
+              echo "> Download its log from this run's *Artifacts* section"
+              echo "> (\`windows-build-log\` / \`android-build-log\`), or read the job summary."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
