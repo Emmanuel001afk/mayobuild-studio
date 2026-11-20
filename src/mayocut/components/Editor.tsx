@@ -8,6 +8,8 @@ import {
   Film,
   Image as ImageIcon,
   Loader2,
+  Maximize2,
+  Minimize2,
   Mic,
   Music,
   Plus,
@@ -198,6 +200,11 @@ export function Editor({
   const fileRef = useRef<HTMLInputElement>(null);
   const autosaveTimer = useRef<number | null>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
+  // Expanded preview: hide the side panels so the picture gets the whole
+  // window. Playback, scrubbing and overlay dragging all keep working because
+  // the canvas element itself is not remounted — only the surrounding chrome
+  // is hidden.
+  const [stageMax, setStageMax] = useState(false);
 
   // ------------------------------------------------------------- load
 
@@ -359,6 +366,8 @@ export function Editor({
         eng.seek(eng.t - (e.shiftKey ? 1 : 1 / Math.max(1, exportFps)));
       } else if (e.key === "ArrowRight") {
         eng.seek(eng.t + (e.shiftKey ? 1 : 1 / Math.max(1, exportFps)));
+      } else if (e.key === "Escape") {
+        setStageMax(false);
       } else if (e.key === "Home") {
         eng.seek(0);
       } else if (e.key === "End") {
@@ -2099,7 +2108,23 @@ export function Editor({
     </div>
   );
   const previewArea = (
-    <div className="flex-1 min-h-0 flex items-center justify-center bg-black/60 p-2 sm:p-3 relative overflow-hidden">
+    <div
+      className={`flex-1 min-h-0 flex items-center justify-center bg-black/60 relative overflow-hidden ${
+        stageMax ? "p-0" : "p-2 sm:p-3"
+      }`}
+    >
+      {/* Expand / restore the preview. CapCut has a full-screen preview button;
+          this gives the same thing without leaving the editor, so the picture
+          can be judged at size without losing the timeline. */}
+      <button
+        className="absolute top-2 right-2 z-20 h-7 w-7 rounded bg-black/60 hover:bg-black/80 border border-white/15 text-white/80 flex items-center justify-center"
+        title={stageMax ? "Exit expanded preview (Esc)" : "Expand preview — hides the side panels"}
+        aria-label={stageMax ? "Exit expanded preview" : "Expand preview"}
+        aria-pressed={stageMax}
+        onClick={() => setStageMax((v) => !v)}
+      >
+        {stageMax ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+      </button>
       <div
         ref={canvasWrapRef}
         className="relative max-h-full max-w-full"
@@ -2677,7 +2702,7 @@ export function Editor({
         </>
       ) : (
         <div className="flex-1 flex min-h-0">
-          {mediaPanel}
+          {!stageMax && mediaPanel}
           <div className="flex-1 flex flex-col min-w-0">
             {previewArea}
             {transportDesktop}
@@ -2731,7 +2756,7 @@ export function Editor({
               />
             </div>
           </div>
-          {inspectorPanel}
+          {!stageMax && inspectorPanel}
         </div>
       )}
       {assistOpen && engineRef.current && (

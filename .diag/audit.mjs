@@ -1,5 +1,6 @@
 // MayoCut v0.4.0 functional audit — pure-logic modules under node (esbuild bundles).
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 
 let passed = 0, failed = 0;
 function t(name, fn) {
@@ -1218,6 +1219,109 @@ await t('muted and reverse clips are silent regardless of transitions', () => {
   assert.equal(T.mainClipGain(A.clip, A, null, 5), 0);
   const R = { clip: mkClip({ reverse: true }), start: 0, end: 10 };
   assert.equal(T.mainClipGain(R.clip, R, null, 5), 0);
+});
+
+
+// ================= timeline interaction & playback robustness =================
+// These cover bugs that made the editor feel broken rather than crash:
+// overlay clips could not be nudged (they snapped to their own edges), main
+// clips could not be dragged to reorder, an overlay video was cut to 6s, and
+// a video could be condemned as undecodable purely because it loaded slowly.
+
+await t('overlay clip keeps its full source duration (no silent 6s cut)', () => {
+  const E2 = E;
+  const eng = new E2.Engine({ main: [], tracks: T.emptyTracks(), aspect: '16:9' });
+  const media = { id: 'mv', name: 'long.mp4', kind: 'video', size: 1, createdAt: 1, duration: 42 };
+  eng.setMedia([media]);
+  const clip = eng.addImageOverlay('t_overlay', media, 0);
+  assert.equal(clip.duration, 42, `expected the full 42s, got ${clip.duration}`);
+});
+
+await t('a short overlay video is not padded beyond its length', () => {
+  const eng = new E.Engine({ main: [], tracks: T.emptyTracks(), aspect: '16:9' });
+  const media = { id: 'ms', name: 'short.mp4', kind: 'video', size: 1, createdAt: 1, duration: 2.5 };
+  eng.setMedia([media]);
+  const clip = eng.addImageOverlay('t_overlay', media, 0);
+  assert.equal(clip.duration, 2.5);
+});
+
+await t('overlay video with unknown duration does not become 0-length', () => {
+  const eng = new E.Engine({ main: [], tracks: T.emptyTracks(), aspect: '16:9' });
+  const media = { id: 'mu', name: 'x.mp4', kind: 'video', size: 1, createdAt: 1, duration: 0 };
+  eng.setMedia([media]);
+  const clip = eng.addImageOverlay('t_overlay', media, 0);
+  assert.ok(clip.duration >= 0.5, `got ${clip.duration}`);
+});
+
+await t('main-clip reorder rejects an out-of-range index instead of corrupting', () => {
+  const eng = new E.Engine({
+    main: [
+      { id: 'a', mediaId: 'm', in: 0, out: 5, speed: 1, reverse: false, filter: 'none',
+        adjust: {}, volume: 1, muted: false, transitionIn: 'none', transitionDur: 0 },
+      { id: 'b', mediaId: 'm', in: 0, out: 5, speed: 1, reverse: false, filter: 'none',
+        adjust: {}, volume: 1, muted: false, transitionIn: 'none', transitionDur: 0 },
+    ],
+    tracks: T.emptyTracks(), aspect: '16:9',
+  });
+  const before = eng.project.main.map((c) => c.id).join(',');
+  eng.reorderMainClip('a', 99);
+  eng.reorderMainClip('a', -5);
+  const after = eng.project.main.map((c) => c.id).join(',');
+  assert.equal(after, before, 'invalid reorder must be a no-op');
+});
+
+await t('reorder actually moves a clip', () => {
+  const eng = new E.Engine({
+    main: [
+      { id: 'a', mediaId: 'm', in: 0, out: 5, speed: 1, reverse: false, filter: 'none',
+        adjust: {}, volume: 1, muted: false, transitionIn: 'none', transitionDur: 0 },
+      { id: 'b', mediaId: 'm', in: 0, out: 5, speed: 1, reverse: false, filter: 'none',
+        adjust: {}, volume: 1, muted: false, transitionIn: 'none', transitionDur: 0 },
+    ],
+    tracks: T.emptyTracks(), aspect: '16:9',
+  });
+  eng.reorderMainClip('b', 0);
+  assert.equal(eng.project.main[0].id, 'b');
+});
+
+await t('trimming a main clip clamps inside the source, keeping it playable', () => {
+  const eng = new E.Engine({
+    main: [{ id: 'a', mediaId: 'm', in: 0, out: 10, speed: 1, reverse: false,
+      filter: 'none', adjust: {}, volume: 1, muted: false,
+      transitionIn: 'none', transitionDur: 0 }],
+    tracks: T.emptyTracks(), aspect: '16:9',
+  });
+  const c = eng.project.main[0];
+  // drag the out edge far past the end of the source
+  c.out = 999;
+  const d = T.mainClipDuration(c);
+  assert.ok(Number.isFinite(d) && d > 0, `duration ${d}`);
+  // drag it before the in point
+  c.out = -5;
+  const d2 = T.mainClipDuration(c);
+  assert.ok(Number.isFinite(d2) && d2 > 0, `duration ${d2}`);
+});
+
+await t('a video with no known duration still gets a real, playable clip', () => {
+  // A slow import that never got metadata must not produce a 0-length or NaN
+  // clip — that is what stranded the preview on the placeholder card.
+  const eng = new E.Engine({ main: [], tracks: T.emptyTracks(), aspect: '16:9' });
+  const media = { id: 'slow', name: 'slow.mp4', kind: 'video', size: 1, createdAt: 1, duration: 0 };
+  eng.setMedia([media]);
+  const clip = eng.addMainClip(media);
+  assert.ok(Number.isFinite(clip.out) && clip.out > 0, `out=${clip.out}`);
+  const d = T.mainClipDuration(clip);
+  assert.ok(Number.isFinite(d) && d > 0, `duration=${d}`);
+});
+
+await t('the import probe only condemns a file on a real decoder error', () => {
+  // Regression guard for the sticky `unplayable` flag: probeVideo used to
+  // resolve playable:false on an 8s timeout, which then persisted on the media
+  // item and showed the "can not be decoded" card forever.
+  const src = readFileSync('src/mayocut/utils.ts', 'utf8');
+  assert.ok(!/finish\(false\)/.test(src), 'probeVideo must not resolve playable:false');
+  assert.ok(/finish\("unknown"\)/.test(src), 'a timeout must be reported as unknown');
+  assert.ok(/timeoutMs = 30000/.test(src), 'the probe budget must be generous, not 8s');
 });
 
 

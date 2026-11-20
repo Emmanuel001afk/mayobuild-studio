@@ -337,6 +337,8 @@ interface ElRecord {
   audioFallback?: HTMLAudioElement;
   videoLoadRequested?: boolean;
   videoLoadTimer?: number;
+  /** true once a slow load has already been retried — avoids a retry loop */
+  videoSlowLoadRetried?: boolean;
 }
 
 export interface ExportOptions {
@@ -612,7 +614,17 @@ export class Engine {
     const rec = this.els.get(mediaId);
     if (!rec || rec.videoBroken || !(rec.el instanceof HTMLVideoElement)) return;
     const video = rec.el;
-    if (video.readyState >= 2 || rec.videoLoadRequested) return;
+    if (video.readyState >= 2) {
+      // Already have frames — clear any stale latch so a later seek can
+      // re-issue a load if the decoder dropped them.
+      rec.videoLoadRequested = false;
+      if (rec.videoLoadTimer) {
+        window.clearTimeout(rec.videoLoadTimer);
+        rec.videoLoadTimer = undefined;
+      }
+      return;
+    }
+    if (rec.videoLoadRequested) return;
     rec.videoLoadRequested = true;
     video.preload = "auto";
     try {
@@ -622,13 +634,20 @@ export class Engine {
     }
     rec.videoLoadTimer = window.setTimeout(() => {
       rec.videoLoadTimer = undefined;
-      if (this.els.get(mediaId) === rec && !rec.videoBroken && video.readyState < 2) {
-        this.markVideoBroken(
-          mediaId,
-          "no decoded frame after 12 s (unsupported codec or damaged file)",
-        );
+      if (this.els.get(mediaId) !== rec || rec.videoBroken) return;
+      if (video.readyState >= 2) return;
+      // A hard decoder error is the only reliable evidence. Give a slow load
+      // more rope instead of condemning the clip: retry once, and only call it
+      // broken if the element has actively errored.
+      rec.videoLoadRequested = false;
+      if (video.error) {
+        this.markVideoBroken(mediaId, `decoder error ${video.error.code}: ${video.error.message}`);
+      } else if (!rec.videoSlowLoadRetried) {
+        rec.videoSlowLoadRetried = true;
+        this.requestVideoLoad(mediaId);
       }
-    }, 12000);
+      // still no frame and no error: leave it alone — it may yet arrive
+    }, 45000);
   }
 
   /** A video track can't be decoded here: switch its sound to a shadow
@@ -2897,7 +2916,8 @@ export class Engine {
       kind: media.kind === "video" ? "video" : "image",
       mediaId: media.id,
       start: Math.max(0, start),
-      duration: media.kind === "video" ? Math.min(6, media.duration ?? 6) : 3,
+      // full source length: silently cutting to 6s truncated real footage
+      duration: media.kind === "video" ? Math.max(0.5, media.duration ?? 6) : 3,
       scale: 0.5,
       x: 0,
       y: -0.4,
