@@ -267,13 +267,15 @@ if (lifestyleTab) {
 const LIBRARY_TABS = [
   { label: "Media", expect: /import/i },
   { label: "Audio", expect: /import audio|no audio yet/i },
-  { label: "Text", expect: /add a text box|looks/i },
-  { label: "Stickers", expect: /shapes|emoji/i },
+  { label: "Text", expect: /add text|text style|look/i },
+  { label: "Stickers", expect: /sticker|emoji|reaction|creator/i },
   { label: "Effects", expect: /camera|motion|impact|select a clip/i },
   { label: "Transitions", expect: /transition|wipe|crossfade|select a clip/i },
   { label: "Filters", expect: /look|original|select a clip/i },
-  { label: "Adjust", expect: /brightness|open adjust|select a clip/i },
+  { label: "Adjust", expect: /brightness|contrast|select a main-track/i },
   { label: "Captions", expect: /caption/i },
+  // main's rail also carries an AI Studio entry; it must not regress either
+  { label: "AI Studio", expect: /ai studio|assistant|open ai/i },
 ];
 const t0 = textOf();
 for (const tb of LIBRARY_TABS) {
@@ -301,11 +303,26 @@ for (const tb of LIBRARY_TABS) {
   filtersBtn?.click();
   await wait(250);
   const text2 = textOf();
-  const swatchBtns = [...document.querySelectorAll("button")].filter((b) =>
-    /apply the .* look|remove the colour look/i.test(b.getAttribute("title") || ""),
-  );
-  checks.push(["filters grid shows 30+ looks", swatchBtns.length >= 30]);
-  checks.push(["filters grid hides the tab strip only", /original/i.test(text2)]);
+  // The filters tab renders one card per preset, each titled with its name.
+  const looks = [
+    "Original",
+    "Kodachrome",
+    "Portra 400",
+    "Bleach Bypass",
+    "Cyberpunk",
+    "Mono High",
+    "Neon Night",
+    "Teal & Orange",
+  ];
+  const cards = [...document.querySelectorAll("button")].filter((b) => {
+    const t = b.getAttribute("title") || "";
+    return looks.includes(t);
+  });
+  checks.push(["filters grid shows the full catalogue", cards.length >= 8]);
+  checks.push(["filters grid includes new looks", /koda|portra|bleach/i.test(text2)]);
+  // each card should carry a real preview, not just a label
+  const previews = document.querySelectorAll("svg");
+  checks.push(["filter cards render preview artwork", previews.length >= 8]);
 }
 
 failed = 0;

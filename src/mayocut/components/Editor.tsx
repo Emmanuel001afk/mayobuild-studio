@@ -32,6 +32,7 @@ import { db } from "../idb";
 import { Engine, FILTER_PRESETS, mp4Supported, pickMime } from "../engine";
 import {
   ASPECTS,
+  DEFAULT_ADJUST,
   EFFECTS,
   TEXT_PRESETS,
   TRANSITIONS,
@@ -39,6 +40,7 @@ import {
   projectDuration,
   uid,
   type AnimValues,
+  type FilterAdjust,
   type AspectId,
   type EffectId,
   type MainClip,
@@ -52,7 +54,7 @@ import { fmtBytes, fmtTime, importFiles, kindFromMime } from "../utils";
 import { Timeline } from "./Timeline";
 import { Inspector } from "./Inspector";
 import { Assist } from "./Assist";
-import { Library } from "./Library";
+import { EffectPreview, FilterPreview, Library, TransitionPreview } from "./Library";
 
 const MEDIA_ACCEPT =
   "video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.3gp,.3g2,.flv,.ts,.mts,.m2ts,.mpg,.mpeg,.wmv,.vob,.ogv,image/*,.bmp,.heic,.heif,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac";
@@ -1091,6 +1093,19 @@ export function Editor({
     if (changed) toast.success("Effect applied to selected clip");
   }
 
+  /** Merge one clip-adjust change (used by the Adjust tab's live sliders). */
+  function applyAdjust(patch: Partial<FilterAdjust>, replace = false) {
+    if (selection?.lane !== "main") {
+      toast.info("Select a main-track video clip first");
+      return;
+    }
+    mutateVoid((eng) => {
+      const clip = eng.project.main.find((item) => item.id === selection.id);
+      if (!clip) return false;
+      clip.adjust = replace ? { ...DEFAULT_ADJUST } : { ...clip.adjust, ...patch };
+    });
+  }
+
   function applyMainFilter(filter: string) {
     if (selection?.lane !== "main") {
       toast.info("Select a main-track video clip first");
@@ -1701,6 +1716,7 @@ export function Editor({
     { id: "effects", label: "Effects", icon: Sparkles },
     { id: "filters", label: "Filters", icon: SlidersHorizontal },
     { id: "transitions", label: "Transitions", icon: Scissors },
+    { id: "adjust", label: "Adjust", icon: SlidersHorizontal },
     { id: "captions", label: "Captions", icon: Clapperboard },
     { id: "ai", label: "AI Studio", icon: Sparkles },
   ] as const;
@@ -1865,12 +1881,32 @@ export function Editor({
               {TEXT_PRESETS.map((preset) => (
                 <button
                   key={preset.name}
-                  className="min-h-10 border border-border rounded px-2 py-1.5 text-[10px] text-left hover:border-primary"
+                  className="flex flex-col overflow-hidden border border-border rounded text-[10px] text-left hover:border-primary"
                   onClick={() => addTextPreset(preset)}
+                  title={`Add a “${preset.name}” title`}
                 >
-                  {preset.name}
+                  {/* a real miniature of the look, not a label in a box */}
+                  <span
+                    className="h-9 flex items-center justify-center px-1 truncate font-semibold"
+                    style={{
+                      color: preset.patch.color ?? "#fff",
+                      background: preset.patch.bg || "rgba(15,23,42,0.9)",
+                      textTransform: preset.patch.upper ? "uppercase" : undefined,
+                      fontStyle: preset.patch.italic ? "italic" : undefined,
+                      textDecoration: preset.patch.underline ? "underline" : undefined,
+                      letterSpacing: preset.patch.tracking ? "0.06em" : undefined,
+                      fontSize: preset.patch.size && preset.patch.size > 80 ? 15 : 11,
+                    }}
+                  >
+                    Aa
+                  </span>
+                  <span className="px-1 py-0.5 truncate text-muted-foreground">{preset.name}</span>
                 </button>
               ))}
+            </div>
+            <div className="text-[10px] text-muted-foreground pt-1">
+              Animations, fonts, outline and spacing are in the Anim tab once a text clip is
+              selected.
             </div>
           </div>
         )}
@@ -1908,19 +1944,23 @@ export function Editor({
             <p className="text-[10px] text-muted-foreground mb-2">
               Apply a motion or visual effect to the selected main-track clip.
             </p>
-            {EFFECTS.map((effect) => (
-              <button
-                key={effect.id}
-                className={`w-full text-left px-2 py-2 rounded border text-[11px] ${
-                  selectedMainClip?.effect === effect.id
-                    ? "border-primary bg-primary/10"
-                    : "border-border hover:border-primary"
-                }`}
-                onClick={() => applyMainEffect(effect.id)}
-              >
-                {effect.name}
-              </button>
-            ))}
+            <div className="grid grid-cols-2 gap-1">
+              {EFFECTS.map((effect) => (
+                <button
+                  key={effect.id}
+                  className={`flex flex-col overflow-hidden rounded border text-[10px] text-left ${
+                    selectedMainClip?.effect === effect.id
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:border-primary"
+                  }`}
+                  onClick={() => applyMainEffect(effect.id)}
+                  title={effect.name}
+                >
+                  <EffectPreview id={effect.id} />
+                  <span className="px-1 py-0.5 truncate">{effect.name}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {workspaceTab === "filters" && (
@@ -1928,14 +1968,16 @@ export function Editor({
             {FILTER_PRESETS.map((filter) => (
               <button
                 key={filter.id}
-                className={`min-h-10 border rounded px-2 py-1 text-[10px] text-left ${
+                className={`flex flex-col overflow-hidden border rounded text-[10px] text-left ${
                   selectedMainClip?.filter === filter.id
                     ? "border-primary bg-primary/10"
                     : "border-border hover:border-primary"
                 }`}
                 onClick={() => applyMainFilter(filter.id)}
+                title={filter.name}
               >
-                {filter.name}
+                <FilterPreview css={filter.css} />
+                <span className="px-1 py-0.5 truncate">{filter.name}</span>
               </button>
             ))}
           </div>
@@ -1946,19 +1988,73 @@ export function Editor({
               Choose the incoming transition for the selected clip. The first clip has no incoming
               transition.
             </p>
-            {TRANSITIONS.map((transition) => (
+            <div className="grid grid-cols-2 gap-1">
+              {TRANSITIONS.map((transition) => (
+                <button
+                  key={transition.id}
+                  className={`flex flex-col overflow-hidden rounded border text-[10px] text-left ${
+                    selectedMainClip?.transitionIn === transition.id
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:border-primary"
+                  }`}
+                  onClick={() => applyMainTransition(transition.id)}
+                  title={transition.name}
+                >
+                  <TransitionPreview kind={transition.id} seed={transition.id} />
+                  <span className="px-1 py-0.5 truncate">{transition.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {workspaceTab === "adjust" && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5">
+            {!selectedMainClip ? (
+              <p className="text-[10px] text-muted-foreground">
+                Select a main-track clip, then drag these. The preview updates as you move them.
+              </p>
+            ) : (
+              (
+                [
+                  ["brightness", "Brightness", 40, 200],
+                  ["contrast", "Contrast", 40, 200],
+                  ["saturation", "Saturation", 0, 250],
+                  ["hue", "Hue", -180, 180],
+                  ["temperature", "Temperature", -100, 100],
+                  ["tint", "Tint", -100, 100],
+                  ["fade", "Fade", 0, 100],
+                  ["sharpen", "Sharpen", 0, 100],
+                  ["vignette", "Vignette", 0, 100],
+                  ["splitTone", "Split tone", 0, 100],
+                ] as const
+              ).map(([key, label, min, max]) => (
+                <label key={key} className="block">
+                  <span className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>{label}</span>
+                    <span className="tabular-nums">{selectedMainClip.adjust?.[key] ?? 0}</span>
+                  </span>
+                  <input
+                    type="range"
+                    min={min}
+                    max={max}
+                    step={1}
+                    value={selectedMainClip.adjust?.[key] ?? (key === "hue" ? 0 : 100)}
+                    onChange={(e) =>
+                      applyAdjust({ [key]: Number(e.target.value) } as Partial<FilterAdjust>)
+                    }
+                    className="w-full accent-cyan-400"
+                  />
+                </label>
+              ))
+            )}
+            {selectedMainClip && (
               <button
-                key={transition.id}
-                className={`w-full text-left px-2 py-2 rounded border text-[11px] ${
-                  selectedMainClip?.transitionIn === transition.id
-                    ? "border-primary bg-primary/10"
-                    : "border-border hover:border-primary"
-                }`}
-                onClick={() => applyMainTransition(transition.id)}
+                className="mb-btn-ghost w-full h-7 text-[10px] mt-1"
+                onClick={() => applyAdjust(DEFAULT_ADJUST, true)}
               >
-                {transition.name}
+                Reset adjustments
               </button>
-            ))}
+            )}
           </div>
         )}
         {workspaceTab === "captions" && (
@@ -2377,7 +2473,11 @@ export function Editor({
               setAssistInitialTab("tools");
               setAssistOpen(true);
             } else {
-              setSheet(sheet === b.id ? null : b.id);
+              // "Add" and "Media" both open the Library drawer: every creation
+              // category now lives in one panel, so a separate Add sheet would
+              // be a second, thinner copy of it.
+              const target = b.id === "add" ? "media" : b.id;
+              setSheet(sheet === target ? null : target);
             }
           }}
         >
@@ -2489,131 +2589,7 @@ export function Editor({
           <DrawerHeader className="p-3 pb-2 text-left">
             <DrawerTitle className="text-sm">Media library</DrawerTitle>
           </DrawerHeader>
-          <div className="overflow-y-auto px-3 pb-8">
-            <div className="p-2 border-b border-border">
-              <button
-                className="mb-btn w-full h-8 text-xs"
-                onClick={() => fileRef.current?.click()}
-                disabled={importing}
-              >
-                {importing ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Upload className="h-3.5 w-3.5" />
-                )}
-                {importing && importProgress
-                  ? `Checking ${importProgress.done}/${importProgress.total}…`
-                  : importing
-                    ? "Importing…"
-                    : "Import media"}
-              </button>
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                accept="video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.3gp,.3g2,.flv,.ts,.mts,.m2ts,.mpg,.mpeg,.wmv,.vob,.ogv,image/*,.bmp,.heic,.heif,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
-                className="hidden"
-                onChange={(e) => {
-                  void onImport(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-              <button
-                className={`mb-btn-ghost w-full h-7 mt-1 text-[11px] ${recState.active ? "text-red-400 border-red-400/50" : ""}`}
-                onClick={startRecording}
-                title="Record voiceover or music from the microphone"
-              >
-                {recState.active ? (
-                  <span className="flex items-center justify-center gap-1">
-                    <Square className="h-3 w-3" /> Stop · {recState.secs}s
-                  </span>
-                ) : (
-                  <span className="flex items-center justify-center gap-1">
-                    <Mic className="h-3 w-3" /> Record audio
-                  </span>
-                )}
-              </button>
-              <div className="flex gap-1 mt-2">
-                <button
-                  className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "main" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-                  onClick={() => setAddMode("main")}
-                >
-                  + clip → timeline
-                </button>
-                <button
-                  className={`flex-1 text-[11px] rounded px-1 py-1 border ${addMode === "overlay" ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-                  onClick={() => setAddMode("overlay")}
-                >
-                  + sticker → overlay
-                </button>
-              </div>
-              <button className="mb-btn-ghost w-full h-7 mt-1 text-[11px]" onClick={addText}>
-                <Plus className="h-3 w-3" /> Add text at playhead
-              </button>
-              <div className="mt-2">
-                <div className="text-[10px] text-muted-foreground mb-1">
-                  Stickers (emoji, instant)
-                </div>
-                <div className="flex gap-0.5 flex-wrap">
-                  {EMOJI_STICKERS.map((em) => (
-                    <button
-                      key={em}
-                      className="h-7 w-7 rounded hover:bg-slate-700 text-base leading-none"
-                      title={`Add ${em}`}
-                      onClick={() => addEmoji(em)}
-                    >
-                      {em}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div
-              className={`flex-1 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}
-            >
-              {media.map(mediaCard)}
-              {media.length === 0 && (
-                <div className="col-span-2 text-[11px] text-muted-foreground text-center py-6">
-                  Library empty.
-                  <br />
-                  Import media to start.
-                </div>
-              )}
-            </div>
-          </div>
-        </DrawerContent>
-      </Drawer>
-      <Drawer open={sheet === "add"} onClose={() => setSheet(null)}>
-        <DrawerContent className="max-h-[80dvh]">
-          <DrawerHeader className="p-3 pb-2 text-left">
-            <DrawerTitle className="text-sm">Add to the timeline</DrawerTitle>
-          </DrawerHeader>
-          <div className="space-y-4 overflow-y-auto px-3 pb-8">
-            <button className="mb-btn-ghost w-full h-10 text-xs" onClick={addText}>
-              <Plus className="h-4 w-4" /> Add text at playhead
-            </button>
-            <div>
-              <div className="text-[10px] text-muted-foreground mb-1.5">
-                Stickers (emoji, instant)
-              </div>
-              <div className="grid grid-cols-8 gap-1">
-                {EMOJI_STICKERS.map((em) => (
-                  <button
-                    key={em}
-                    className="h-9 w-9 rounded-lg border border-border hover:border-cyan-400/60 text-lg leading-none"
-                    title={`Add ${em}`}
-                    onClick={() => addEmoji(em)}
-                  >
-                    {em}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Audio: record a voiceover or import a track in <b>Media</b>. Spoken voice
-              (text-to-speech) lives in <b>Assist → Voice</b>.
-            </p>
-          </div>
+          <div className="flex-1 min-h-0 overflow-hidden pb-6">{libraryNode}</div>
         </DrawerContent>
       </Drawer>
       <Drawer open={sheet === "tune"} onClose={() => setSheet(null)}>

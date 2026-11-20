@@ -562,7 +562,7 @@ export function Library({
                     title={`Apply the ${e.name} movement`}
                     onClick={() => onPatchMain({ effect: e.id as EffectId })}
                   >
-                    <EffectSwatch id={e.id} />
+                    <EffectPreview id={e.id} />
                     <div className="px-1 py-0.5 text-[10px] truncate">{e.name}</div>
                   </Tile>
                 ))}
@@ -597,7 +597,7 @@ export function Library({
                       title={`${tr.name} into the selected clip`}
                       onClick={() => onSetTransition(tr.id)}
                     >
-                      <TransitionSwatch kind={tr.id} seed={uid} />
+                      <TransitionPreview kind={tr.id} seed={uid} />
                       <div className="px-1 py-0.5 text-[10px] truncate">{tr.name}</div>
                     </Tile>
                   ))}
@@ -638,7 +638,7 @@ export function Library({
                     title={`Apply the ${f.name} look`}
                     onClick={() => onApplyFilter(f.id)}
                   >
-                    <FilterSwatch css={f.css} />
+                    <FilterPreview css={f.css} />
                     <div className="px-1 py-0.5 text-[10px] truncate">{f.name}</div>
                   </Tile>
                 ))}
@@ -745,7 +745,7 @@ function Pills({
 }
 
 /** A real miniature of a colour look, so the grid reads like CapCut's. */
-function FilterSwatch({ css }: { css: string }) {
+export function FilterPreview({ css }: { css: string }) {
   const uid = useId().replace(/[:]/g, "");
   return (
     <div className="h-12 relative overflow-hidden">
@@ -767,7 +767,7 @@ function FilterSwatch({ css }: { css: string }) {
 }
 
 /** A movement preview: the same arrow shape under the effect's own transform. */
-function EffectSwatch({ id }: { id: EffectId }) {
+export function EffectPreview({ id }: { id: EffectId }) {
   const anim =
     id === "none"
       ? ""
@@ -795,7 +795,7 @@ function EffectSwatch({ id }: { id: EffectId }) {
  * on both axes. Direction is derived rather than a generic spin, because the
  * card is the only thing telling a user which of the 8 wipes they want.
  */
-function TransitionSwatch({ kind, seed }: { kind: TransitionKind; seed: string }) {
+export function TransitionPreview({ kind, seed }: { kind: TransitionKind; seed: string }) {
   const fam = TRANSITION_FAMILY[kind];
   const dir = kind.includes("left")
     ? "left"
