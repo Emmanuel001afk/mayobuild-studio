@@ -100,9 +100,11 @@ var init_idb = __esm({
         (r) => r?.blob
       ),
       // --- preview proxies (never used for export) ---
-      getProxy: (mediaId) => tx("blobs", "readonly", (s) => s.get(`proxy_${mediaId}`)).then(
-        (r) => r?.blob
-      ),
+      getProxy: (mediaId) => tx(
+        "blobs",
+        "readonly",
+        (s) => s.get(`proxy_${mediaId}`)
+      ).then((r) => r?.blob),
       putProxy: (mediaId, blob) => tx("blobs", "readwrite", (s) => s.put({ id: `proxy_${mediaId}`, blob })),
       deleteProxy: (mediaId) => tx("blobs", "readwrite", (s) => s.delete(`proxy_${mediaId}`)),
       /** Store a blob with a custom id (TTS model files) without touching the media store. */

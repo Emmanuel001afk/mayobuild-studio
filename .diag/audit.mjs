@@ -1855,5 +1855,81 @@ await t('the export dialog shows an estimate before rendering', () => {
 });
 
 
+// ================= stage 4: frame-stepped WebM =================
+console.log('webm frame-stepped');
+await t('a frame-stepped WebM exporter exists and is reachable', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/async exportWebmStepped\(/.test(src), 'must expose a stepped WebM exporter');
+  assert.ok(/async canExportSteppedWebm\(/.test(src), 'must expose a capability check');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/exportWebmStepped/.test(ed), 'the UI must be able to reach it');
+});
+await t('the WebM exporter confirms every frame before encoding it', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('async exportWebmStepped('));
+  const body = fn.slice(0, fn.indexOf('// ------------------------------------------------------------- export (MP4)'));
+  assert.ok(/await this\.frameReadyAt\(t, 3000\)/.test(body), 'must wait for the decoder');
+  assert.ok(/new W_\.VideoFrame\(this\.canvas/.test(body), 'must encode the drawn canvas');
+  assert.ok(/timestamp: f \* frameDurUs/.test(body), 'must use explicit frame timestamps');
+  assert.ok(/totalFrames = Math\.max\(1, Math\.round\(dur0 \* fps\)\)/.test(body), 'must cover the whole duration');
+});
+await t('the WebM exporter muxes an Opus track from offline PCM', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('async exportWebmStepped('));
+  const body = fn.slice(0, fn.indexOf('// ------------------------------------------------------------- export (MP4)'));
+  assert.ok(/codec: "A_OPUS"/.test(body), 'must declare the Opus track');
+  assert.ok(/renderOfflineAudioTrack\(/.test(body), 'must reuse the offline render, not a live graph');
+  assert.ok(/muxer\.addAudioChunk/.test(body), 'must feed encoded audio to the muxer');
+});
+await t('the WebM exporter always exports originals, then restores previews', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('async exportWebmStepped('));
+  const body = fn.slice(0, fn.indexOf('// ------------------------------------------------------------- export (MP4)'));
+  assert.ok(/this\.useOriginalSources\(\)/.test(body), 'a proxy must never be encoded');
+  assert.ok(/this\.usePreviewSources\(\)/.test(body), 'preview must be restored');
+});
+await t('VP codec selection prefers VP9 and maps to the Matroska CodecID', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('async function pickVpCodec('));
+  const body = fn.slice(0, fn.indexOf('async function pickAvcCodec('));
+  assert.ok(body.indexOf('vp09') < body.indexOf('"vp8"'), 'VP9 must be tried before VP8');
+  assert.ok(/mkv: "V_VP9"/.test(body) && /mkv: "V_VP8"/.test(body), 'muxer needs Matroska IDs');
+  assert.ok(/isConfigSupported/.test(body), 'must ask the platform, not assume');
+});
+await t('Opus audio is resampled to 48 kHz rather than mislabelled', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('async exportWebmStepped('));
+  const body = fn.slice(0, fn.indexOf('// ------------------------------------------------------------- export (MP4)'));
+  assert.ok(/audio\.sampleRate !== opusRate/.test(body), 'must notice a rate mismatch');
+  assert.ok(/const ratio = opusRate \/ audio\.sampleRate/.test(body), 'must actually resample');
+  assert.ok(/sampleRate: opusRate/.test(body), 'must declare 48 kHz to the encoder');
+});
+await t('WebM stepping is only chosen when MP4 stepping is unavailable', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  const i = ed.indexOf('await eng.canExportStepped()');
+  const j = ed.indexOf('await eng.canExportSteppedWebm()');
+  const k = ed.indexOf('exportMP4Stepped(');
+  assert.ok(i > 0 && j > i, 'MP4 must be preferred, WebM the fallback');
+  assert.ok(k > 0, 'MP4 stepped exporter must still be wired');
+});
+await t('the muxer is MIT and adds no transitive runtime dependency', () => {
+  const pkg = JSON.parse(readFileSync('node_modules/webm-muxer/package.json', 'utf8'));
+  assert.equal(pkg.license, 'MIT');
+  const deps = Object.keys(pkg.dependencies ?? {});
+  assert.ok(
+    deps.every((d) => d.startsWith('@types/')),
+    `only type packages allowed, found: ${deps.join(', ')}`,
+  );
+});
+await t('no user-facing message tells the user to switch browsers or convert files', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  const eng = readFileSync('src/mayocut/engine.ts', 'utf8');
+  for (const [name, src] of [['Editor.tsx', ed], ['engine.ts', eng]]) {
+    const bad = src.match(/Chrome\s*\/?\s*or\s*Edge|Chrome\/Edge|Convert (it|them) to/gi);
+    assert.equal(bad, null, `${name} still advises: ${bad && bad.join(', ')}`);
+  }
+});
+
+
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

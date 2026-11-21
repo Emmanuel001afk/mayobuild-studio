@@ -242,7 +242,42 @@ Fallbacks, in order:
 2. `exportMP4` — real-time WebCodecs, still muxes audio.
 3. `exportMedia` — real-time `MediaRecorder` (WebM).
 
-Only the first is frame-accurate. WebM has no frame-stepped path yet.
+Only the first is frame-accurate — but see below: WebM now has its own
+frame-stepped path, for the browsers that cannot encode H.264.
+
+### Frame-stepped WebM (Stage 3b)
+
+Safari and Firefox have no H.264 *encoder*, so they used to fall all the way to
+the real-time recorder and inherit its dropped frames. `exportWebmStepped` closes
+that gap with the same loop shape as the MP4 path:
+
+```
+for f in 0..totalFrames:
+  await frameReadyAt(f / fps)
+  encode(canvas, timestamp = f * frameDurationUs)
+```
+
+- Video: WebCodecs `VideoEncoder` with VP9, falling back to VP8, then AV1.
+  `pickVpCodec()` asks the platform via `isConfigSupported` and returns both the
+  WebCodecs codec string and the Matroska `CodecID` the muxer needs — they are
+  not the same string.
+- Audio: Opus, fed from the **same** `renderOfflineAudioTrack()` PCM the MP4 path
+  uses. Muting, crossfades and extracted-and-muted sources therefore sound
+  identical in both containers.
+- Opus is defined at 48 kHz, so if the offline render ever returns another rate
+  the samples are resampled rather than mislabelled (a mislabelled rate plays
+  back at the wrong speed).
+- Same proxy rule: `useOriginalSources()` before capturing,
+  `usePreviewSources()` in `finally`.
+
+This added **one** dependency, `webm-muxer` (MIT, no runtime dependencies —
+only `@types/*`). It is a container writer, not a codec: encoding is still done
+by the platform. The audit asserts both facts so a future bump cannot quietly
+drag in a GPL encoder.
+
+**Choice order is MP4 first, WebM second.** A browser that can do both gets
+H.264, because MP4 plays everywhere; a browser that cannot gets the same
+frame-exactness in WebM rather than a degraded real-time capture.
 
 ### Measuring before promising (Stage 3)
 
@@ -303,12 +338,23 @@ current stack, which uses only the platform's own decoders).
 - A measurement on a real low-end phone. `measureThroughput` exists and the UI
   uses it, but no hardware run has been recorded — so no "fast enough" claim is
   made anywhere in this document.
-- Frame-stepping for WebM. Only the MP4 path is frame-accurate.
+- Safari/Firefox frame-stepped WebM is written but **untested on real Safari**;
+  the audit checks the code path, not a device. Treat it as unproven until a
+  Mac/iPad run confirms it.
 - Proxy generation is best-effort and single-file; it does not yet run in a
   worker, so a large import queue can still warm the device.
 - Real-video integration fixtures: the audit runs against synthetic Project
   fixtures, not actual sample files.
 - No native shell exists yet.
+
+### A note on the error messages
+
+Several messages used to tell the user to switch to Chrome/Edge or to convert
+their file with another app. That is not a fix, so they were rewritten to state
+what is *not possible on this device* and what still is — for example an
+undecodable HEVC clip now says its audio and captions still work and the export
+can still carry the sound, instead of recommending a converter. The audit fails
+if "Chrome/Edge" or "convert it to" reappears in user-facing strings.
 
 ## AI policy
 

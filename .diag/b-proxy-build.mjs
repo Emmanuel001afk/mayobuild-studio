@@ -39,21 +39,14 @@ function canBuildProxy() {
   return MediaRecorder.isTypeSupported("video/webm;codecs=vp9") || MediaRecorder.isTypeSupported("video/webm;codecs=vp8");
 }
 function pickProxyMime() {
-  const candidates = [
-    "video/webm;codecs=vp9",
-    "video/webm;codecs=vp8",
-    "video/webm"
-  ];
+  const candidates = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
   for (const mime of candidates) {
     if (MediaRecorder.isTypeSupported(mime)) return mime;
   }
   return void 0;
 }
 async function buildProxy(blob, meta, opts = {}) {
-  const decision = shouldProxyVideo(
-    meta,
-    opts.maxHeight ? { maxHeight: opts.maxHeight } : {}
-  );
+  const decision = shouldProxyVideo(meta, opts.maxHeight ? { maxHeight: opts.maxHeight } : {});
   if (!decision.wanted) return null;
   if (!canBuildProxy()) return null;
   const mime = pickProxyMime();
