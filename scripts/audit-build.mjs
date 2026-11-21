@@ -18,6 +18,7 @@ const MODULES = [
   "utils",
   "templates",
   "background-math",
+  "timeline-resolver",
 ];
 
 for (const name of MODULES) {

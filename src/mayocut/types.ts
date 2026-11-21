@@ -1083,7 +1083,10 @@ export function mainClipGain(
   hasPrevious = true,
 ): number {
   if (clip.reverse || clip.freeze) return 0; // frame-stepped / held frames are silent
-  let v = clip.muted ? 0 : clip.volume;
+  // A legacy clip may have no `volume`; NaN here would propagate into the gain
+  // node and silence the entire audio chain.
+  const baseVolume = Number.isFinite(clip.volume) ? clip.volume : 1;
+  let v = clip.muted ? 0 : Math.max(0, Math.min(1, baseVolume));
   // incoming: fade up across this clip's own transition-in window — but only
   // if something precedes it. The first clip has no incoming transition, and
   // treating it as one silenced the start of every video.

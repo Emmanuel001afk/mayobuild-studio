@@ -12,6 +12,7 @@ function t(name, fn) {
 
 // ================= types =================
 const T = await import('./b-types.mjs');
+const R = await import('./b-timeline-resolver.mjs');
 const E = await import('./b-engine.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
@@ -1402,6 +1403,156 @@ await t('filters and effects fall back to the clip under the playhead', () => {
   const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
   assert.ok(/function targetMainClipId/.test(ed), 'needs a selection fallback');
   assert.ok(!/Select a main-track video clip first/.test(ed), 'must not refuse to apply');
+});
+
+
+// ================= timeline resolver — the shared engine contract =================
+// These are the "automated tests with real videos" foundation: real Project
+// fixtures (multi-clip, split, muted, extracted audio, transitions) resolved
+// through the SAME function preview and export use.
+
+const rc = (o = {}) => ({
+  id: 'c', mediaId: 'm', in: 0, out: 5, speed: 1, reverse: false, filter: 'none',
+  adjust: {}, volume: 1, muted: false, transitionIn: 'none', transitionDur: 0, ...o,
+});
+const rproj = (main, tracks = []) => ({
+  id: 'p', name: 'p', aspect: '16:9', main, tracks, createdAt: 1, updatedAt: 1,
+});
+const rtrack = (id, clips) => ({ id, name: id, kind: 'text', clips });
+
+await t('resolver: a single clip is visible for its whole span', () => {
+  const p = rproj([rc()]);
+  for (const at of [0, 1, 4.99]) {
+    const c = R.resolveComposition(p, at);
+    assert.equal(c.main.length, 1, `at ${at}`);
+    assert.equal(c.empty, false);
+  }
+});
+
+await t('resolver: two clips with a crossfade overlap and sum to unity', () => {
+  const p = rproj([
+    rc({ id: 'A', transitionIn: 'crossfade', transitionDur: 0.5 }),
+    rc({ id: 'B', transitionIn: 'crossfade', transitionDur: 0.5 }),
+  ]);
+  let sawTransition = false;
+  for (let at = 0; at <= 10; at += 0.05) {
+    const c = R.resolveComposition(p, at);
+    const sum = c.main.reduce((n, l) => n + l.gain, 0);
+    assert.ok(sum <= 1.02, `gain sum ${sum.toFixed(2)} at ${at.toFixed(2)}`);
+    if (c.transition) {
+      sawTransition = true;
+      assert.equal(c.main.length, 2, 'both clips visible mid-transition');
+      assert.ok(c.transition.progress >= 0 && c.transition.progress <= 1);
+    }
+  }
+  assert.ok(sawTransition, 'the resolver must report the transition at all');
+});
+
+await t('resolver: at an exact cut the INCOMING clip wins (no flash back)', () => {
+  const p = rproj([
+    rc({ id: 'A', transitionIn: 'none' }),
+    rc({ id: 'B', transitionIn: 'none' }),
+  ]);
+  const c = R.resolveComposition(p, 5);
+  assert.equal(c.main.length, 1);
+  assert.equal(c.main[0].clip.id, 'B');
+});
+
+await t('resolver: a split clip is two independent spans', () => {
+  const p = rproj([
+    rc({ id: 'a1', in: 0, out: 2.5 }),
+    rc({ id: 'a2', in: 2.5, out: 5 }),
+  ]);
+  const first = R.resolveComposition(p, 1);
+  const second = R.resolveComposition(p, 3);
+  assert.equal(first.main[0].clip.id, 'a1');
+  assert.equal(first.main[0].src, 1);
+  assert.equal(second.main[0].clip.id, 'a2');
+  assert.equal(second.main[0].src, 3, 'source continues across the split');
+});
+
+await t('resolver: a MUTED clip contributes no audio but is still visible', () => {
+  const p = rproj([rc({ id: 'A', muted: true })]);
+  const c = R.resolveComposition(p, 1);
+  assert.equal(c.main.length, 1, 'muted must not remove the picture');
+  assert.equal(c.main[0].gain, 0, 'muted must contribute no audio');
+});
+
+await t('resolver: extracted audio plays on its own track while the video is muted', () => {
+  const p = rproj(
+    [rc({ id: 'A', mediaId: 'vid', muted: true })],
+    [rtrack('t_audio', [{ id: 'au', kind: 'audio', mediaId: 'aud', start: 0, duration: 5 }])],
+  );
+  const c = R.resolveComposition(p, 1);
+  assert.equal(c.main[0].gain, 0, 'original sound stays muted');
+  assert.equal(c.audioOverlays.length, 1, 'the extracted copy is the audible one');
+  assert.equal(c.audioOverlays[0].clip.mediaId, 'aud');
+  const need = R.requiredMediaAt(p, 1);
+  assert.ok(need.includes('vid'), 'picture media required');
+  assert.ok(need.includes('aud'), 'extracted audio media required');
+});
+
+await t('resolver: overlays are time-windowed and skip hidden tracks', () => {
+  const clips = [{ id: 'tx', kind: 'text', start: 1, duration: 2, text: 'hi' }];
+  const vis = R.resolveComposition(rproj([rc()], [rtrack('t_text', clips)]), 1.5);
+  assert.equal(vis.overlays.length, 1);
+  const outside = R.resolveComposition(rproj([rc()], [rtrack('t_text', clips)]), 4);
+  assert.equal(outside.overlays.length, 0);
+  const hiddenTrack = rtrack('t_text', clips);
+  hiddenTrack.hidden = true;
+  const hidden = R.resolveComposition(rproj([rc()], [hiddenTrack]), 1.5);
+  assert.equal(hidden.overlays.length, 0, 'hidden track must not render');
+});
+
+await t('resolver: every output is finite, even for legacy clips', () => {
+  const p = rproj([{ ...rc(), speed: undefined, out: undefined, volume: undefined }]);
+  for (let at = 0; at <= 5; at += 0.5) {
+    const c = R.resolveComposition(p, at);
+    assert.ok(Number.isFinite(c.t) && Number.isFinite(c.duration));
+    for (const l of c.main) {
+      for (const k of ['src', 'rate', 'alpha', 'gain', 'start', 'end']) {
+        assert.ok(Number.isFinite(l[k]), `${k} not finite at ${at}`);
+      }
+      assert.ok(l.rate > 0, 'rate must be positive');
+    }
+  }
+});
+
+await t('resolver: an empty timeline is explicitly empty, not broken', () => {
+  const c = R.resolveComposition(rproj([]), 0);
+  assert.equal(c.empty, true);
+  assert.equal(c.duration, 0);
+  assert.deepEqual(c.main, []);
+});
+
+await t('resolver: seeking past the end clamps instead of exploding', () => {
+  const p = rproj([rc()]);
+  const c = R.resolveComposition(p, 999);
+  assert.equal(c.t, c.duration);
+  assert.equal(c.main.length, 1, 'the last frame is still shown');
+});
+
+await t('readiness: a late decoder is reported, not assumed', () => {
+  assert.equal(R.readinessFor(0, 0, 0, false), 'loading');
+  assert.equal(R.readinessFor(1, 0, 0, false), 'loading');
+  assert.equal(R.readinessFor(2, 1.0, 1.0, false), 'ready');
+  assert.equal(R.readinessFor(2, 0.0, 2.0, false), 'seek-needed');
+  assert.equal(R.readinessFor(2, 0.0, 2.0, true), 'ready', 'paused frames are fine');
+});
+
+await t('readiness: the clock holds while loading, then gives up (bounded)', () => {
+  assert.equal(R.shouldAdvanceClock(['ready'], 0), true);
+  assert.equal(R.shouldAdvanceClock(['loading'], 0), false, 'must wait for the frame');
+  assert.equal(R.shouldAdvanceClock(['loading'], 1000), true, 'must not hang forever');
+  assert.equal(R.shouldAdvanceClock(['ready', 'loading'], 0), false);
+});
+
+await t('the engine draws from the resolver, not its own transition maths', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/resolveComposition\(this\.project/.test(src), 'draw() must use the resolver');
+  assert.ok(/private visibleLayerReady/.test(src), 'transport must be able to hold');
+  assert.ok(/private awaitFrameFor/.test(src), 'play() must pre-warm the first frame');
+  assert.ok(/private async frameReadyAt/.test(src), 'export must confirm frames');
 });
 
 
