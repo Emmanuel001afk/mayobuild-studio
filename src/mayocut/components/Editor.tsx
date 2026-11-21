@@ -30,8 +30,8 @@ import { tts } from "../tts";
 import { can, device } from "../device";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { importLut, loadAllLuts } from "../luts";
-import { db } from "../idb";
-import { Engine, FILTER_PRESETS, mp4Supported, pickMime } from "../engine";
+import { db, requestPersistentStorage } from "../idb";
+import { Engine, FILTER_PRESETS, exportBlocker, mp4Supported, pickMime } from "../engine";
 import {
   ASPECTS,
   DEFAULT_ADJUST,
@@ -210,6 +210,9 @@ export function Editor({
 
   useEffect(() => {
     let alive = true;
+    // Ask for durable storage before importing anything, so a large clip is
+    // not silently evicted the next time the app is closed.
+    void requestPersistentStorage();
     (async () => {
       try {
         const [p, m] = await Promise.all([db.getProject(projectId), db.listMedia()]);
@@ -921,7 +924,9 @@ export function Editor({
         toast.error("No media could be read from those files");
         return;
       }
-      await Promise.all(items.map((item, index) => db.putMedia(item, accepted[index])));
+      // pair by the item's own sourceFile — never by array index, which
+      // drifts as soon as one file is skipped and stores the wrong bytes
+      await Promise.all(items.map(({ sourceFile, ...item }) => db.putMedia(item, sourceFile)));
       const all = await db.listMedia();
       setMedia(all);
       engineRef.current?.setMedia(all);
@@ -1089,51 +1094,82 @@ export function Editor({
     if (clip) setSelection({ lane: "overlay", trackId: "t_text", id: clip.id });
   }
 
+  /**
+   * The main clip an apply-action should target.
+   *
+   * Falls back to whatever is under the playhead (CapCut's behaviour) instead
+   * of refusing to do anything, and selects it so the user sees what changed.
+   */
+  function targetMainClipId(): string | null {
+    const eng = engineRef.current;
+    if (!eng) return null;
+    if (selection?.lane === "main") {
+      const sel = eng.project.main.find((c) => c.id === selection.id);
+      if (sel) return sel.id;
+    }
+    const spans = mainSpans(eng.project);
+    const hit = spans.find((sp) => eng.t >= sp.start && eng.t < sp.end);
+    if (hit) {
+      setSelection({ lane: "main", id: hit.clip.id });
+      return hit.clip.id;
+    }
+    const first = eng.project.main[0];
+    if (first) {
+      setSelection({ lane: "main", id: first.id });
+      return first.id;
+    }
+    return null;
+  }
+
   function applyMainEffect(effect: EffectId) {
-    if (selection?.lane !== "main") {
-      toast.info("Select a main-track video clip first");
+    const id = targetMainClipId();
+    if (!id) {
+      toast.info("Add a clip to the timeline first, then choose an effect");
       return;
     }
     const changed = mutateVoid((eng) => {
-      const clip = eng.project.main.find((item) => item.id === selection.id);
+      const clip = eng.project.main.find((item) => item.id === id);
       if (!clip) return false;
       clip.effect = effect;
     });
-    if (changed) toast.success("Effect applied to selected clip");
+    if (changed) toast.success("Effect applied to the clip under the playhead");
   }
 
   /** Merge one clip-adjust change (used by the Adjust tab's live sliders). */
   function applyAdjust(patch: Partial<FilterAdjust>, replace = false) {
-    if (selection?.lane !== "main") {
-      toast.info("Select a main-track video clip first");
+    const id = targetMainClipId();
+    if (!id) {
+      toast.info("Add a clip to the timeline first, then adjust it");
       return;
     }
     mutateVoid((eng) => {
-      const clip = eng.project.main.find((item) => item.id === selection.id);
+      const clip = eng.project.main.find((item) => item.id === id);
       if (!clip) return false;
       clip.adjust = replace ? { ...DEFAULT_ADJUST } : { ...clip.adjust, ...patch };
     });
   }
 
   function applyMainFilter(filter: string) {
-    if (selection?.lane !== "main") {
-      toast.info("Select a main-track video clip first");
+    const id = targetMainClipId();
+    if (!id) {
+      toast.info("Add a clip to the timeline first, then choose a filter");
       return;
     }
     mutateVoid((eng) => {
-      const clip = eng.project.main.find((item) => item.id === selection.id);
+      const clip = eng.project.main.find((item) => item.id === id);
       if (!clip) return false;
       clip.filter = filter;
     });
   }
 
   function applyMainTransition(kind: TransitionKind) {
-    if (selection?.lane !== "main") {
-      toast.info("Select a main-track clip to set its incoming transition");
+    const id = targetMainClipId();
+    if (!id) {
+      toast.info("Add a second clip first — a transition needs something to cut from");
       return;
     }
     const changed = mutateVoid((eng) => {
-      const index = eng.project.main.findIndex((item) => item.id === selection.id);
+      const index = eng.project.main.findIndex((item) => item.id === id);
       const clip = eng.project.main[index];
       if (!clip || index === 0) return false;
       clip.transitionIn = kind;
@@ -2436,6 +2472,35 @@ export function Editor({
    * Speed / Animation) rather than one long scroll; the tab strip jumps to the
    * matching section so the same sections are reused, not duplicated.
    */
+  /**
+   * Jump the inspector to a section.
+   *
+   * Two bugs were making tabs feel dead:
+   *  - `scrollIntoView` scrolls the nearest scrollable ANCESTOR, which on a
+   *    phone could be the page instead of the panel (so the sheet jumped but
+   *    the content did not move to the section);
+   *  - the section for a tab may only exist after this render, so the query
+   *    ran before it was in the DOM and silently matched nothing.
+   * Now we move the panel's own scrollTop, on the next frame.
+   */
+  const jumpToInspectorSection = (id: string) => {
+    setInspectorTab(id);
+    requestAnimationFrame(() => {
+      const body = inspectorBodyRef.current;
+      if (!body) return;
+      const el = body.querySelector<HTMLElement>(`[data-sec~="${id}"]`);
+      if (!el) {
+        // nothing for this tab on this selection — say so instead of no-oping
+        toast.info(
+          `No ${id} settings for this clip. Pick a ${id === "audio" ? "audio or clip" : "clip"} on the timeline.`,
+        );
+        return;
+      }
+      const top = el.getBoundingClientRect().top - body.getBoundingClientRect().top;
+      body.scrollTo({ top: Math.max(0, body.scrollTop + top - 4), behavior: "smooth" });
+    });
+  };
+
   const INSPECTOR_TABS = [
     { id: "video", label: "Video" },
     { id: "audio", label: "Audio" },
@@ -2451,14 +2516,7 @@ export function Editor({
           return (
             <button
               key={tb.id}
-              onClick={() => {
-                setInspectorTab(tb.id);
-                // scroll the matching section into view inside the inspector body
-                const el = inspectorBodyRef.current?.querySelector<HTMLElement>(
-                  `[data-sec~="${tb.id}"]`,
-                );
-                el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-              }}
+              onClick={() => jumpToInspectorSection(tb.id)}
               className={`relative flex-1 shrink-0 py-1.5 text-[10px] transition-colors ${
                 on ? "text-cyan-300" : "text-muted-foreground hover:text-foreground"
               }`}
@@ -2610,16 +2668,19 @@ export function Editor({
   const bottomSheets = (
     <>
       <Drawer open={sheet === "media"} onClose={() => setSheet(null)}>
-        <DrawerContent className="max-h-[80dvh]">
-          <DrawerHeader className="p-3 pb-2 text-left">
+        <DrawerContent className="max-h-[85dvh] flex flex-col overflow-hidden">
+          <DrawerHeader className="p-3 pb-2 text-left shrink-0">
             <DrawerTitle className="text-sm">Media library</DrawerTitle>
           </DrawerHeader>
-          <div className="flex-1 min-h-0 overflow-hidden pb-6">{libraryNode}</div>
+          {/* the ONE scrolling region — must be a flex child of a flex parent */}
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+            {libraryNode}
+          </div>
         </DrawerContent>
       </Drawer>
       <Drawer open={sheet === "tune"} onClose={() => setSheet(null)}>
-        <DrawerContent className="max-h-[82dvh]">
-          <DrawerHeader className="p-3 pb-2 text-left">
+        <DrawerContent className="max-h-[88dvh] flex flex-col overflow-hidden">
+          <DrawerHeader className="p-3 pb-2 text-left shrink-0">
             <DrawerTitle className="text-sm">
               {selection ? "Tune the selected clip" : "Tune"}
             </DrawerTitle>
@@ -2629,7 +2690,9 @@ export function Editor({
                 : "Tap a clip on the timeline first."}
             </span>
           </DrawerHeader>
-          <div className="overflow-y-auto px-3 pb-8">{renderInspector()}</div>
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 pb-[max(2rem,env(safe-area-inset-bottom))]">
+            {renderInspector()}
+          </div>
         </DrawerContent>
       </Drawer>
     </>
@@ -2790,6 +2853,14 @@ export function Editor({
                 </button>
               )}
             </div>
+            {exportBlocker() && (
+              <div className="mt-3 rounded border border-amber-400/40 bg-amber-400/10 text-amber-200 text-[11px] leading-snug px-2.5 py-2">
+                ⚠ Video export can't run here: {exportBlocker()}
+                <div className="mt-1 text-amber-200/70">
+                  You can still export the current frame as PNG, or the audio as WAV.
+                </div>
+              </div>
+            )}
             <div className="mt-4 space-y-3 text-sm">
               <div>
                 <div className="text-muted-foreground text-xs mb-1">Format</div>

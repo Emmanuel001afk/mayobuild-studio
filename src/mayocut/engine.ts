@@ -355,6 +355,17 @@ const MIME_CANDIDATES = [
   "video/mp4",
 ];
 
+/** Human-readable reason a video export cannot run on this device, or null. */
+export function exportBlocker(): string | null {
+  if (typeof MediaRecorder === "undefined") {
+    return "This browser has no video recorder (MediaRecorder). Use Chrome or Edge, or export a PNG/WAV instead.";
+  }
+  if (!pickMime()) {
+    return "This browser's recorder supports none of the formats we can write (WebM/MP4). Try Chrome or Edge.";
+  }
+  return null;
+}
+
 export function pickMime(): { mime: string; ext: string } | null {
   if (typeof MediaRecorder === "undefined") return null;
   for (const mime of MIME_CANDIDATES) {
@@ -1201,7 +1212,8 @@ export class Engine {
   private effectiveVolume(clip: MainClip, t: number, s: { start: number; end: number }): number {
     // The transition crossfade maths lives in types.ts so it can be asserted
     // without a DOM (see mainClipGain). Here we only add the runtime factors.
-    let v = mainClipGain(clip, s, this.nextMainSpan(s), t);
+    const hasPrevious = this.project.main[0]?.id !== clip.id;
+    let v = mainClipGain(clip, s, this.nextMainSpan(s), t, hasPrevious);
     v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
     return Math.max(0, Math.min(1, v));
   }
@@ -3225,11 +3237,21 @@ export class Engine {
   // ------------------------------------------------------------- export (WebM)
 
   async exportMedia(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
-    if (!this.canvas) throw new Error("Canvas not ready");
+    if (!this.canvas)
+      throw new Error("Canvas not ready — wait for the preview to appear, then retry.");
+    const blocked = exportBlocker();
+    if (blocked) throw new Error(blocked);
     const picked = pickMime();
     if (!picked) throw new Error("This browser does not support video recording. Use Chrome/Edge.");
     await this.ensureAudio();
-    if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
+    if (!this.audioCtx || !this.exportDest) {
+      throw new Error(
+        "Could not start the audio engine. Tap anywhere in the editor first (browsers block audio until you interact), then retry.",
+      );
+    }
+    if (this.duration() <= 0.05) {
+      throw new Error("Nothing to export — add a clip to the timeline first.");
+    }
     const prevScale = this.exportScale;
     const prevCap = this.previewMaxSide;
     this.exportScale = opts.scale ?? 1;
@@ -3673,17 +3695,13 @@ export class Engine {
       tick();
       if (s.clip.freeze || s.clip.reverse) continue;
       if (hasSolo) continue; // solos win; main sound goes quiet
+      // A clip the user muted (e.g. after "extract audio") must contribute
+      // NOTHING to the exported mix, or the extracted copy doubles it.
+      if (s.clip.muted) continue;
       const buf = await decode(s.clip.mediaId);
       if (!buf) continue;
       const dur2 = mainClipDuration(s.clip);
-      schedule(
-        buf,
-        s.start,
-        s.clip.in,
-        dur2,
-        s.clip.muted ? 0 : s.clip.volume,
-        Math.max(0.05, s.clip.speed),
-      );
+      schedule(buf, s.start, s.clip.in, dur2, s.clip.volume, Math.max(0.05, s.clip.speed));
     }
 
     for (const tr of this.project.tracks) {

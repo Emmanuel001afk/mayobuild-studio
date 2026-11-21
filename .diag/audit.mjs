@@ -1325,5 +1325,85 @@ await t('the import probe only condemns a file on a real decoder error', () => {
 });
 
 
+// ================= persistence, transitions, exports =================
+
+await t('the FIRST clip has no incoming fade, so a video does not open muted', () => {
+  // Every clip defaults to transitionIn:"crossfade". Applying that to clip 0
+  // silenced the opening moments of the video — the "first seconds are black
+  // and silent" report.
+  const c = mkClip({ id: 'A', transitionIn: 'crossfade', transitionDur: 0.5 });
+  const span = { clip: c, start: 0, end: 5 };
+  assert.equal(T.mainClipGain(c, span, null, 0, false), 1, 'first clip must start at full level');
+  // ...but a later clip still fades in
+  assert.ok(T.mainClipGain(c, span, null, -0.25, true) < 1, 'a clip with a predecessor fades in');
+});
+
+await t('a muted clip contributes nothing, which is what extract-audio relies on', () => {
+  const c = mkClip({ muted: true, transitionIn: 'none' });
+  assert.equal(T.mainClipGain(c, { clip: c, start: 0, end: 5 }, null, 2, true), 0);
+});
+
+await t('transition windows still sum to unity with the first-clip fix', () => {
+  const A = { clip: mkClip({ id: 'A', transitionIn: 'crossfade', transitionDur: 0.5 }), start: 0, end: 5 };
+  const B = { clip: mkClip({ id: 'B', transitionIn: 'crossfade', transitionDur: 0.5 }), start: 5, end: 10 };
+  let worst = 0;
+  for (let t = 4.0; t <= 5.2; t += 0.02) {
+    worst = Math.max(worst, T.mainClipGain(A.clip, A, B, t, false) + T.mainClipGain(B.clip, B, null, t, true));
+  }
+  assert.ok(worst <= 1.02, `overlap summed to ${worst.toFixed(2)}x`);
+});
+
+await t('importFiles pairs each item with its OWN file, even when one is skipped', () => {
+  // Callers used to zip items[i] with accepted[i]. Skipping any file shifted
+  // every later pairing, storing the wrong bytes under the wrong name.
+  const src = readFileSync('src/mayocut/utils.ts', 'utf8');
+  assert.ok(/out\.push\(\{ \.\.\.item, sourceFile: f \}\)/.test(src), 'items must carry their source File');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(!/accepted\[index\]/.test(ed), 'Editor must not pair by array index');
+  assert.ok(!/items\[i\], accepted\[i\]/.test(ed), 'Editor must not pair by array index');
+  const home = readFileSync('src/mayocut/components/ProjectsHome.tsx', 'utf8');
+  assert.ok(!/items\[i\], accepted\[i\]/.test(home), 'ProjectsHome must not pair by array index');
+});
+
+await t('storage persistence is requested automatically, not hidden behind a button', () => {
+  const home = readFileSync('src/mayocut/components/ProjectsHome.tsx', 'utf8');
+  assert.ok(/requestPersistentStorage\(\)/.test(home), 'home screen must ask for durable storage');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/requestPersistentStorage\(\)/.test(ed), 'editor must ask too, before importing');
+  const idb = readFileSync('src/mayocut/idb.ts', 'utf8');
+  assert.ok(/export async function requestPersistentStorage/.test(idb));
+  assert.ok(/onversionchange/.test(idb), 'a schema upgrade in another tab must not deadlock writes');
+});
+
+await t('export preflight names the real blocker instead of "Export failed"', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/export function exportBlocker/.test(src));
+  assert.ok(/has no video recorder/.test(src), 'must explain a missing MediaRecorder');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/exportBlocker\(\)/.test(ed), 'the export dialog must surface it before trying');
+});
+
+await t('inspector tab jump scrolls the panel itself, not the page', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/jumpToInspectorSection/.test(ed));
+  // scrollIntoView picks the nearest scrollable ancestor, which on a phone is
+  // often the page rather than the sheet body.
+  assert.ok(!/scrollIntoView\(\{ block: "nearest"/.test(ed), 'must move the panel scrollTop instead');
+});
+
+await t('mobile sheets establish a real scroll region', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/max-h-\[85dvh\] flex flex-col overflow-hidden/.test(ed), 'media sheet must be a flex column');
+  assert.ok(/max-h-\[88dvh\] flex flex-col overflow-hidden/.test(ed), 'tune sheet must be a flex column');
+  assert.ok(/overscroll-contain/.test(ed), 'sheets must not chain scroll to the page');
+});
+
+await t('filters and effects fall back to the clip under the playhead', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/function targetMainClipId/.test(ed), 'needs a selection fallback');
+  assert.ok(!/Select a main-track video clip first/.test(ed), 'must not refuse to apply');
+});
+
+
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
