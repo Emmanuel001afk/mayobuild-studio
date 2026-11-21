@@ -214,9 +214,32 @@ Export uses the same resolver, and captures only frames it has confirmed:
 - `renderFrameAt(t)` is the primitive for frame-stepped encoding.
 - The GIF path now goes through `frameReadyAt` instead of racing the clock.
 
-The real-time recorder paths (WebM/MP4) still capture wall-clock frames, so a
-slow device can drop frames; moving them to full frame-stepping is the next
-stage and needs a performance budget on low-end phones.
+**Frame-stepped MP4 is now the default path** (Stage 2). `exportMP4Stepped`
+walks the timeline one output frame at a time:
+
+```
+for f in 0..totalFrames:
+  t = f / fps
+  await frameReadyAt(t)   # seeks + waits for the decoder
+  draw()
+  encode(canvas, timestamp = f * frameDurationUs)
+```
+
+Wall-clock is irrelevant, so a slow phone produces the *same file* as a fast
+laptop — just later. No dropped frames, no half-seeked blanks, no audio drift.
+
+Audio is rendered **offline and up front** (`renderOfflineAudioTrack` →
+`scheduleOfflineAudio`), using `mainClipGain` from the resolver. That is why a
+muted clip, a transition crossfade or an extracted-and-muted source sounds in
+the file exactly as it does in the preview. The old real-time recorder sampled a
+live audio graph and had no such guarantee.
+
+Fallbacks, in order:
+1. `exportMP4Stepped` — frame-accurate H.264 + AAC (needs WebCodecs).
+2. `exportMP4` — real-time WebCodecs, still muxes audio.
+3. `exportMedia` — real-time `MediaRecorder` (WebM).
+
+Only the first is frame-accurate. WebM has no frame-stepped path yet.
 
 ### Platform split
 

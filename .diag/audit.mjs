@@ -1556,5 +1556,173 @@ await t('the engine draws from the resolver, not its own transition maths', () =
 });
 
 
+// ================= stage 2: frame-stepped export =================
+// A synthetic offline audio graph stands in for OfflineAudioContext so the
+// mixer's decisions (muted, transition, overlay track) can be asserted without
+// a browser. We record what gains get scheduled rather than listening.
+
+function fakeOffline() {
+  const scheduled = [];
+  const node = (kind, extra = {}) => {
+    const n = {
+      kind, ...extra,
+      connect() { return n; },
+      disconnect() {},
+    };
+    return n;
+  };
+  const ctx = {
+    currentTime: 0,
+    destination: node('dest'),
+    createGain: () => {
+      const g = node('gain', {
+        gain: {
+          value: 1,
+          _set: [],
+          setValueAtTime(v, at) { this._set.push(['set', v, at]); },
+          linearRampToValueAtTime(v, at) { this._set.push(['ramp', v, at]); },
+        },
+      });
+      return g;
+    },
+    createBufferSource: () => {
+      const s = node('src', {
+        playbackRate: { value: 1 },
+        start(at, offset, dur) {
+          scheduled.push({ at, offset, dur, rate: s.playbackRate.value });
+        },
+      });
+      return s;
+    },
+  };
+  return { ctx, scheduled };
+}
+
+const fakeBuf = (duration = 10) => ({ duration });
+
+await t('offline mixer: a MUTED clip schedules no audio source', async () => {
+  const eng = new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'm1', muted: true })],
+    tracks: T.emptyTracks(), aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  const bufs = new Map([['m1', fakeBuf()]]);
+  await eng.scheduleOfflineAudio(ctx, ctx.destination, bufs);
+  assert.equal(scheduled.length, 0, 'muted must produce no source at all');
+});
+
+await t('offline mixer: an unmuted clip schedules exactly one source', async () => {
+  const eng = new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'm1' })],
+    tracks: T.emptyTracks(), aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  await eng.scheduleOfflineAudio(ctx, ctx.destination, new Map([['m1', fakeBuf()]]));
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].at, 0);
+});
+
+await t('offline mixer: a freeze/reverse clip stays silent', async () => {
+  for (const flag of [{ freeze: true }, { reverse: true }]) {
+    const eng = new E.Engine({
+      main: [mkClip({ id: 'A', mediaId: 'm1', ...flag })],
+      tracks: T.emptyTracks(), aspect: '16:9',
+    });
+    const { ctx, scheduled } = fakeOffline();
+    await eng.scheduleOfflineAudio(ctx, ctx.destination, new Map([['m1', fakeBuf()]]));
+    assert.equal(scheduled.length, 0, `${JSON.stringify(flag)} must be silent`);
+  }
+});
+
+await t('offline mixer: extracted audio plays while the original is muted', async () => {
+  const eng = new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'vid', muted: true })],
+    tracks: [
+      { id: 't_audio', name: 'Audio', kind: 'audio',
+        clips: [{ id: 'au', kind: 'audio', mediaId: 'aud', start: 0, duration: 5, volume: 1 }] },
+    ],
+    aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  await eng.scheduleOfflineAudio(
+    ctx, ctx.destination, new Map([['vid', fakeBuf()], ['aud', fakeBuf()]]),
+  );
+  assert.equal(scheduled.length, 1, 'only the extracted copy is audible');
+});
+
+await t('offline mixer: a hidden or muted TRACK contributes nothing', async () => {
+  // The main clip is audible, so exactly ONE source is expected — the point is
+  // that the muted/hidden overlay track adds no SECOND source.
+  const mk = (flags) => new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'vid' })],
+    tracks: [
+      { id: 't_audio', name: 'Audio', kind: 'audio', ...flags,
+        clips: [{ id: 'au', kind: 'audio', mediaId: 'aud', start: 0, duration: 5, volume: 1 }] },
+    ],
+    aspect: '16:9',
+  });
+  for (const flags of [{ muted: true }, { hidden: true }]) {
+    const { ctx, scheduled } = fakeOffline();
+    await mk(flags).scheduleOfflineAudio(
+      ctx, ctx.destination, new Map([['vid', fakeBuf()], ['aud', fakeBuf()]]),
+    );
+    assert.equal(scheduled.length, 1, `${JSON.stringify(flags)} track must add no source`);
+  }
+});
+
+await t('offline mixer: a solo\'d track silences the main track', async () => {
+  const eng = new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'vid' })],
+    tracks: [
+      { id: 't_audio', name: 'Audio', kind: 'audio', solo: true,
+        clips: [{ id: 'au', kind: 'audio', mediaId: 'aud', start: 0, duration: 5, volume: 1 }] },
+    ],
+    aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  await eng.scheduleOfflineAudio(
+    ctx, ctx.destination, new Map([['vid', fakeBuf()], ['aud', fakeBuf()]]),
+  );
+  assert.equal(scheduled.length, 1, 'only the solo track is heard');
+});
+
+await t('offline mixer: two clips schedule in timeline order', async () => {
+  const eng = new E.Engine({
+    main: [
+      mkClip({ id: 'A', mediaId: 'm1', in: 0, out: 5 }),
+      mkClip({ id: 'B', mediaId: 'm2', in: 0, out: 5 }),
+    ],
+    tracks: T.emptyTracks(), aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  await eng.scheduleOfflineAudio(
+    ctx, ctx.destination, new Map([['m1', fakeBuf(5)], ['m2', fakeBuf(5)]]),
+  );
+  assert.equal(scheduled.length, 2);
+  assert.ok(scheduled[1].at >= 5, 'second clip starts at the cut, not at zero');
+});
+
+await t('stepped export exists as a real method and is preferred by the UI', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/async exportMP4Stepped/.test(src), 'frame-stepped exporter must exist');
+  assert.ok(/async renderOfflineAudioTrack/.test(src), 'must render audio offline');
+  assert.ok(/async canExportStepped/.test(src), 'must expose a capability check');
+  // it must actually wait for frames, not sample a timer
+  assert.ok(/await this\.frameReadyAt\(t, 3000\)/.test(src), 'must confirm each frame');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/exportMP4Stepped/.test(ed), 'the UI must be able to reach it');
+  assert.ok(
+    ed.indexOf('exportMP4Stepped') < ed.indexOf('eng.exportMP4(opts'),
+    'stepped export must be tried before the real-time recorder',
+  );
+});
+
+await t('stepped export muxes an audio track when audio exists', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/audio: \{ codec: "aac" as const/.test(src), 'must declare the AAC track');
+  assert.ok(/addAudioChunk/.test(src), 'must feed encoded audio to the muxer');
+});
+
+
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
