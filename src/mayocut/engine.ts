@@ -10,6 +10,7 @@ import {
   DEFAULT_ANIM,
   fontCss,
   mainClipDuration,
+  mainClipGain,
   wipeDir,
   mainSpans,
   mainSrcAt,
@@ -30,6 +31,9 @@ import {
   isDipTo,
   freezeClipFrom,
 } from "./types";
+import { resolveComposition } from "./timeline-resolver";
+import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-plan";
+import { sourceFor } from "./proxy";
 import { applyLut, type LutTable } from "./luts";
 import { sampleTimeline } from "./timeline";
 import { makeImpulse, probeGif } from "./utils";
@@ -334,6 +338,10 @@ interface ElRecord {
    */
   videoBroken?: boolean;
   audioFallback?: HTMLAudioElement;
+  /** low-res preview copy (never used for export) */
+  proxyUrl?: string;
+  /** which url is currently applied to the element */
+  appliedUrl?: string;
   videoLoadRequested?: boolean;
   videoLoadTimer?: number;
   /** true once a slow load has already been retried — avoids a retry loop */
@@ -353,6 +361,17 @@ const MIME_CANDIDATES = [
   "video/webm",
   "video/mp4",
 ];
+
+/** Human-readable reason a video export cannot run on this device, or null. */
+export function exportBlocker(): string | null {
+  if (typeof MediaRecorder === "undefined") {
+    return "This browser has no video recorder (MediaRecorder). Use Chrome or Edge, or export a PNG/WAV instead.";
+  }
+  if (!pickMime()) {
+    return "This browser's recorder supports none of the formats we can write (WebM/MP4). Try Chrome or Edge.";
+  }
+  return null;
+}
 
 export function pickMime(): { mime: string; ext: string } | null {
   if (typeof MediaRecorder === "undefined") return null;
@@ -440,6 +459,12 @@ export class Engine {
   loop = true;
   private raf = 0;
   private lastNow = 0;
+  /** ms the clock has been held waiting for a frame (reset when ready) */
+  private stallMs = 0;
+  /** measured frame throughput, from measureThroughput() */
+  private throughput: import("./export-plan").ExportThroughput | null = null;
+  /** proxies registered before their element existed */
+  private pendingProxies = new Map<string, string>();
   private lastPaintAt = 0;
   private lastUiTimeAt = 0;
   private buffering = false;
@@ -549,11 +574,127 @@ export class Engine {
     return !!this.els.get(mediaId)?.url;
   }
 
+  /**
+   * Register a preview proxy for a media item.
+   *
+   * The proxy is used for decoding while editing; `attachUrl` is then re-called
+   * for the active source. Exports never see this.
+   */
+  attachProxy(mediaId: string, proxyUrl: string) {
+    const rec = this.els.get(mediaId);
+    if (rec) {
+      if (rec.proxyUrl && rec.proxyUrl !== proxyUrl) URL.revokeObjectURL(rec.proxyUrl);
+      rec.proxyUrl = proxyUrl;
+      return;
+    }
+    this.pendingProxies.set(mediaId, proxyUrl);
+  }
+
+  /** Which URL should a consumer use for this media right now? */
+  private urlForMedia(mediaId: string, consumer: "preview" | "export"): string | undefined {
+    const rec = this.els.get(mediaId);
+    if (!rec) return undefined;
+    return sourceFor(consumer, rec.url, rec.proxyUrl);
+  }
+
+  /**
+   * Point the element at the right source for a consumer.
+   *
+   * Preview gets the proxy when one exists, export always gets the original.
+   * Everything that chooses between the two goes through sourceFor(), so proxy
+   * quality cannot leak into a delivered file.
+   */
+  private applySource(
+    rec: ElRecord,
+    media: MediaItem,
+    mediaId: string,
+    consumer: "preview" | "export",
+  ) {
+    const url = sourceFor(consumer, rec.url, rec.proxyUrl);
+    if (!url) return;
+    if (rec.appliedUrl === url) return;
+    rec.appliedUrl = url;
+    if (rec.el instanceof HTMLImageElement) {
+      rec.el.src = url;
+      return;
+    }
+    const element = rec.el as HTMLVideoElement | HTMLAudioElement;
+    if (media.kind === "video") {
+      const video = element as HTMLVideoElement;
+      video.preload = "metadata";
+      video.playsInline = true;
+      // Attach listeners before src: cached object URLs may dispatch quickly.
+      video.addEventListener("loadedmetadata", () => {
+        if (
+          Number.isFinite(video.duration) &&
+          video.duration > 0 &&
+          (!media.duration || media.duration <= 0)
+        ) {
+          media.duration = video.duration;
+          this.bump();
+        }
+        if (video.readyState >= 2 && rec.videoLoadTimer) {
+          window.clearTimeout(rec.videoLoadTimer);
+          rec.videoLoadTimer = undefined;
+        }
+      });
+      const clearWatchdog = () => {
+        if (rec.videoLoadTimer) window.clearTimeout(rec.videoLoadTimer);
+        rec.videoLoadTimer = undefined;
+      };
+      video.addEventListener("loadeddata", () => {
+        clearWatchdog();
+        this.draw();
+      });
+      video.addEventListener("seeked", () => {
+        if (!this.playing) this.draw();
+      });
+      video.addEventListener("canplay", clearWatchdog);
+      // A PROXY failing to decode must not condemn the original: fall back to
+      // the real file before declaring the media unplayable.
+      video.addEventListener("error", () => {
+        clearWatchdog();
+        if (consumer === "preview" && rec.proxyUrl && rec.appliedUrl === rec.proxyUrl) {
+          rec.proxyUrl = undefined;
+          rec.appliedUrl = undefined;
+          this.applySource(rec, media, mediaId, "preview");
+          return;
+        }
+        this.markVideoBroken(mediaId, "video decoder rejected this media file");
+      });
+    }
+    element.src = url;
+    element.load();
+  }
+
+  /** Re-point every element at the original files, for an export. */
+  private useOriginalSources() {
+    for (const [id, rec] of this.els) {
+      const media = this.media.get(id);
+      if (!media || !rec.url) continue;
+      this.applySource(rec, media, id, "export");
+    }
+  }
+
+  /** Re-point every element back at preview sources (proxies). */
+  private usePreviewSources() {
+    for (const [id, rec] of this.els) {
+      const media = this.media.get(id);
+      if (!media || !rec.url) continue;
+      this.applySource(rec, media, id, "preview");
+    }
+  }
+
   attachUrl(mediaId: string, url: string) {
     const media = this.media.get(mediaId);
     if (!media) return;
     const rec = this.ensureEl(media);
-    if (rec.url && rec.url !== url) URL.revokeObjectURL(rec.url);
+    const proxy = rec.proxyUrl ?? this.pendingProxies.get(mediaId);
+    if (proxy) {
+      rec.proxyUrl = proxy;
+      this.pendingProxies.delete(mediaId);
+    }
+    // preview prefers the proxy; keep BOTH urls alive so export can switch back
     rec.url = url;
     this.chromaCache.forEach((c, k) => {
       void c;
@@ -562,47 +703,7 @@ export class Engine {
         this.keyColorCache.delete(k);
       }
     });
-    if (rec.el instanceof HTMLImageElement) {
-      rec.el.src = url;
-    } else {
-      const element = rec.el as HTMLVideoElement | HTMLAudioElement;
-      if (media.kind === "video") {
-        const video = element as HTMLVideoElement;
-        video.preload = "metadata";
-        video.playsInline = true;
-        // Attach listeners before src: cached object URLs may dispatch quickly.
-        video.addEventListener("loadedmetadata", () => {
-          if (
-            Number.isFinite(video.duration) &&
-            video.duration > 0 &&
-            (!media.duration || media.duration <= 0)
-          ) {
-            media.duration = video.duration;
-            this.bump();
-          }
-          if (video.readyState >= 2 && rec.videoLoadTimer) {
-            window.clearTimeout(rec.videoLoadTimer);
-            rec.videoLoadTimer = undefined;
-          }
-        });
-        const clearWatchdog = () => {
-          if (rec.videoLoadTimer) window.clearTimeout(rec.videoLoadTimer);
-          rec.videoLoadTimer = undefined;
-        };
-        video.addEventListener("loadeddata", () => {
-          clearWatchdog();
-          this.draw();
-        });
-        video.addEventListener("seeked", () => { if (!this.playing) this.draw(); });
-        video.addEventListener("canplay", clearWatchdog);
-        video.addEventListener("error", () => {
-          clearWatchdog();
-          this.markVideoBroken(mediaId, "video decoder rejected this media file");
-        });
-      }
-      element.src = url;
-      element.load();
-    }
+    this.applySource(rec, media, mediaId, "preview");
     if (media.isGif && !rec.gif) {
       void fetch(url)
         .then((r) => r.blob())
@@ -640,7 +741,11 @@ export class Engine {
     // source. Calling load() here resets its seek position and interrupts
     // playback, especially at cuts on slower phones.
     if (video.networkState === HTMLMediaElement.NETWORK_EMPTY) {
-      try { video.load(); } catch { /* browser rejected the load */ }
+      try {
+        video.load();
+      } catch {
+        /* browser rejected the load */
+      }
     }
     rec.videoLoadTimer = window.setTimeout(() => {
       rec.videoLoadTimer = undefined;
@@ -823,7 +928,12 @@ export class Engine {
     mediaId: string,
     inS: number,
     outS: number,
-  ): Promise<{ samples: Float32Array; channels: Float32Array[]; sampleRate: number; duration: number } | null> {
+  ): Promise<{
+    samples: Float32Array;
+    channels: Float32Array[];
+    sampleRate: number;
+    duration: number;
+  } | null> {
     if (!this.audioBufferAllowed(mediaId)) return null;
     await this.ensureAudio();
     const buf = await this.audioBuffer(mediaId);
@@ -964,6 +1074,11 @@ export class Engine {
     if (this.duration() === 0) return;
     await this.ensureAudio();
     if (this.t >= this.duration() - 0.02) this.t = 0;
+    // Wait for the opening frame before the clock starts moving. Without this
+    // the first ~0.3 s of every video played over a blank/placeholder frame
+    // while the element was still seeking — the "starts black with no volume"
+    // report. Bounded, so a broken source cannot hang Play.
+    await this.awaitFrameFor(this.t, 700);
     this.playing = true;
     this.lastNow = performance.now();
     this.lastPaintAt = 0;
@@ -988,7 +1103,8 @@ export class Engine {
     for (const s of sample.main) ids.add(s.clip.mediaId);
     for (const layer of sample.overlays) {
       const track = this.project.tracks.find((tr) => tr.id === layer.trackId);
-      if (!track?.hidden && layer.clip.kind === "video" && layer.clip.mediaId) ids.add(layer.clip.mediaId);
+      if (!track?.hidden && layer.clip.kind === "video" && layer.clip.mediaId)
+        ids.add(layer.clip.mediaId);
     }
     const pending: HTMLVideoElement[] = [];
     for (const id of ids) {
@@ -1004,24 +1120,39 @@ export class Engine {
   private async prepareExportFrame() {
     this.syncElements(true);
     const pending = this.videosAwaitingFrame();
-    await Promise.all(pending.map((el) => new Promise<void>((resolve, reject) => {
-      let timer: ReturnType<typeof setTimeout>;
-      const cleanup = () => {
-        clearTimeout(timer);
-        el.removeEventListener("loadeddata", check);
-        el.removeEventListener("seeked", check);
-        el.removeEventListener("error", fail);
-      };
-      const check = () => {
-        if (el.readyState >= 2 && !el.seeking) { cleanup(); resolve(); }
-      };
-      const fail = () => { cleanup(); reject(new Error("Video could not be decoded for export")); };
-      el.addEventListener("loadeddata", check);
-      el.addEventListener("seeked", check);
-      el.addEventListener("error", fail);
-      timer = setTimeout(() => { cleanup(); reject(new Error("Video took too long to load for export. Try a smaller H.264 video.")); }, 15000);
-      check();
-    })));
+    await Promise.all(
+      pending.map(
+        (el) =>
+          new Promise<void>((resolve, reject) => {
+            const cleanup = () => {
+              clearTimeout(timer);
+              el.removeEventListener("loadeddata", check);
+              el.removeEventListener("seeked", check);
+              el.removeEventListener("error", fail);
+            };
+            const check = () => {
+              if (el.readyState >= 2 && !el.seeking) {
+                cleanup();
+                resolve();
+              }
+            };
+            const fail = () => {
+              cleanup();
+              reject(new Error("Video could not be decoded for export"));
+            };
+            el.addEventListener("loadeddata", check);
+            el.addEventListener("seeked", check);
+            el.addEventListener("error", fail);
+            const timer = setTimeout(() => {
+              cleanup();
+              reject(
+                new Error("Video took too long to load for export. Try a smaller H.264 video."),
+              );
+            }, 15000);
+            check();
+          }),
+      ),
+    );
     this.draw();
   }
 
@@ -1043,6 +1174,126 @@ export class Engine {
   toggle() {
     if (this.playing) this.pause();
     else void this.play();
+  }
+
+  /**
+   * Position the timeline at `t` and make sure the picture is actually ready
+   * before a frame is captured.
+   *
+   * The real-time export paths sampled `draw()` on a timer, so any moment where
+   * the element was still seeking became a blank (black) frame in the exported
+   * file — the same class of bug as the black opening in the preview. Export
+   * must never capture a frame it has not confirmed.
+   */
+  private async frameReadyAt(t: number, budgetMs = 500): Promise<void> {
+    this.seek(t);
+    const comp = resolveComposition(this.project, t);
+    const waits: Promise<void>[] = [];
+    for (const layer of comp.main) {
+      const rec = this.els.get(layer.clip.mediaId);
+      const el = rec?.el;
+      if (!(el instanceof HTMLVideoElement)) continue;
+      if (el.readyState >= 2 && Math.abs(el.currentTime - layer.src) <= 0.15) continue;
+      waits.push(
+        new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            window.clearTimeout(timer);
+            el.removeEventListener("seeked", finish);
+            el.removeEventListener("loadeddata", finish);
+            el.removeEventListener("canplay", finish);
+            resolve();
+          };
+          const timer = window.setTimeout(finish, budgetMs);
+          el.addEventListener("seeked", finish);
+          el.addEventListener("loadeddata", finish);
+          el.addEventListener("canplay", finish);
+          try {
+            el.currentTime = layer.src;
+          } catch {
+            finish();
+          }
+        }),
+      );
+    }
+    if (waits.length) await Promise.all(waits);
+    this.draw();
+  }
+
+  /**
+   * Is the picture for `t` actually on screen?
+   *
+   * Returns "loading" when a visible layer's element has no decoded frame yet,
+   * so the transport can hold the clock rather than run over a blank frame.
+   * Images and text are always ready; only video can be late.
+   */
+  private visibleLayerReady(t: number): "ready" | "loading" {
+    const comp = resolveComposition(this.project, t);
+    for (const layer of comp.main) {
+      const rec = this.els.get(layer.clip.mediaId);
+      const el = rec?.el;
+      if (!(el instanceof HTMLVideoElement)) continue;
+      if (el.readyState < 2 || el.videoWidth === 0) return "loading";
+    }
+    return "ready";
+  }
+
+  /**
+   * Wait (bounded) until every visible media element has a frame for `t`.
+   *
+   * Resolves early if everything is already ready, and gives up after
+   * `budgetMs` so a genuinely broken source cannot hang the transport. The
+   * caller uses this before starting playback, which is what stops the first
+   * moments of a clip from being black.
+   */
+  private awaitFrameFor(t: number, budgetMs = 700): Promise<void> {
+    const comp = resolveComposition(this.project, t);
+    const pending: { el: HTMLVideoElement; src: number }[] = [];
+    for (const layer of comp.main) {
+      const rec = this.els.get(layer.clip.mediaId);
+      const el = rec?.el;
+      if (!(el instanceof HTMLVideoElement)) continue;
+      if (el.readyState >= 2) {
+        // have data; nudge it to the exact position if it is far off
+        if (Math.abs(el.currentTime - layer.src) > 0.2) {
+          try {
+            el.currentTime = layer.src;
+          } catch {
+            /* not seekable yet */
+          }
+        }
+        continue;
+      }
+      this.requestVideoLoad(layer.clip.mediaId);
+      pending.push({ el, src: layer.src });
+    }
+    if (!pending.length) return Promise.resolve();
+
+    return new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        window.clearTimeout(timer);
+        for (const p of pending) {
+          p.el.removeEventListener("loadeddata", onReady);
+          p.el.removeEventListener("canplay", onReady);
+          p.el.removeEventListener("seeked", onReady);
+        }
+        resolve();
+      };
+      const onReady = () => {
+        if (pending.every((p) => p.el.readyState >= 2)) finish();
+      };
+      const timer = window.setTimeout(finish, budgetMs);
+      for (const p of pending) {
+        p.el.addEventListener("loadeddata", onReady);
+        p.el.addEventListener("canplay", onReady);
+        p.el.addEventListener("seeked", onReady);
+      }
+    });
   }
 
   private loopRaf() {
@@ -1072,9 +1323,9 @@ export class Engine {
         this.lastNow = now;
       }
       const dt = Math.min(0.25, (now - this.lastNow) / 1000);
+      const dur = this.duration();
       this.lastNow = now;
       this.t += dt;
-      const dur = this.duration();
       if (this.t >= dur) {
         if (this.loop && dur > 0) {
           this.t = 0;
@@ -1169,7 +1420,10 @@ export class Engine {
           const safe = Number.isFinite(rate) && rate > 0 ? Math.min(16, rate) : 1;
           if (el.playbackRate !== safe) el.playbackRate = safe;
         }
-        el.volume = Math.max(0, Math.min(1, s.gain * (this.mainTrackAudible() ? this.duckFactor(t) : 0)));
+        el.volume = Math.max(
+          0,
+          Math.min(1, s.gain * (this.mainTrackAudible() ? this.duckFactor(t) : 0)),
+        );
         if (s.clip.reverse) {
           if (!el.paused) el.pause();
         } else if (this.playing && el.paused) {
@@ -1182,63 +1436,63 @@ export class Engine {
     // overlay audio clips
     for (const layer of sample.overlays) {
       const c = layer.clip;
-        if (c.kind === "audio") {
-          if (!c.mediaId) continue;
-          if (t >= c.start && t < c.start + c.duration) {
-            activeIds.add(c.mediaId);
-            const el = this.audioEl(c.mediaId);
-            if (!el) continue;
-            const local = layer.sourceTime;
-            const pitch = c.fx?.pitch ?? 0;
-            const media = this.media.get(c.mediaId);
-            const md = media?.duration ?? 0;
-            const canPitch =
-              pitch !== 0 && this.playing && !!media && md > 0 && md <= 120 && !!this.audioCtx;
-            if (canPitch) {
-              // duration-preserving pitch via AudioBufferSourceNode.detune —
-              // the element itself goes silent while this is running
-              el.volume = 0;
-              if (!el.paused) el.pause();
-              void this.startBufferSource(c, local);
-            } else {
-              this.stopBufSource(c.mediaId);
-              if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-                try {
-                  el.currentTime = Math.max(0, local);
-                } catch {
-                  /* ignore */
-                }
+      if (c.kind === "audio") {
+        if (!c.mediaId) continue;
+        if (t >= c.start && t < c.start + c.duration) {
+          activeIds.add(c.mediaId);
+          const el = this.audioEl(c.mediaId);
+          if (!el) continue;
+          const local = layer.sourceTime;
+          const pitch = c.fx?.pitch ?? 0;
+          const media = this.media.get(c.mediaId);
+          const md = media?.duration ?? 0;
+          const canPitch =
+            pitch !== 0 && this.playing && !!media && md > 0 && md <= 120 && !!this.audioCtx;
+          if (canPitch) {
+            // duration-preserving pitch via AudioBufferSourceNode.detune —
+            // the element itself goes silent while this is running
+            el.volume = 0;
+            if (!el.paused) el.pause();
+            void this.startBufferSource(c, local);
+          } else {
+            this.stopBufSource(c.mediaId);
+            if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
+              try {
+                el.currentTime = Math.max(0, local);
+              } catch {
+                /* ignore */
               }
-              if (el.playbackRate !== 1) el.playbackRate = 1;
-              el.volume = this.overlayAudioVolume(c, t) * this.duckFactor(t);
-              if (this.playing && el.paused) void el.play().catch(() => undefined);
             }
-          }
-        } else if (c.kind === "video" && c.mediaId) {
-          // picture sticker from a video: frame-synced, always silent
-          if (t >= c.start && t < c.start + c.duration) {
-            activeIds.add(c.mediaId);
-            const el = this.audioEl(c.mediaId);
-            if (el instanceof HTMLVideoElement) {
-              this.requestVideoLoad(c.mediaId);
-              let local = layer.sourceTime;
-              if (c.loop) {
-                const md = this.media.get(c.mediaId)?.duration ?? 0;
-                if (md > 0.05) local %= md;
-              }
-              if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-                try {
-                  el.currentTime = Math.max(0, local);
-                } catch {
-                  /* ignore */
-                }
-              }
-              el.playbackRate = Math.max(0.05, Math.min(16, c.speed ?? 1));
-              el.volume = 0;
-              if (this.playing && el.paused) void el.play().catch(() => undefined);
-            }
+            if (el.playbackRate !== 1) el.playbackRate = 1;
+            el.volume = this.overlayAudioVolume(c, t) * this.duckFactor(t);
+            if (this.playing && el.paused) void el.play().catch(() => undefined);
           }
         }
+      } else if (c.kind === "video" && c.mediaId) {
+        // picture sticker from a video: frame-synced, always silent
+        if (t >= c.start && t < c.start + c.duration) {
+          activeIds.add(c.mediaId);
+          const el = this.audioEl(c.mediaId);
+          if (el instanceof HTMLVideoElement) {
+            this.requestVideoLoad(c.mediaId);
+            let local = layer.sourceTime;
+            if (c.loop) {
+              const md = this.media.get(c.mediaId)?.duration ?? 0;
+              if (md > 0.05) local %= md;
+            }
+            if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
+              try {
+                el.currentTime = Math.max(0, local);
+              } catch {
+                /* ignore */
+              }
+            }
+            el.playbackRate = Math.max(0.05, Math.min(16, c.speed ?? 1));
+            el.volume = 0;
+            if (this.playing && el.paused) void el.play().catch(() => undefined);
+          }
+        }
+      }
     }
     this.syncFx();
     // pause everything else
@@ -1271,6 +1525,21 @@ export class Engine {
     return out;
   }
 
+  private effectiveVolume(clip: MainClip, t: number, s: { start: number; end: number }): number {
+    // The transition crossfade maths lives in types.ts so it can be asserted
+    // without a DOM (see mainClipGain). Here we only add the runtime factors.
+    const hasPrevious = this.project.main[0]?.id !== clip.id;
+    let v = mainClipGain(clip, s, this.nextMainSpan(s), t, hasPrevious);
+    v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
+    return Math.max(0, Math.min(1, v));
+  }
+
+  /** The span immediately after `s`, or null when `s` is the last one. */
+  private nextMainSpan(s: { start: number; end: number }) {
+    const spans = mainSpans(this.project);
+    const i = spans.findIndex((x) => Math.abs(x.start - s.start) < 1e-6);
+    return i >= 0 && i + 1 < spans.length ? spans[i + 1] : null;
+  }
   private overlayAudioVolume(c: OverlayClip, t: number): number {
     const fadeIn = c.fadeIn ?? 0.15;
     const fadeOut = c.fadeOut ?? 0.15;
@@ -1489,96 +1758,116 @@ export class Engine {
     ctx.fillRect(0, 0, W, H);
 
     // --- main track (with transitions) ---
-    const sample = sampleTimeline(this.project, t);
-    for (const s of sample.main) {
-      if (!s.transition) this.drawMainItem(ctx, s, 1, W, H, t);
-      else this.composeTransition(ctx, s.transition.previous, s, s.transition.kind, s.transition.progress, W, H, t);
+    //
+    // The decision of WHICH clips are visible at `t` and at what progress now
+    // comes from the shared timeline resolver, not from transition-window maths
+    // duplicated here. Preview, export and the node tests therefore agree by
+    // construction.
+    const comp = resolveComposition(this.project, t);
+    const spans = mainSpans(this.project);
+    if (comp.transition) {
+      const from = comp.transition.from;
+      const to = comp.transition.to;
+      this.composeTransition(
+        ctx,
+        spans[from.index],
+        spans[to.index],
+        comp.transition.kind,
+        comp.transition.progress,
+        W,
+        H,
+        t,
+      );
+    } else {
+      for (const layer of comp.main) {
+        this.drawMainItem(ctx, spans[layer.index], layer.alpha, W, H, t);
+      }
     }
 
     // --- overlay tracks ---
     this.overlayRects.length = 0;
-    for (const layer of sample.overlays) {
+    for (const layer of comp.overlays) {
       const tr = this.project.tracks.find((track) => track.id === layer.trackId);
       if (tr?.hidden) continue;
       const c = layer.clip;
-      const localT = layer.localTime;
-        const rampIn = Math.min(1, localT / 0.4);
-        const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
-        const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
-        const anim = animAt(c.keyframes, this.animBase(c), localT);
-        if (c.kind === "text")
-          this.drawText(ctx, c, W, H, fadeAlpha * clamp01(anim.opacity), localT, c.duration, anim);
-        if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
-          const rec = this.els.get(c.mediaId);
-          if (!rec || !rec.url) continue;
-          // GIF stickers: step through decoded frames at their native fps
-          let src = rec.el as CanvasImageSource;
-          if (rec.gif && rec.gif.frames.length > 0) {
-            src = rec.gif.frames[Math.floor(localT * rec.gif.fps) % rec.gif.frames.length];
-          }
-          const sw = srcW(src);
-          const sh = srcH(src);
-          if (!sw || !sh) continue;
-          const size = Math.max(1, anim.scale * W);
-          const ar = sw / sh;
-          const cx = W / 2 + anim.x * (W / 2);
-          const cy = H / 2 + anim.y * (H / 2);
-          this.overlayRects.push({
-            clipId: c.id,
-            x: cx - size / 2,
-            y: cy - size / (2 * ar),
-            w: size,
-            h: size / ar,
-          });
-          const rot = (anim.rotation * Math.PI) / 180;
-          const alpha = clamp01(fadeAlpha * anim.opacity);
-          const blend: GlobalCompositeOperation | null =
-            c.blend && c.blend !== "normal" ? (c.blend as GlobalCompositeOperation) : null;
-          if (c.chroma && sw * sh > 4) {
-            this.drawChroma(
-              ctx,
-              rec.el as HTMLVideoElement | HTMLImageElement,
-              c,
-              size,
-              ar,
-              alpha,
-              cx,
-              cy,
-              rot,
-              blend,
-            );
-          } else {
-            ctx.save();
-            ctx.globalAlpha = alpha;
-            if (blend) ctx.globalCompositeOperation = blend;
-            if (c.filter && c.filter !== "none") {
-              ctx.filter = presetCss(c.filter) || "none";
-            }
-            ctx.translate(cx, cy);
-            ctx.rotate(rot);
-            if (c.flipX || c.flipY) ctx.scale(c.flipX ? -1 : 1, c.flipY ? -1 : 1);
-            if (c.mask && c.mask !== "none") this.applyMask(ctx, c.mask, size, ar);
-            const dw = size;
-            const dh = size / ar;
-            if (c.fit === "contain" || c.fit === "blur") {
-              // letterbox inside the sticker box, optional blurred backdrop
-              const k2 = Math.min(dw / sw, dh / sh);
-              const iw = sw * k2;
-              const ih = sh * k2;
-              if (c.fit === "blur") {
-                const s2 = Math.max(dw / sw, dh / sh) * 1.1;
-                const bx = ctx.filter;
-                ctx.filter = `${bx ? bx + " " : ""}blur(${Math.max(2, dh * 0.06).toFixed(1)}px)`;
-                ctx.drawImage(src, (dw - sw * s2) / 2, (dh - sh * s2) / 2, sw * s2, sh * s2);
-                ctx.filter = bx || "none";
-              }
-              ctx.drawImage(src, -iw / 2, -ih / 2, iw, ih);
-            } else {
-              ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
-            }
-            ctx.restore();
-          }
+      const localT = layer.local;
+      const rampIn = Math.min(1, localT / 0.4);
+      const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
+      const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
+      const anim = animAt(c.keyframes, this.animBase(c), localT);
+      if (c.kind === "text")
+        this.drawText(ctx, c, W, H, fadeAlpha * clamp01(anim.opacity), localT, c.duration, anim);
+      if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
+        const rec = this.els.get(c.mediaId);
+        if (!rec || !rec.url) continue;
+        // GIF stickers: step through decoded frames at their native fps
+        let src = rec.el as CanvasImageSource;
+        if (rec.gif && rec.gif.frames.length > 0) {
+          src = rec.gif.frames[Math.floor(localT * rec.gif.fps) % rec.gif.frames.length];
         }
+        const sw = srcW(src);
+        const sh = srcH(src);
+        if (!sw || !sh) continue;
+        const size = Math.max(1, anim.scale * W);
+        const ar = sw / sh;
+        const cx = W / 2 + anim.x * (W / 2);
+        const cy = H / 2 + anim.y * (H / 2);
+        this.overlayRects.push({
+          clipId: c.id,
+          x: cx - size / 2,
+          y: cy - size / (2 * ar),
+          w: size,
+          h: size / ar,
+        });
+        const rot = (anim.rotation * Math.PI) / 180;
+        const alpha = clamp01(fadeAlpha * anim.opacity);
+        const blend: GlobalCompositeOperation | null =
+          c.blend && c.blend !== "normal" ? (c.blend as GlobalCompositeOperation) : null;
+        if (c.chroma && sw * sh > 4) {
+          this.drawChroma(
+            ctx,
+            rec.el as HTMLVideoElement | HTMLImageElement,
+            c,
+            size,
+            ar,
+            alpha,
+            cx,
+            cy,
+            rot,
+            blend,
+          );
+        } else {
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          if (blend) ctx.globalCompositeOperation = blend;
+          if (c.filter && c.filter !== "none") {
+            ctx.filter = presetCss(c.filter) || "none";
+          }
+          ctx.translate(cx, cy);
+          ctx.rotate(rot);
+          if (c.flipX || c.flipY) ctx.scale(c.flipX ? -1 : 1, c.flipY ? -1 : 1);
+          if (c.mask && c.mask !== "none") this.applyMask(ctx, c.mask, size, ar);
+          const dw = size;
+          const dh = size / ar;
+          if (c.fit === "contain" || c.fit === "blur") {
+            // letterbox inside the sticker box, optional blurred backdrop
+            const k2 = Math.min(dw / sw, dh / sh);
+            const iw = sw * k2;
+            const ih = sh * k2;
+            if (c.fit === "blur") {
+              const s2 = Math.max(dw / sw, dh / sh) * 1.1;
+              const bx = ctx.filter;
+              ctx.filter = `${bx ? bx + " " : ""}blur(${Math.max(2, dh * 0.06).toFixed(1)}px)`;
+              ctx.drawImage(src, (dw - sw * s2) / 2, (dh - sh * s2) / 2, sw * s2, sh * s2);
+              ctx.filter = bx || "none";
+            }
+            ctx.drawImage(src, -iw / 2, -ih / 2, iw, ih);
+          } else {
+            ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
+          }
+          ctx.restore();
+        }
+      }
     }
 
     ctx.restore();
@@ -3278,21 +3567,33 @@ export class Engine {
   // ------------------------------------------------------------- export (WebM)
 
   async exportMedia(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
-    if (!this.canvas) throw new Error("Canvas not ready");
+    if (!this.canvas)
+      throw new Error("Canvas not ready — wait for the preview to appear, then retry.");
+    const blocked = exportBlocker();
+    if (blocked) throw new Error(blocked);
     const picked = pickMime();
     if (!picked) throw new Error("This browser does not support video recording. Use Chrome/Edge.");
     await this.ensureAudio();
-    if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
+    if (!this.audioCtx || !this.exportDest) {
+      throw new Error(
+        "Could not start the audio engine. Tap anywhere in the editor first (browsers block audio until you interact), then retry.",
+      );
+    }
+    if (this.duration() <= 0.05) {
+      throw new Error("Nothing to export — add a clip to the timeline first.");
+    }
     const prevScale = this.exportScale;
     const prevCap = this.previewMaxSide;
     this.exportScale = opts.scale ?? 1;
     this.exporting = true;
     this.previewMaxSide = 0; // exports always render at full quality
+
     const wasLoop = this.loop;
     let canvasStream: MediaStream | undefined;
     let recorder: MediaRecorder | undefined;
     this.loop = false;
     try {
+      this.useOriginalSources(); // exports always use original media
       for (const [id, rec] of this.els) {
         if (rec.el instanceof HTMLImageElement) continue;
         const target = (rec.videoBroken ? rec.audioFallback : rec.el) as AudioEl | undefined;
@@ -3324,7 +3625,9 @@ export class Engine {
       const stopped = new Promise<void>((resolve) => {
         rec.onstop = () => resolve();
         rec.onerror = (event) => {
-          recorderError = (event as Event & { error?: DOMException }).error ?? new Error("Video recording failed");
+          recorderError =
+            (event as Event & { error?: DOMException }).error ??
+            new Error("Video recording failed");
           resolve();
         };
       });
@@ -3335,7 +3638,8 @@ export class Engine {
       while (rec.state === "recording" && !recorderError) {
         onProgress(Math.min(1, this.t / Math.max(0.001, dur)));
         if (!this.playing) break;
-        if (performance.now() > deadline) throw new Error("Export timed out before playback finished");
+        if (performance.now() > deadline)
+          throw new Error("Export timed out before playback finished");
         await new Promise((r) => setTimeout(r, 200));
       }
       const endedEarly = this.t < dur - 0.03;
@@ -3350,7 +3654,11 @@ export class Engine {
     } finally {
       this.pause();
       if (recorder && recorder.state !== "inactive") {
-        try { recorder.stop(); } catch { /* already stopping */ }
+        try {
+          recorder.stop();
+        } catch {
+          /* already stopping */
+        }
       }
       // Only the canvas tracks are owned by this export. Audio tracks belong
       // to the shared audio graph and must remain available for later exports.
@@ -3359,6 +3667,316 @@ export class Engine {
       this.exportScale = prevScale;
       this.exporting = false;
       this.previewMaxSide = prevCap;
+      this.usePreviewSources();
+    }
+  }
+
+  // ------------------------------------------- export (MP4, frame-stepped)
+  //
+  // The reliable path. Instead of playing the timeline in real time and hoping
+  // the recorder samples each frame, this walks the timeline one output frame at
+  // a time:
+  //
+  //   for each frame index f:
+  //     t = f / fps
+  //     seek every visible element and WAIT for its decoded frame
+  //     draw
+  //     hand the canvas to the encoder with an explicit timestamp
+  //
+  // Wall-clock no longer matters. A slow phone produces the same file as a fast
+  // laptop, just later — no dropped frames, no black frames from a half-seeked
+  // element, no audio drifting out of sync. Audio is rendered offline from the
+  // same resolver gains the preview uses, so what you hear while editing is what
+  // lands in the file.
+
+  /** Can this device export frame-stepped MP4? */
+  async canExportStepped(): Promise<boolean> {
+    if (!mp4Supported()) return false;
+    const { w, h } = ASPECTS[this.project.aspect];
+    return !!(await pickAvcCodec(w, h, 30, 4_000_000));
+  }
+
+  /**
+   * Render the project's audio to PCM, offline.
+   *
+   * Used by the frame-stepped exporter. Returns null when there is no audio at
+   * all (a timeline of stills), so the caller can produce a valid video-only
+   * file instead of failing.
+   */
+  async renderOfflineAudioTrack(): Promise<{
+    channels: Float32Array[];
+    sampleRate: number;
+    frames: number;
+  } | null> {
+    const dur = this.duration();
+    if (dur <= 0.05) return null;
+    const OCtor: typeof OfflineAudioContext | undefined =
+      window.OfflineAudioContext ??
+      (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext })
+        .webkitOfflineAudioContext;
+    if (!OCtor) return null;
+    const sampleRate = 48000;
+    const frames = Math.ceil(dur * sampleRate);
+    const off = new OCtor(2, frames, sampleRate);
+    const ids = new Set<string>();
+    for (const c of this.project.main) ids.add(c.mediaId);
+    for (const tr of this.project.tracks)
+      for (const c of tr.clips) if (c.mediaId) ids.add(c.mediaId);
+    const bufs = await this.decodeAllAudio(off, ids);
+    await this.scheduleOfflineAudio(off, off.destination, bufs);
+    const rendered = await off.startRendering();
+    const channels: Float32Array[] = [];
+    for (let i = 0; i < rendered.numberOfChannels; i++) {
+      channels.push(rendered.getChannelData(i).slice(0));
+    }
+    if (channels.length === 0) return null;
+    if (channels.length === 1) channels.push(channels[0].slice(0));
+    return { channels, sampleRate, frames: rendered.length };
+  }
+
+  /**
+   * Measure how fast THIS device can render frames.
+   *
+   * Frame-stepped export is slower than real time, and how much slower varies by
+   * an order of magnitude across devices. Rather than guess, we time a small
+   * number of real frames through the same path the exporter uses (seek, wait,
+   * draw, hand to the encoder) and keep the result.
+   *
+   * The sample is intentionally small — 12 frames — so calling this before an
+   * export costs well under a second on any device.
+   */
+  async measureThroughput(sampleFrames = 12): Promise<ExportPlan | null> {
+    if (!this.canvas || !mp4Supported()) return null;
+    const dur = this.duration();
+    if (dur <= 0.05) return null;
+    const { w, h } = ASPECTS[this.project.aspect];
+    const fps = 30;
+    const codec = await pickAvcCodec(w, h, fps, 2_000_000);
+    if (!codec) return null;
+
+    const W_ = window as unknown as {
+      VideoEncoder: typeof VideoEncoder;
+      VideoFrame: typeof VideoFrame;
+    };
+    let counted = 0;
+    let encError: unknown = null;
+    const probe = new W_.VideoEncoder({
+      output: () => {
+        counted++;
+      },
+      error: (e) => {
+        encError = encError ?? e;
+      },
+    });
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.pause();
+    const prevScale = this.exportScale;
+    const prevCap = this.previewMaxSide;
+    try {
+      await probe.configure({ codec, width: w, height: h, framerate: fps, bitrate: 2_000_000 });
+      const n = Math.max(4, Math.min(24, sampleFrames));
+      const started = performance.now();
+      for (let f = 0; f < n; f++) {
+        if (encError) break;
+        const t = (f / n) * dur;
+        await this.frameReadyAt(t, 1500);
+        const vf = new W_.VideoFrame(this.canvas, { timestamp: f * 33333 });
+        probe.encode(vf, { keyFrame: f === 0 });
+        vf.close();
+      }
+      await probe.flush();
+      const elapsed = performance.now() - started;
+      if (encError || counted === 0) return null;
+      const throughput = recordThroughput(counted, elapsed, { width: w, height: h });
+      this.throughput = throughput;
+      return planSteppedExport({ durationSec: dur, fps, width: w, height: h }, throughput);
+    } catch {
+      return null;
+    } finally {
+      try {
+        probe.close();
+      } catch {
+        /* already closed */
+      }
+      this.exportScale = prevScale;
+      this.previewMaxSide = prevCap;
+      this.seek(this.t);
+      if (wasPlaying) void this.play();
+    }
+  }
+
+  /** Plan an export from the last measurement, if any. */
+  planExport(opts: { fps: number; scale?: number }): ExportPlan {
+    const { w, h } = ASPECTS[this.project.aspect];
+    const scale = opts.scale ?? 1;
+    return planSteppedExport(
+      {
+        durationSec: this.duration(),
+        fps: opts.fps,
+        width: Math.round(w * scale),
+        height: Math.round(h * scale),
+      },
+      this.throughput,
+    );
+  }
+
+  async exportMP4Stepped(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
+    if (!this.canvas) throw new Error("Canvas not ready — wait for the preview, then retry.");
+    if (!mp4Supported()) {
+      throw new Error(
+        "Frame-accurate MP4 needs WebCodecs. Use Chrome or Edge, or export WebM (real-time).",
+      );
+    }
+    const dur0 = this.duration();
+    if (dur0 <= 0.05) throw new Error("Nothing to export — add a clip to the timeline first.");
+    const { w: W, h: H } = ASPECTS[this.project.aspect];
+    const fps = Math.max(1, Math.round(opts.fps));
+    const codec = await pickAvcCodec(W, H, fps, opts.videoBitsPerSecond);
+    if (!codec) {
+      throw new Error(`H.264 encoding is not available at ${W}×${H} here — try WebM.`);
+    }
+
+    const prevScale = this.exportScale;
+    const prevCap = this.previewMaxSide;
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.pause();
+    this.exportScale = opts.scale ?? 1;
+    this.exporting = true;
+    this.previewMaxSide = 0;
+    this.loop = false;
+    // Exports always read the ORIGINAL files, never a preview proxy.
+    this.useOriginalSources();
+
+    const W_ = window as unknown as {
+      VideoEncoder: typeof VideoEncoder;
+      VideoFrame: typeof VideoFrame;
+    };
+    const W2Audio = window as unknown as {
+      AudioEncoder: typeof AudioEncoder;
+      AudioData: typeof AudioData;
+    };
+    // Render the audio ONCE, offline, from the same resolver gains the preview
+    // uses. Doing it up front means the file can never end up video-only by
+    // accident, and it is not tied to rendering speed.
+    const audio = await this.renderOfflineAudioTrack();
+    const sampleRate = audio?.sampleRate ?? 48000;
+
+    const target = new ArrayBufferTarget();
+    const muxer = new Muxer({
+      target,
+      video: { codec: "avc", width: W, height: H, frameRate: fps },
+      ...(audio ? { audio: { codec: "aac" as const, numberOfChannels: 2, sampleRate } } : {}),
+      fastStart: "in-memory",
+    });
+    let encError: unknown = null;
+    const videoEncoder = new W_.VideoEncoder({
+      output: (chunk, meta) => {
+        try {
+          muxer.addVideoChunk(chunk, meta);
+        } catch (e) {
+          encError = encError ?? e;
+        }
+      },
+      error: (e) => {
+        encError = encError ?? e;
+      },
+    });
+
+    try {
+      // Round to whole frames so the last one is never a sliver.
+      const totalFrames = Math.max(1, Math.round(dur0 * fps));
+      await videoEncoder.configure({
+        codec,
+        width: W,
+        height: H,
+        framerate: fps,
+        bitrate: opts.videoBitsPerSecond,
+        latencyMode: "quality",
+      });
+      const keyEvery = Math.max(1, fps * 2);
+      const frameDurUs = Math.round(1_000_000 / fps);
+
+      for (let f = 0; f < totalFrames; f++) {
+        if (encError) break;
+        const t = Math.min(dur0, f / fps);
+        // waits for the decoder, then draws — never captures a blank frame
+        await this.frameReadyAt(t, 3000);
+        const vf = new W_.VideoFrame(this.canvas, { timestamp: f * frameDurUs });
+        videoEncoder.encode(vf, { keyFrame: f % keyEvery === 0 });
+        vf.close();
+        onProgress(Math.min(0.99, (f + 1) / totalFrames));
+        // yield so the UI stays responsive and the decoder can progress
+        if (f % 4 === 0) await new Promise((r) => setTimeout(r, 0));
+      }
+      await videoEncoder.flush();
+
+      // Audio: one AAC pass over the pre-rendered PCM.
+      if (audio && !encError) {
+        const audioEncoder = new W2Audio.AudioEncoder({
+          output: (chunk, meta) => {
+            try {
+              muxer.addAudioChunk(chunk, meta);
+            } catch (e) {
+              encError = encError ?? e;
+            }
+          },
+          error: (e) => {
+            encError = encError ?? e;
+          },
+        });
+        await audioEncoder.configure({
+          codec: "mp4a.40.2",
+          sampleRate,
+          numberOfChannels: 2,
+          bitrate: opts.audioBitsPerSecond,
+        });
+        // feed in ~1 s chunks so memory stays flat on long timelines
+        const chunkFrames = sampleRate;
+        const data = audio.channels;
+        for (let off = 0; off < audio.frames; off += chunkFrames) {
+          const n = Math.min(chunkFrames, audio.frames - off);
+          const l = data[0].slice(off, off + n);
+          const r = data[1].slice(off, off + n);
+          const ad = new W2Audio.AudioData({
+            format: "f32-planar",
+            sampleRate,
+            numberOfFrames: n,
+            numberOfChannels: 2,
+            timestamp: Math.round((off / sampleRate) * 1_000_000),
+            data: [l, r] as unknown as BufferSource,
+          });
+          audioEncoder.encode(ad);
+          ad.close();
+          if (off % (chunkFrames * 20) === 0) await new Promise((r) => setTimeout(r, 0));
+        }
+        await audioEncoder.flush();
+        try {
+          audioEncoder.close();
+        } catch {
+          /* already closed */
+        }
+      }
+
+      if (encError) {
+        throw encError instanceof Error ? encError : new Error(String(encError));
+      }
+      muxer.finalize();
+      const blob = new Blob([target.buffer], { type: "video/mp4" });
+      if (blob.size < 1000) throw new Error("Export produced no data — try again.");
+      onProgress(1);
+      return blob;
+    } finally {
+      try {
+        videoEncoder.close();
+      } catch {
+        /* already closed */
+      }
+      this.exportScale = prevScale;
+      this.exporting = false;
+      this.previewMaxSide = prevCap;
+      this.usePreviewSources();
+      this.seek(0);
+      if (wasPlaying) void this.play();
     }
   }
 
@@ -3410,6 +4028,7 @@ export class Engine {
     let silence: GainNode | undefined;
     let audioArmed = false;
     try {
+      this.useOriginalSources(); // exports always use original media
       for (const [id, rec] of this.els) {
         if (rec.el instanceof HTMLImageElement) continue;
         const target = (rec.videoBroken ? rec.audioFallback : rec.el) as AudioEl | undefined;
@@ -3499,7 +4118,11 @@ export class Engine {
             timestamp: Math.max(0, Math.round(rawTs - audioT0)),
             data: samples,
           });
-          try { audioEncoder!.encode(ad); } finally { ad.close(); }
+          try {
+            audioEncoder!.encode(ad);
+          } finally {
+            ad.close();
+          }
         } catch (er) {
           encError = encError ?? er;
         }
@@ -3525,7 +4148,11 @@ export class Engine {
             const vf = new W_.VideoFrame(this.canvas, {
               timestamp: Math.round(frame * frameDurUs),
             });
-            try { videoEncoder.encode(vf, { keyFrame: wantKey }); } finally { vf.close(); }
+            try {
+              videoEncoder.encode(vf, { keyFrame: wantKey });
+            } finally {
+              vf.close();
+            }
             if (wantKey) lastKeyFrame = frame;
             frame++;
           } catch (e) {
@@ -3559,16 +4186,25 @@ export class Engine {
       audioArmed = false;
       if (sp) sp.onaudioprocess = null;
       for (const node of [sp, silence, streamSource]) {
-        try { node?.disconnect(); } catch { /* partially constructed graph */ }
+        try {
+          node?.disconnect();
+        } catch {
+          /* partially constructed graph */
+        }
       }
       for (const encoder of [audioEncoder, videoEncoder]) {
-        try { if (encoder && encoder.state !== "closed") encoder.close(); } catch { /* already closed */ }
+        try {
+          if (encoder && encoder.state !== "closed") encoder.close();
+        } catch {
+          /* already closed */
+        }
       }
       this.pause();
       this.loop = wasLoop;
       this.exportScale = prevScale;
       this.exporting = false;
       this.previewMaxSide = prevCap;
+      this.usePreviewSources();
     }
   }
 
@@ -3635,7 +4271,8 @@ export class Engine {
         while (this.t < targetT && performance.now() < deadline) {
           await new Promise((r) => requestAnimationFrame(() => r(null)));
         }
-        this.draw();
+        // readiness-checked capture: never sample a half-seeked frame
+        await this.frameReadyAt(Math.min(dur, targetT), 400);
         octx.filter = "none";
         octx.globalAlpha = 1;
         octx.drawImage(this.canvas, 0, 0, W, H);
@@ -3663,6 +4300,137 @@ export class Engine {
    * OfflineAudioContext, then encode 16-bit WAV. Used for podcast / voiceover
    * workflows and as the audio half of the WAV download option.
    */
+  /**
+   * Decode every media blob to an AudioBuffer once, for the offline mixers.
+   *
+   * Shared by the WAV export and the frame-stepped MP4/WebM export so both get
+   * identical audio. Returns null for media whose audio cannot be decoded
+   * (silent videos, broken files) rather than throwing.
+   */
+  async decodeAllAudio(
+    ctx: BaseAudioContext,
+    mediaIds: Iterable<string>,
+  ): Promise<Map<string, AudioBuffer | null>> {
+    const bufs = new Map<string, AudioBuffer | null>();
+    for (const mediaId of mediaIds) {
+      if (bufs.has(mediaId)) continue;
+      const rec = this.els.get(mediaId);
+      let buf: AudioBuffer | null = null;
+      try {
+        if (rec?.url) {
+          const blob = await fetch(rec.url).then((r) => r.blob());
+          buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+        }
+      } catch {
+        buf = null;
+      }
+      bufs.set(mediaId, buf);
+    }
+    return bufs;
+  }
+
+  /**
+   * Schedule the whole project's audio into an offline context.
+   *
+   * This is the audio half of a frame-stepped export. The gains come from
+   * `mainClipGain` — the SAME function the preview's clock uses — so a muted
+   * clip, a transition crossfade or an extracted-and-muted source behaves
+   * identically in the exported file. The previous recorder path sampled a live
+   * graph and could not guarantee that.
+   *
+   * Fades are written with short ramps rather than steps so transitions do not
+   * click.
+   */
+  async scheduleOfflineAudio(
+    off: BaseAudioContext,
+    dest: AudioNode,
+    bufs: Map<string, AudioBuffer | null>,
+    opts: { from?: number; to?: number; step?: number } = {},
+  ): Promise<void> {
+    const spans = mainSpans(this.project);
+    const from = Math.max(0, opts.from ?? 0);
+    const to = Math.min(this.duration(), opts.to ?? this.duration());
+    if (to <= from) return;
+    // 60 Hz is finer than any visible fade and cheap to schedule.
+    const step = Math.max(0.004, opts.step ?? 1 / 60);
+    const hasSolo = this.project.tracks.some((t) => t.solo);
+    const master = off.createGain();
+    master.gain.value = this.project.masterGain ?? 1;
+    master.connect(dest);
+
+    const rampedSource = (
+      buf: AudioBuffer,
+      startAt: number,
+      srcOffset: number,
+      length: number,
+      rate: number,
+      gainAt: (localSec: number) => number,
+    ) => {
+      const src = off.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = Math.max(0.05, rate);
+      const g = off.createGain();
+      src.connect(g);
+      g.connect(master);
+      // piecewise-constant gain, smoothed with linear ramps
+      let last = Math.max(0, Math.min(2, gainAt(0)));
+      g.gain.setValueAtTime(last, startAt);
+      for (let dt = step; dt < length; dt += step) {
+        const v = Math.max(0, Math.min(2, gainAt(dt)));
+        if (Math.abs(v - last) > 1e-4) {
+          g.gain.linearRampToValueAtTime(v, startAt + dt);
+          last = v;
+        }
+      }
+      const dur2 = Math.min(length, buf.duration - srcOffset);
+      if (dur2 > 0.001) src.start(startAt, Math.max(0, srcOffset), dur2);
+    };
+
+    // --- main track ---
+    if (!hasSolo) {
+      for (const s of spans) {
+        if (s.clip.freeze || s.clip.reverse || s.clip.muted) continue;
+        if (s.end <= from || s.start >= to) continue;
+        const buf = bufs.get(s.clip.mediaId);
+        if (!buf) continue;
+        const idx = spans.indexOf(s);
+        const nextSpan = idx + 1 < spans.length ? spans[idx + 1] : null;
+        const clipDur = Math.max(0.01, s.end - s.start);
+        rampedSource(buf, Math.max(from, s.start), s.clip.in, clipDur, s.clip.speed, (dt) =>
+          mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0),
+        );
+      }
+    }
+
+    // --- overlay tracks (audio clips and any video with sound) ---
+    for (const tr of this.project.tracks) {
+      if (tr.hidden) continue;
+      // A muted track (or one excluded by another track's solo) is inaudible:
+      // schedule nothing rather than a source with a zero gain.
+      const trackGain = hasSolo ? (tr.solo ? 1 : 0) : tr.muted ? 0 : 1;
+      if (trackGain === 0) continue;
+      for (const c of tr.clips) {
+        if (!c.mediaId) continue;
+        if (c.kind === "text") continue;
+        if (c.kind === "video") continue; // sticker video is silent by design
+        const start = Math.max(0, c.start);
+        const end = start + Math.max(0, c.duration);
+        if (end <= from || start >= to) continue;
+        const buf = bufs.get(c.mediaId);
+        if (!buf) continue;
+        const vol = Math.max(0, Math.min(1, c.volume ?? 1));
+        const fadeIn = Math.max(0, c.fadeIn ?? 0.15);
+        const fadeOut = Math.max(0, c.fadeOut ?? 0.15);
+        rampedSource(buf, Math.max(from, start), 0, end - start, 1, (dt) => {
+          let v = vol;
+          if (fadeIn > 0) v *= Math.min(1, dt / fadeIn);
+          if (fadeOut > 0) v *= Math.min(1, (end - start - dt) / fadeOut);
+          return v * trackGain;
+        });
+      }
+    }
+  }
+
   async exportAudioWav(
     onProgress: (p: number) => void,
     opts: { sampleRate?: number; seconds?: number } = {},
@@ -3730,17 +4498,13 @@ export class Engine {
       tick();
       if (s.clip.freeze || s.clip.reverse) continue;
       if (hasSolo) continue; // solos win; main sound goes quiet
+      // A clip the user muted (e.g. after "extract audio") must contribute
+      // NOTHING to the exported mix, or the extracted copy doubles it.
+      if (s.clip.muted) continue;
       const buf = await decode(s.clip.mediaId);
       if (!buf) continue;
       const dur2 = mainClipDuration(s.clip);
-      schedule(
-        buf,
-        s.start,
-        s.clip.in,
-        dur2,
-        s.clip.muted ? 0 : s.clip.volume,
-        Math.max(0.05, s.clip.speed),
-      );
+      schedule(buf, s.start, s.clip.in, dur2, s.clip.volume, Math.max(0.05, s.clip.speed));
     }
 
     for (const tr of this.project.tracks) {
@@ -3790,6 +4554,21 @@ export class Engine {
   }
 
   /** PNG still of the current frame — instant thumbnail/cover export. */
+  /**
+   * Render one frame at an arbitrary time, guaranteeing it is real.
+   *
+   * This is the primitive a frame-stepping (non-real-time) exporter needs: it
+   * seeks, waits for the decoder, and only then reports the canvas as valid.
+   * The real-time recorder paths cannot use it directly, but the GIF path and
+   * any future offline encoder can — and, importantly, it is the same code the
+   * tests exercise.
+   */
+  async renderFrameAt(t: number, budgetMs = 500): Promise<HTMLCanvasElement | null> {
+    if (!this.canvas) return null;
+    await this.frameReadyAt(t, budgetMs);
+    return this.canvas;
+  }
+
   async exportStill(width = 1080): Promise<Blob> {
     if (!this.canvas) throw new Error("Canvas not ready");
     this.draw();

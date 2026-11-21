@@ -13,7 +13,7 @@ let dbPromise: Promise<IDBDatabase> | null = null;
 
 function open(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
+  dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -21,10 +21,56 @@ function open(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: "id" });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error("Failed to open Mayocut local storage"));
+    req.onsuccess = () => {
+      const db = req.result;
+      // A second tab upgrading the schema would otherwise block for ever on a
+      // connection nobody closes, making every later write fail silently.
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
+    req.onerror = () => {
+      dbPromise = null; // allow a retry after a transient failure
+      reject(req.error ?? new Error("Failed to open Mayocut local storage"));
+    };
+  }).catch((e: unknown) => {
+    dbPromise = null;
+    throw e;
   });
   return dbPromise;
+}
+
+/**
+ * Ask the browser to keep this data.
+ *
+ * Without this, IndexedDB lives in the "best-effort" bucket: browsers evict it
+ * under storage pressure, and on Android/iOS closing the tab for a while can
+ * be enough. That is the "I came back and my media was gone" report. Asking is
+ * not guaranteed (the browser may decline, especially in private mode) but it
+ * is the only lever we have, and it must be asked for once at startup while
+ * still handling a user gesture.
+ */
+export async function requestPersistentStorage(): Promise<boolean> {
+  try {
+    if (!navigator.storage?.persist) return false;
+    if (await navigator.storage.persisted?.()) return true;
+    return await navigator.storage.persist();
+  } catch {
+    return false;
+  }
+}
+
+/** Bytes used / available, for the storage meter. */
+export async function storageUsage(): Promise<{ used: number; quota: number } | null> {
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (!est) return null;
+    return { used: est.usage ?? 0, quota: est.quota ?? 0 };
+  } catch {
+    return null;
+  }
 }
 
 function tx<T>(
@@ -38,8 +84,10 @@ function tx<T>(
         const t = db.transaction(store, mode);
         const req = fn(t.objectStore(store));
         t.oncomplete = () => resolve(req.result as T);
-        t.onabort = () => reject(t.error ?? req.error ?? new Error("Local storage transaction aborted"));
-        t.onerror = () => reject(t.error ?? req.error ?? new Error("Local storage transaction failed"));
+        t.onabort = () =>
+          reject(t.error ?? req.error ?? new Error("Local storage transaction aborted"));
+        t.onerror = () =>
+          reject(t.error ?? req.error ?? new Error("Local storage transaction failed"));
       }),
   );
 }
@@ -63,6 +111,15 @@ export const db = {
     tx<{ id: string; blob: Blob } | undefined>("blobs", "readonly", (s) => s.get(id)).then(
       (r) => r?.blob,
     ),
+  // --- preview proxies (never used for export) ---
+  getProxy: (mediaId: string): Promise<Blob | undefined> =>
+    tx<{ id: string; blob: Blob } | undefined>("blobs", "readonly", (s) =>
+      s.get(`proxy_${mediaId}`),
+    ).then((r) => r?.blob),
+  putProxy: (mediaId: string, blob: Blob): Promise<unknown> =>
+    tx("blobs", "readwrite", (s) => s.put({ id: `proxy_${mediaId}`, blob })),
+  deleteProxy: (mediaId: string): Promise<unknown> =>
+    tx("blobs", "readwrite", (s) => s.delete(`proxy_${mediaId}`)),
   /** Store a blob with a custom id (TTS model files) without touching the media store. */
   putRawBlob: (id: string, blob: Blob): Promise<void> =>
     tx("blobs", "readwrite", (s) => s.put({ id, blob })) as Promise<void>,

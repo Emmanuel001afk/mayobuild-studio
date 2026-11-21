@@ -12,7 +12,10 @@ function t(name, fn) {
 
 // ================= types =================
 const T = await import('./b-types.mjs');
+const R = await import('./b-timeline-resolver.mjs');
 const E = await import('./b-engine.mjs');
+const P = await import('./b-export-plan.mjs');
+const X = await import('./b-proxy.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
   const tr = T.emptyTracks();
@@ -1322,6 +1325,533 @@ await t('the import probe only condemns a file on a real decoder error', () => {
   assert.ok(!/finish\(false\)/.test(src), 'probeVideo must not resolve playable:false');
   assert.ok(/finish\("unknown"\)/.test(src), 'a timeout must be reported as unknown');
   assert.ok(/timeoutMs = 30000/.test(src), 'the probe budget must be generous, not 8s');
+});
+
+
+// ================= persistence, transitions, exports =================
+
+await t('the FIRST clip has no incoming fade, so a video does not open muted', () => {
+  // Every clip defaults to transitionIn:"crossfade". Applying that to clip 0
+  // silenced the opening moments of the video — the "first seconds are black
+  // and silent" report.
+  const c = mkClip({ id: 'A', transitionIn: 'crossfade', transitionDur: 0.5 });
+  const span = { clip: c, start: 0, end: 5 };
+  assert.equal(T.mainClipGain(c, span, null, 0, false), 1, 'first clip must start at full level');
+  // ...but a later clip still fades in
+  assert.ok(T.mainClipGain(c, span, null, -0.25, true) < 1, 'a clip with a predecessor fades in');
+});
+
+await t('a muted clip contributes nothing, which is what extract-audio relies on', () => {
+  const c = mkClip({ muted: true, transitionIn: 'none' });
+  assert.equal(T.mainClipGain(c, { clip: c, start: 0, end: 5 }, null, 2, true), 0);
+});
+
+await t('transition windows still sum to unity with the first-clip fix', () => {
+  const A = { clip: mkClip({ id: 'A', transitionIn: 'crossfade', transitionDur: 0.5 }), start: 0, end: 5 };
+  const B = { clip: mkClip({ id: 'B', transitionIn: 'crossfade', transitionDur: 0.5 }), start: 5, end: 10 };
+  let worst = 0;
+  for (let t = 4.0; t <= 5.2; t += 0.02) {
+    worst = Math.max(worst, T.mainClipGain(A.clip, A, B, t, false) + T.mainClipGain(B.clip, B, null, t, true));
+  }
+  assert.ok(worst <= 1.02, `overlap summed to ${worst.toFixed(2)}x`);
+});
+
+await t('importFiles pairs each item with its OWN file, even when one is skipped', () => {
+  // Callers used to zip items[i] with accepted[i]. Skipping any file shifted
+  // every later pairing, storing the wrong bytes under the wrong name.
+  const src = readFileSync('src/mayocut/utils.ts', 'utf8');
+  assert.ok(/out\.push\(\{ \.\.\.item, sourceFile: f \}\)/.test(src), 'items must carry their source File');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(!/accepted\[index\]/.test(ed), 'Editor must not pair by array index');
+  assert.ok(!/items\[i\], accepted\[i\]/.test(ed), 'Editor must not pair by array index');
+  const home = readFileSync('src/mayocut/components/ProjectsHome.tsx', 'utf8');
+  assert.ok(!/items\[i\], accepted\[i\]/.test(home), 'ProjectsHome must not pair by array index');
+});
+
+await t('storage persistence is requested automatically, not hidden behind a button', () => {
+  const home = readFileSync('src/mayocut/components/ProjectsHome.tsx', 'utf8');
+  assert.ok(/requestPersistentStorage\(\)/.test(home), 'home screen must ask for durable storage');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/requestPersistentStorage\(\)/.test(ed), 'editor must ask too, before importing');
+  const idb = readFileSync('src/mayocut/idb.ts', 'utf8');
+  assert.ok(/export async function requestPersistentStorage/.test(idb));
+  assert.ok(/onversionchange/.test(idb), 'a schema upgrade in another tab must not deadlock writes');
+});
+
+await t('export preflight names the real blocker instead of "Export failed"', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/export function exportBlocker/.test(src));
+  assert.ok(/has no video recorder/.test(src), 'must explain a missing MediaRecorder');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/exportBlocker\(\)/.test(ed), 'the export dialog must surface it before trying');
+});
+
+await t('inspector tab jump scrolls the panel itself, not the page', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/jumpToInspectorSection/.test(ed));
+  // scrollIntoView picks the nearest scrollable ancestor, which on a phone is
+  // often the page rather than the sheet body.
+  assert.ok(!/scrollIntoView\(\{ block: "nearest"/.test(ed), 'must move the panel scrollTop instead');
+});
+
+await t('mobile sheets establish a real scroll region', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/max-h-\[85dvh\] flex flex-col overflow-hidden/.test(ed), 'media sheet must be a flex column');
+  assert.ok(/max-h-\[88dvh\] flex flex-col overflow-hidden/.test(ed), 'tune sheet must be a flex column');
+  assert.ok(/overscroll-contain/.test(ed), 'sheets must not chain scroll to the page');
+});
+
+await t('filters and effects fall back to the clip under the playhead', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/function targetMainClipId/.test(ed), 'needs a selection fallback');
+  assert.ok(!/Select a main-track video clip first/.test(ed), 'must not refuse to apply');
+});
+
+
+// ================= timeline resolver — the shared engine contract =================
+// These are the "automated tests with real videos" foundation: real Project
+// fixtures (multi-clip, split, muted, extracted audio, transitions) resolved
+// through the SAME function preview and export use.
+
+const rc = (o = {}) => ({
+  id: 'c', mediaId: 'm', in: 0, out: 5, speed: 1, reverse: false, filter: 'none',
+  adjust: {}, volume: 1, muted: false, transitionIn: 'none', transitionDur: 0, ...o,
+});
+const rproj = (main, tracks = []) => ({
+  id: 'p', name: 'p', aspect: '16:9', main, tracks, createdAt: 1, updatedAt: 1,
+});
+const rtrack = (id, clips) => ({ id, name: id, kind: 'text', clips });
+
+await t('resolver: a single clip is visible for its whole span', () => {
+  const p = rproj([rc()]);
+  for (const at of [0, 1, 4.99]) {
+    const c = R.resolveComposition(p, at);
+    assert.equal(c.main.length, 1, `at ${at}`);
+    assert.equal(c.empty, false);
+  }
+});
+
+await t('resolver: two clips with a crossfade overlap and sum to unity', () => {
+  const p = rproj([
+    rc({ id: 'A', transitionIn: 'crossfade', transitionDur: 0.5 }),
+    rc({ id: 'B', transitionIn: 'crossfade', transitionDur: 0.5 }),
+  ]);
+  let sawTransition = false;
+  for (let at = 0; at <= 10; at += 0.05) {
+    const c = R.resolveComposition(p, at);
+    const sum = c.main.reduce((n, l) => n + l.gain, 0);
+    assert.ok(sum <= 1.02, `gain sum ${sum.toFixed(2)} at ${at.toFixed(2)}`);
+    if (c.transition) {
+      sawTransition = true;
+      assert.equal(c.main.length, 2, 'both clips visible mid-transition');
+      assert.ok(c.transition.progress >= 0 && c.transition.progress <= 1);
+    }
+  }
+  assert.ok(sawTransition, 'the resolver must report the transition at all');
+});
+
+await t('resolver: at an exact cut the INCOMING clip wins (no flash back)', () => {
+  const p = rproj([
+    rc({ id: 'A', transitionIn: 'none' }),
+    rc({ id: 'B', transitionIn: 'none' }),
+  ]);
+  const c = R.resolveComposition(p, 5);
+  assert.equal(c.main.length, 1);
+  assert.equal(c.main[0].clip.id, 'B');
+});
+
+await t('resolver: a split clip is two independent spans', () => {
+  const p = rproj([
+    rc({ id: 'a1', in: 0, out: 2.5 }),
+    rc({ id: 'a2', in: 2.5, out: 5 }),
+  ]);
+  const first = R.resolveComposition(p, 1);
+  const second = R.resolveComposition(p, 3);
+  assert.equal(first.main[0].clip.id, 'a1');
+  assert.equal(first.main[0].src, 1);
+  assert.equal(second.main[0].clip.id, 'a2');
+  assert.equal(second.main[0].src, 3, 'source continues across the split');
+});
+
+await t('resolver: a MUTED clip contributes no audio but is still visible', () => {
+  const p = rproj([rc({ id: 'A', muted: true })]);
+  const c = R.resolveComposition(p, 1);
+  assert.equal(c.main.length, 1, 'muted must not remove the picture');
+  assert.equal(c.main[0].gain, 0, 'muted must contribute no audio');
+});
+
+await t('resolver: extracted audio plays on its own track while the video is muted', () => {
+  const p = rproj(
+    [rc({ id: 'A', mediaId: 'vid', muted: true })],
+    [rtrack('t_audio', [{ id: 'au', kind: 'audio', mediaId: 'aud', start: 0, duration: 5 }])],
+  );
+  const c = R.resolveComposition(p, 1);
+  assert.equal(c.main[0].gain, 0, 'original sound stays muted');
+  assert.equal(c.audioOverlays.length, 1, 'the extracted copy is the audible one');
+  assert.equal(c.audioOverlays[0].clip.mediaId, 'aud');
+  const need = R.requiredMediaAt(p, 1);
+  assert.ok(need.includes('vid'), 'picture media required');
+  assert.ok(need.includes('aud'), 'extracted audio media required');
+});
+
+await t('resolver: overlays are time-windowed and skip hidden tracks', () => {
+  const clips = [{ id: 'tx', kind: 'text', start: 1, duration: 2, text: 'hi' }];
+  const vis = R.resolveComposition(rproj([rc()], [rtrack('t_text', clips)]), 1.5);
+  assert.equal(vis.overlays.length, 1);
+  const outside = R.resolveComposition(rproj([rc()], [rtrack('t_text', clips)]), 4);
+  assert.equal(outside.overlays.length, 0);
+  const hiddenTrack = rtrack('t_text', clips);
+  hiddenTrack.hidden = true;
+  const hidden = R.resolveComposition(rproj([rc()], [hiddenTrack]), 1.5);
+  assert.equal(hidden.overlays.length, 0, 'hidden track must not render');
+});
+
+await t('resolver: every output is finite, even for legacy clips', () => {
+  const p = rproj([{ ...rc(), speed: undefined, out: undefined, volume: undefined }]);
+  for (let at = 0; at <= 5; at += 0.5) {
+    const c = R.resolveComposition(p, at);
+    assert.ok(Number.isFinite(c.t) && Number.isFinite(c.duration));
+    for (const l of c.main) {
+      for (const k of ['src', 'rate', 'alpha', 'gain', 'start', 'end']) {
+        assert.ok(Number.isFinite(l[k]), `${k} not finite at ${at}`);
+      }
+      assert.ok(l.rate > 0, 'rate must be positive');
+    }
+  }
+});
+
+await t('resolver: an empty timeline is explicitly empty, not broken', () => {
+  const c = R.resolveComposition(rproj([]), 0);
+  assert.equal(c.empty, true);
+  assert.equal(c.duration, 0);
+  assert.deepEqual(c.main, []);
+});
+
+await t('resolver: seeking past the end clamps instead of exploding', () => {
+  const p = rproj([rc()]);
+  const c = R.resolveComposition(p, 999);
+  assert.equal(c.t, c.duration);
+  assert.equal(c.main.length, 1, 'the last frame is still shown');
+});
+
+await t('readiness: a late decoder is reported, not assumed', () => {
+  assert.equal(R.readinessFor(0, 0, 0, false), 'loading');
+  assert.equal(R.readinessFor(1, 0, 0, false), 'loading');
+  assert.equal(R.readinessFor(2, 1.0, 1.0, false), 'ready');
+  assert.equal(R.readinessFor(2, 0.0, 2.0, false), 'seek-needed');
+  assert.equal(R.readinessFor(2, 0.0, 2.0, true), 'ready', 'paused frames are fine');
+});
+
+await t('readiness: the clock holds while loading, then gives up (bounded)', () => {
+  assert.equal(R.shouldAdvanceClock(['ready'], 0), true);
+  assert.equal(R.shouldAdvanceClock(['loading'], 0), false, 'must wait for the frame');
+  assert.equal(R.shouldAdvanceClock(['loading'], 1000), true, 'must not hang forever');
+  assert.equal(R.shouldAdvanceClock(['ready', 'loading'], 0), false);
+});
+
+await t('the engine draws from the resolver, not its own transition maths', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/resolveComposition\(this\.project/.test(src), 'draw() must use the resolver');
+  assert.ok(/private visibleLayerReady/.test(src), 'transport must be able to hold');
+  assert.ok(/private awaitFrameFor/.test(src), 'play() must pre-warm the first frame');
+  assert.ok(/private async frameReadyAt/.test(src), 'export must confirm frames');
+});
+
+
+// ================= stage 2: frame-stepped export =================
+// A synthetic offline audio graph stands in for OfflineAudioContext so the
+// mixer's decisions (muted, transition, overlay track) can be asserted without
+// a browser. We record what gains get scheduled rather than listening.
+
+function fakeOffline() {
+  const scheduled = [];
+  const node = (kind, extra = {}) => {
+    const n = {
+      kind, ...extra,
+      connect() { return n; },
+      disconnect() {},
+    };
+    return n;
+  };
+  const ctx = {
+    currentTime: 0,
+    destination: node('dest'),
+    createGain: () => {
+      const g = node('gain', {
+        gain: {
+          value: 1,
+          _set: [],
+          setValueAtTime(v, at) { this._set.push(['set', v, at]); },
+          linearRampToValueAtTime(v, at) { this._set.push(['ramp', v, at]); },
+        },
+      });
+      return g;
+    },
+    createBufferSource: () => {
+      const s = node('src', {
+        playbackRate: { value: 1 },
+        start(at, offset, dur) {
+          scheduled.push({ at, offset, dur, rate: s.playbackRate.value });
+        },
+      });
+      return s;
+    },
+  };
+  return { ctx, scheduled };
+}
+
+const fakeBuf = (duration = 10) => ({ duration });
+
+await t('offline mixer: a MUTED clip schedules no audio source', async () => {
+  const eng = new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'm1', muted: true })],
+    tracks: T.emptyTracks(), aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  const bufs = new Map([['m1', fakeBuf()]]);
+  await eng.scheduleOfflineAudio(ctx, ctx.destination, bufs);
+  assert.equal(scheduled.length, 0, 'muted must produce no source at all');
+});
+
+await t('offline mixer: an unmuted clip schedules exactly one source', async () => {
+  const eng = new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'm1' })],
+    tracks: T.emptyTracks(), aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  await eng.scheduleOfflineAudio(ctx, ctx.destination, new Map([['m1', fakeBuf()]]));
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].at, 0);
+});
+
+await t('offline mixer: a freeze/reverse clip stays silent', async () => {
+  for (const flag of [{ freeze: true }, { reverse: true }]) {
+    const eng = new E.Engine({
+      main: [mkClip({ id: 'A', mediaId: 'm1', ...flag })],
+      tracks: T.emptyTracks(), aspect: '16:9',
+    });
+    const { ctx, scheduled } = fakeOffline();
+    await eng.scheduleOfflineAudio(ctx, ctx.destination, new Map([['m1', fakeBuf()]]));
+    assert.equal(scheduled.length, 0, `${JSON.stringify(flag)} must be silent`);
+  }
+});
+
+await t('offline mixer: extracted audio plays while the original is muted', async () => {
+  const eng = new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'vid', muted: true })],
+    tracks: [
+      { id: 't_audio', name: 'Audio', kind: 'audio',
+        clips: [{ id: 'au', kind: 'audio', mediaId: 'aud', start: 0, duration: 5, volume: 1 }] },
+    ],
+    aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  await eng.scheduleOfflineAudio(
+    ctx, ctx.destination, new Map([['vid', fakeBuf()], ['aud', fakeBuf()]]),
+  );
+  assert.equal(scheduled.length, 1, 'only the extracted copy is audible');
+});
+
+await t('offline mixer: a hidden or muted TRACK contributes nothing', async () => {
+  // The main clip is audible, so exactly ONE source is expected — the point is
+  // that the muted/hidden overlay track adds no SECOND source.
+  const mk = (flags) => new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'vid' })],
+    tracks: [
+      { id: 't_audio', name: 'Audio', kind: 'audio', ...flags,
+        clips: [{ id: 'au', kind: 'audio', mediaId: 'aud', start: 0, duration: 5, volume: 1 }] },
+    ],
+    aspect: '16:9',
+  });
+  for (const flags of [{ muted: true }, { hidden: true }]) {
+    const { ctx, scheduled } = fakeOffline();
+    await mk(flags).scheduleOfflineAudio(
+      ctx, ctx.destination, new Map([['vid', fakeBuf()], ['aud', fakeBuf()]]),
+    );
+    assert.equal(scheduled.length, 1, `${JSON.stringify(flags)} track must add no source`);
+  }
+});
+
+await t('offline mixer: a solo\'d track silences the main track', async () => {
+  const eng = new E.Engine({
+    main: [mkClip({ id: 'A', mediaId: 'vid' })],
+    tracks: [
+      { id: 't_audio', name: 'Audio', kind: 'audio', solo: true,
+        clips: [{ id: 'au', kind: 'audio', mediaId: 'aud', start: 0, duration: 5, volume: 1 }] },
+    ],
+    aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  await eng.scheduleOfflineAudio(
+    ctx, ctx.destination, new Map([['vid', fakeBuf()], ['aud', fakeBuf()]]),
+  );
+  assert.equal(scheduled.length, 1, 'only the solo track is heard');
+});
+
+await t('offline mixer: two clips schedule in timeline order', async () => {
+  const eng = new E.Engine({
+    main: [
+      mkClip({ id: 'A', mediaId: 'm1', in: 0, out: 5 }),
+      mkClip({ id: 'B', mediaId: 'm2', in: 0, out: 5 }),
+    ],
+    tracks: T.emptyTracks(), aspect: '16:9',
+  });
+  const { ctx, scheduled } = fakeOffline();
+  await eng.scheduleOfflineAudio(
+    ctx, ctx.destination, new Map([['m1', fakeBuf(5)], ['m2', fakeBuf(5)]]),
+  );
+  assert.equal(scheduled.length, 2);
+  assert.ok(scheduled[1].at >= 5, 'second clip starts at the cut, not at zero');
+});
+
+await t('stepped export exists as a real method and is preferred by the UI', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/async exportMP4Stepped/.test(src), 'frame-stepped exporter must exist');
+  assert.ok(/async renderOfflineAudioTrack/.test(src), 'must render audio offline');
+  assert.ok(/async canExportStepped/.test(src), 'must expose a capability check');
+  // it must actually wait for frames, not sample a timer
+  assert.ok(/await this\.frameReadyAt\(t, 3000\)/.test(src), 'must confirm each frame');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/exportMP4Stepped/.test(ed), 'the UI must be able to reach it');
+  assert.ok(
+    ed.indexOf('exportMP4Stepped') < ed.indexOf('eng.exportMP4(opts'),
+    'stepped export must be tried before the real-time recorder',
+  );
+});
+
+await t('stepped export muxes an audio track when audio exists', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/audio: \{ codec: "aac" as const/.test(src), 'must declare the AAC track');
+  assert.ok(/addAudioChunk/.test(src), 'must feed encoded audio to the muxer');
+});
+
+
+// ================= stage 3: export planning + proxies =================
+console.log('export-plan.ts');
+await t('recordThroughput rejects nonsense measurements', () => {
+  assert.equal(P.recordThroughput(0, 1000, { width: 1920, height: 1080 }), null);
+  assert.equal(P.recordThroughput(12, 0, { width: 1920, height: 1080 }), null);
+  assert.equal(P.recordThroughput(12, NaN, { width: 1920, height: 1080 }), null);
+  assert.equal(P.recordThroughput(-4, 1000, { width: 1920, height: 1080 }), null);
+});
+await t('recordThroughput turns frames+time into fps', () => {
+  const th = P.recordThroughput(24, 2000, { width: 1920, height: 1080 });
+  assert.ok(th, 'must accept a real measurement');
+  assert.ok(Math.abs(th.framesPerSecond - 12) < 1e-9, `want 12 fps, got ${th.framesPerSecond}`);
+});
+await t('planSteppedExport on a measurement is not heuristic', () => {
+  const th = P.recordThroughput(24, 2000, { width: 1920, height: 1080 }); // 12 fps @1080p
+  const plan = P.planSteppedExport(
+    { durationSec: 10, fps: 30, width: 1920, height: 1080 },
+    th,
+  );
+  assert.equal(plan.totalFrames, 300);
+  assert.equal(plan.heuristic, false, 'a measured plan must not be flagged');
+  // 12 frames/s measured, 300 frames to render -> ~25s
+  assert.ok(Math.abs(plan.estimatedSec - 25) < 1.5, `want ~25s, got ${plan.estimatedSec}`);
+  assert.equal(plan.strategy, 'stepped');
+});
+await t('planSteppedExport without a measurement is flagged heuristic', () => {
+  const plan = P.planSteppedExport({ durationSec: 10, fps: 30, width: 1920, height: 1080 }, null);
+  assert.equal(plan.heuristic, true);
+  assert.ok(plan.estimatedSec > 0, 'still gives an honest ballpark');
+  assert.ok(/about|rough|~|around/i.test(plan.summary), `summary should hedge: ${plan.summary}`);
+});
+await t('4K costs more than 1080p for the same duration', () => {
+  const th = P.recordThroughput(24, 2000, { width: 1920, height: 1080 });
+  const hd = P.planSteppedExport({ durationSec: 10, fps: 30, width: 1920, height: 1080 }, th);
+  const uhd = P.planSteppedExport({ durationSec: 10, fps: 30, width: 3840, height: 2160 }, th);
+  assert.ok(uhd.estimatedSec > hd.estimatedSec * 1.5, '4K must not look as cheap as 1080p');
+});
+await t('a hopelessly slow device is steered to real time', () => {
+  const slow = { framesPerSecond: 1, width: 1920, height: 1080, sampleMs: 5000 };
+  const plan = P.planSteppedExport({ durationSec: 60, fps: 30, width: 1920, height: 1080 }, slow);
+  assert.equal(plan.strategy, 'realtime');
+  assert.ok(plan.slowFactor > 6);
+});
+await t('a merely-slow device keeps the accurate path', () => {
+  const slow = { framesPerSecond: 5, width: 1920, height: 1080, sampleMs: 5000 }; // 5x real time
+  const plan = P.planSteppedExport({ durationSec: 10, fps: 30, width: 1920, height: 1080 }, slow);
+  assert.equal(plan.strategy, 'stepped', 'correct beats fast below the cutoff');
+});
+await t('fmtDuration reads like a person wrote it', () => {
+  assert.equal(P.fmtDuration(5), '5 s');
+  assert.equal(P.fmtDuration(65), '1 min 5 s');
+  assert.equal(P.fmtDuration(0), '0 s');
+});
+
+console.log('proxy.ts');
+await t('small footage does not get a proxy', () => {
+  const d = X.shouldProxyVideo({ width: 1280, height: 720, size: 20e6, kind: 'video' });
+  assert.equal(d.wanted, false, '720p decodes fine already');
+});
+await t('4K footage does get a proxy at 720p', () => {
+  const d = X.shouldProxyVideo({ width: 3840, height: 2160, size: 200e6, kind: 'video' });
+  assert.equal(d.wanted, true);
+  assert.equal(d.targetHeight, 720);
+});
+await t('audio never gets a proxy', () => {
+  const d = X.shouldProxyVideo({ width: 0, height: 0, size: 200e6, kind: 'audio' });
+  assert.equal(d.wanted, false);
+});
+await t('unknown height falls back to file size', () => {
+  assert.equal(X.shouldProxyVideo({ size: 20e6, kind: 'video' }).wanted, false);
+  assert.equal(X.shouldProxyVideo({ size: 900e6, kind: 'video' }).wanted, true);
+});
+await t('proxy sizing preserves aspect and stays even', () => {
+  const s = X.proxySize(3840, 2160, 720);
+  assert.equal(s.height, 720);
+  assert.equal(s.width, 1280);
+  const odd = X.proxySize(1921, 1081, 720);
+  assert.equal(odd.width % 2, 0, 'odd widths break H.264');
+  assert.equal(odd.height % 2, 0);
+});
+await t('portrait footage keeps portrait dimensions', () => {
+  const s = X.proxySize(1080, 1920, 720);
+  assert.equal(s.height, 720);
+  assert.equal(s.width, 406); // 405 rounded up to an even width
+  assert.ok(s.height > s.width, 'must not silently rotate');
+});
+await t('a proxy never upscales past the source', () => {
+  const s = X.proxySize(640, 360, 720);
+  assert.ok(s.height <= 360, `upscaled to ${s.height}`);
+});
+await t('EXPORT ALWAYS GETS THE ORIGINAL', () => {
+  assert.equal(X.sourceFor('export', 'blob:original', 'blob:proxy'), 'blob:original');
+  assert.equal(X.sourceFor('export', 'blob:original', undefined), 'blob:original');
+  assert.equal(X.sourceFor('export', 'blob:original', 'blob:proxy'), 'blob:original');
+});
+await t('preview prefers the proxy but survives without one', () => {
+  assert.equal(X.sourceFor('preview', 'blob:original', 'blob:proxy'), 'blob:proxy');
+  assert.equal(X.sourceFor('preview', 'blob:original', undefined), 'blob:original');
+});
+await t('every export path re-points at originals and restores after', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const stepped = src.slice(src.indexOf('async exportMP4Stepped'));
+  assert.ok(/this\.useOriginalSources\(\)/.test(stepped.slice(0, 2000)), 'stepped export must switch');
+  assert.ok(
+    stepped.slice(0, stepped.indexOf('async exportMP4(')).includes('usePreviewSources'),
+    'stepped export must restore previews',
+  );
+  const rt = src.slice(src.indexOf('async exportMedia'));
+  assert.ok(/this\.useOriginalSources\(\)/.test(rt.slice(0, 1500)), 'real-time export must switch');
+});
+await t('the UI loads a stored proxy and builds one after import', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/db\.getProxy\(/.test(ed), 'must reuse an existing proxy on open');
+  assert.ok(/queueProxyBuilds\(/.test(ed), 'must build proxies after import');
+  assert.ok(/db\.putProxy\(/.test(ed), 'must store what it builds');
+});
+await t('proxy generation bundles no new dependency', () => {
+  const src = readFileSync('src/mayocut/proxy-build.ts', 'utf8');
+  assert.ok(!/from "(?!\.)/.test(src), 'must not import a package');
+  assert.ok(/MediaRecorder/.test(src), 'must use the platform encoder');
+});
+await t('the export dialog shows an estimate before rendering', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/measureThroughput/.test(ed), 'must be able to measure');
+  assert.ok(/exportPlan\.summary/.test(ed), 'must surface the estimate');
+  assert.ok(/planExport/.test(ed), 'must re-plan when fps/res change');
 });
 
 

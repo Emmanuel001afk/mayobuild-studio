@@ -170,6 +170,146 @@ Windows x64 installer; see `docs/mayocut-engine-foundation.md`.
 `media` (items) + `blobs` (files), `projects`, `templates`, `exports`.
 Closing the tab loses nothing; clearing site data is the only “delete all”.
 
+## Editing engine (v0.9 foundation)
+
+The goal is a reliable engine, not a hand-written video codec: decoding is done
+by the platform (browser / Android / desktop), and MayoCut owns everything
+around it.
+
+### One timeline model
+
+`src/mayocut/timeline-resolver.ts` is the single source of truth for "what is
+on screen and in the speakers at time t". It is **pure** — no DOM, no
+AudioContext, no React — so it can be tested in node against real project
+fixtures, and so preview, export and the native ports cannot drift apart.
+
+`resolveComposition(project, t)` returns:
+
+| field | meaning |
+|---|---|
+| `main` | 1 layer, or 2 while a transition runs, each with `src`, `rate`, `alpha`, `gain` |
+| `transition` | kind, 0..1 progress, and both layers |
+| `overlays` | live text / sticker / video / audio overlays with their local time |
+| `audioOverlays` | the audible subset (used by the mixer) |
+| `empty` | nothing visible or audible — an explicit black gap |
+
+`requiredMediaAt(project, t)` lists the media that must be loaded for that
+instant; the transport pre-warms it.
+
+### A playback engine that waits for frames
+
+The transport no longer advances its clock blindly:
+
+- `play()` calls `awaitFrameFor()` first, so the opening frame is decoded
+  before time starts moving (bounded at 700 ms so a bad source cannot hang it).
+- The render loop calls `visibleLayerReady()` each frame. If a visible clip has
+  no decoded frame — typically right after a cut, split or effect forced a seek
+  — the clock **holds** for up to 900 ms and keeps drawing the last good frame.
+  Past that it gives up and plays on.
+- `readinessFor()` / `shouldAdvanceClock()` encode those rules as pure
+  functions with their own tests.
+
+### An export engine on the same model
+
+Export uses the same resolver, and captures only frames it has confirmed:
+
+- `frameReadyAt(t)` seeks and waits for `seeked`/`loadeddata` before drawing.
+- `renderFrameAt(t)` is the primitive for frame-stepped encoding.
+- The GIF path now goes through `frameReadyAt` instead of racing the clock.
+
+**Frame-stepped MP4 is now the default path** (Stage 2). `exportMP4Stepped`
+walks the timeline one output frame at a time:
+
+```
+for f in 0..totalFrames:
+  t = f / fps
+  await frameReadyAt(t)   # seeks + waits for the decoder
+  draw()
+  encode(canvas, timestamp = f * frameDurationUs)
+```
+
+Wall-clock is irrelevant, so a slow phone produces the *same file* as a fast
+laptop — just later. No dropped frames, no half-seeked blanks, no audio drift.
+
+Audio is rendered **offline and up front** (`renderOfflineAudioTrack` →
+`scheduleOfflineAudio`), using `mainClipGain` from the resolver. That is why a
+muted clip, a transition crossfade or an extracted-and-muted source sounds in
+the file exactly as it does in the preview. The old real-time recorder sampled a
+live audio graph and had no such guarantee.
+
+Fallbacks, in order:
+1. `exportMP4Stepped` — frame-accurate H.264 + AAC (needs WebCodecs).
+2. `exportMP4` — real-time WebCodecs, still muxes audio.
+3. `exportMedia` — real-time `MediaRecorder` (WebM).
+
+Only the first is frame-accurate. WebM has no frame-stepped path yet.
+
+### Measuring before promising (Stage 3)
+
+Frame-stepping is *correct*, but correct is not the same as fast, and a phone is
+not a laptop. Rather than guess, the export dialog measures:
+
+- `measureThroughput(sampleFrames = 12)` renders a handful of real frames
+  through the same encode path and times them. It runs against the live
+  preview and restores the playhead afterwards.
+- `recordThroughput()` turns that into frames/second; `planSteppedExport()`
+  scales it by output pixel area to produce a time estimate.
+- With no measurement the plan is still shown, but flagged `heuristic: true`
+  and worded "roughly" — a documented 12 fps at 1080p guess, never presented
+  as a measurement.
+- `chooseStrategy()` keeps the accurate path until an export would take more
+  than **6× real time**; only then does it prefer the real-time recorder. Below
+  that, a slow-but-correct export beats a fast-but-wrong one.
+
+The point is that "fast enough" is a claim about a specific device, so the app
+makes the measurement instead of the README making the claim.
+
+### Proxy media (Stage 3)
+
+A 4K phone clip costs a full decode per seek. Proxies fix the scrubbing without
+touching the output:
+
+- `proxy.ts` (pure policy) decides *whether* a proxy is worth building: source
+  taller than 720p, or — when the height is unknown — a file over 80 MB.
+  `proxySize()` computes an even-dimension 720p-class size for the same aspect.
+- `proxy-build.ts` builds it using only the platform: a detached `<video>`
+  decodes, a canvas downscales, `MediaRecorder` re-encodes to VP9/VP8 WebM.
+  No library, no bundled codec. Any failure returns `null` and the original is
+  used unchanged.
+- Proxies are stored beside the original (`proxy_<mediaId>` in the existing
+  `blobs` store — no schema migration) and built **after** import finishes, so
+  they never delay the moment footage appears.
+- **The one rule:** `sourceFor("export", …)` always returns the original.
+  `exportMP4Stepped`, `exportMP4` and `exportMedia` each call
+  `useOriginalSources()` before capturing and `usePreviewSources()` in their
+  `finally`, so a low-resolution proxy cannot reach a delivered file. A proxy
+  that fails to decode on preview falls back to the original rather than
+  declaring the media unplayable.
+
+### Platform split
+
+The resolver and the Project JSON are the contract between platforms:
+
+- **web** — TypeScript, `Engine` renders to canvas, WebAudio for sound.
+- **Android / desktop (Electron)** — can run the same JSON through a native
+  renderer; they are *not* limited to what the browser exposes.
+
+A native engine is a separate stage. Anything bundled for it needs its licences
+reviewed (decoders are usually LGPL/GPL or patent-encumbered, unlike the
+current stack, which uses only the platform's own decoders).
+
+### What is NOT done yet
+
+- A measurement on a real low-end phone. `measureThroughput` exists and the UI
+  uses it, but no hardware run has been recorded — so no "fast enough" claim is
+  made anywhere in this document.
+- Frame-stepping for WebM. Only the MP4 path is frame-accurate.
+- Proxy generation is best-effort and single-file; it does not yet run in a
+  worker, so a large import queue can still warm the device.
+- Real-video integration fixtures: the audit runs against synthetic Project
+  fixtures, not actual sample files.
+- No native shell exists yet.
+
 ## AI policy
 
 By design the editor has **no dependency on AI or on the network**:

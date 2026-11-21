@@ -30,8 +30,9 @@ import { tts } from "../tts";
 import { can, device } from "../device";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { importLut, loadAllLuts } from "../luts";
-import { db } from "../idb";
-import { Engine, FILTER_PRESETS, mp4Supported, pickMime } from "../engine";
+import { db, requestPersistentStorage } from "../idb";
+import { buildProxy, canBuildProxy } from "../proxy-build";
+import { Engine, FILTER_PRESETS, exportBlocker, mp4Supported, pickMime } from "../engine";
 import {
   ASPECTS,
   DEFAULT_ADJUST,
@@ -71,12 +72,19 @@ type ExportFmt = "auto" | "mp4" | "webm" | "gif" | "png" | "wav";
 type NativeExportBridge = {
   nativeStatus: () => Promise<{ available: boolean; bundled: boolean }>;
   nativeCheckProject: (project: Project) => Promise<{ supported: boolean; reason?: string }>;
-  nativeExport: (payload: { project: Project; name: string; options: { width: number; height: number; fps: number; kbps: number }; sources: { id: string; data: Uint8Array }[] }) => Promise<{ canceled: boolean; size?: number }>;
+  nativeExport: (payload: {
+    project: Project;
+    name: string;
+    options: { width: number; height: number; fps: number; kbps: number };
+    sources: { id: string; data: Uint8Array }[];
+  }) => Promise<{ canceled: boolean; size?: number }>;
 };
 function nativeExportBridge(): NativeExportBridge | null {
   if (typeof window === "undefined") return null;
   const bridge = (window as unknown as { mayocut?: Partial<NativeExportBridge> }).mayocut;
-  return bridge?.nativeStatus && bridge.nativeCheckProject && bridge.nativeExport ? bridge as NativeExportBridge : null;
+  return bridge?.nativeStatus && bridge.nativeCheckProject && bridge.nativeExport
+    ? (bridge as NativeExportBridge)
+    : null;
 }
 
 const EXPORT_FORMATS: { id: ExportFmt; label: string; need?: "mp4" | null; note?: string }[] = [
@@ -111,6 +119,44 @@ const EMPTY_PROJECT: Project = {
  *  (or off-screen), leaving only the editing area visible. Short viewports
  *  always get the mobile layout, with a compact timeline/tab bar in landscape.
  */
+/**
+ * Build preview proxies for freshly imported footage, one at a time, off the
+ * interactive path.
+ *
+ * Photograph-quality phone footage (4K, high bitrate) is the main cause of a
+ * laggy scrub, so it is worth a background re-encode — but never at the cost of
+ * the import itself. Each proxy is stored beside its original and only ever
+ * used for preview; exports re-point at the original first.
+ */
+function queueProxyBuilds(
+  items: {
+    id: string;
+    kind: string;
+    width?: number;
+    height?: number;
+    duration?: number;
+    size?: number;
+  }[],
+  onBuilt?: (mediaId: string, proxy: Blob) => void,
+) {
+  if (!canBuildProxy() || !items.length) return;
+  void (async () => {
+    for (const item of items) {
+      try {
+        if (await db.getProxy(item.id)) continue; // already built
+        const blob = await db.getBlob(item.id);
+        if (!blob) continue;
+        const built = await buildProxy(blob, item);
+        if (!built) continue;
+        await db.putProxy(item.id, built.blob);
+        onBuilt?.(item.id, built.blob);
+      } catch {
+        /* a proxy is an optimisation; never surface its failure */
+      }
+    }
+  })();
+}
+
 function useIsMobile() {
   const [m, setM] = useState(() =>
     typeof window !== "undefined"
@@ -163,11 +209,20 @@ export function Editor({
   const [exportProgress, setExportProgress] = useState(0);
   const [showExport, setShowExport] = useState(false);
   const [nativeExportSelected, setNativeExportSelected] = useState(false);
-  const [nativeExportInfo, setNativeExportInfo] = useState<{ available: boolean; supported: boolean; bundled?: boolean; reason?: string } | null>(null);
+  const [nativeExportInfo, setNativeExportInfo] = useState<{
+    available: boolean;
+    supported: boolean;
+    bundled?: boolean;
+    reason?: string;
+  } | null>(null);
   const [exportFmt, setExportFmt] = useState<ExportFmt>("auto");
   const [exportFps, setExportFps] = useState(30);
   const [exportKbps, setExportKbps] = useState(8000);
   const [exportRes, setExportRes] = useState<1 | 2>(1);
+  // Measured render speed for THIS device, so the export dialog can show an
+  // honest time estimate before a long render starts.
+  const [exportPlan, setExportPlan] = useState<ReturnType<Engine["planExport"]> | null>(null);
+  const [planning, setPlanning] = useState(false);
   const [previewQuality, setPreviewQuality] = useState<"auto" | "540" | "720" | "1080">("auto");
   const devProfile = device(); // memoized; drives export/feature gating
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
@@ -225,6 +280,9 @@ export function Editor({
 
   useEffect(() => {
     let alive = true;
+    // Ask for durable storage before importing anything, so a large clip is
+    // not silently evicted the next time the app is closed.
+    void requestPersistentStorage();
     (async () => {
       try {
         const [p, m] = await Promise.all([db.getProject(projectId), db.listMedia()]);
@@ -257,13 +315,24 @@ export function Editor({
     if (!showExport || !project || !bridge) return;
     let alive = true;
     setNativeExportInfo(null);
-    void Promise.all([bridge.nativeStatus(), bridge.nativeCheckProject(project)]).then(([status, check]) => {
-      if (alive) {
-        setNativeExportInfo({ available: status.available, bundled: status.bundled, supported: check.supported, reason: check.reason });
-        if (!status.available || !check.supported) setNativeExportSelected(false);
-      }
-    }).catch(() => { if (alive) setNativeExportInfo({ available: false, supported: false }); });
-    return () => { alive = false; };
+    void Promise.all([bridge.nativeStatus(), bridge.nativeCheckProject(project)])
+      .then(([status, check]) => {
+        if (alive) {
+          setNativeExportInfo({
+            available: status.available,
+            bundled: status.bundled,
+            supported: check.supported,
+            reason: check.reason,
+          });
+          if (!status.available || !check.supported) setNativeExportSelected(false);
+        }
+      })
+      .catch(() => {
+        if (alive) setNativeExportInfo({ available: false, supported: false });
+      });
+    return () => {
+      alive = false;
+    };
   }, [showExport, project]);
 
   // ------------------------------------------------------------- engine
@@ -296,7 +365,11 @@ export function Editor({
         if (!item) continue;
         const blob = await db.getBlob(id);
         if (!alive) return;
-        if (blob) eng.attachUrl(id, URL.createObjectURL(blob));
+        if (!blob) continue;
+        eng.attachUrl(id, URL.createObjectURL(blob));
+        const proxy = await db.getProxy(id);
+        if (!alive) return;
+        if (proxy) eng.attachProxy(id, URL.createObjectURL(proxy));
       }
       if (!alive) return;
       setEngineReady(true);
@@ -507,7 +580,10 @@ export function Editor({
       return false;
     }
     const ok = mutateVoid((e) => e.splitAt(e.t));
-    if (!ok) toast.info("Place the playhead inside a clip. Freeze frames and variable-speed clips cannot be split yet.");
+    if (!ok)
+      toast.info(
+        "Place the playhead inside a clip. Freeze frames and variable-speed clips cannot be split yet.",
+      );
     return ok;
   }, [mutateVoid]);
 
@@ -539,12 +615,15 @@ export function Editor({
     setSelection(sel);
     const eng = engineRef.current;
     if (!eng || !sel) return;
-    const span = sel.lane === "main"
-      ? mainSpans(eng.project).find((s) => s.clip.id === sel.id)
-      : (() => {
-          const clip = eng.project.tracks.find((tr) => tr.id === sel.trackId)?.clips.find((c) => c.id === sel.id);
-          return clip ? { start: clip.start, end: clip.start + clip.duration } : undefined;
-        })();
+    const span =
+      sel.lane === "main"
+        ? mainSpans(eng.project).find((s) => s.clip.id === sel.id)
+        : (() => {
+            const clip = eng.project.tracks
+              .find((tr) => tr.id === sel.trackId)
+              ?.clips.find((c) => c.id === sel.id);
+            return clip ? { start: clip.start, end: clip.start + clip.duration } : undefined;
+          })();
     if (span && (eng.t < span.start || eng.t >= span.end)) eng.seek(span.start);
   }, []);
 
@@ -904,8 +983,16 @@ export function Editor({
       toast.info("Extract audio works on video clips");
       return;
     }
-    if (clip.reverse || clip.freeze || clip.speed !== 1 || clip.rampTo != null || (clip.curve?.length ?? 0) >= 2) {
-      toast.error("Extract audio currently requires a normal-speed, forward video clip. Reset its speed first.");
+    if (
+      clip.reverse ||
+      clip.freeze ||
+      clip.speed !== 1 ||
+      clip.rampTo != null ||
+      (clip.curve?.length ?? 0) >= 2
+    ) {
+      toast.error(
+        "Extract audio currently requires a normal-speed, forward video clip. Reset its speed first.",
+      );
       return;
     }
     if (media.duration != null && media.duration > 15 * 60) {
@@ -978,7 +1065,9 @@ export function Editor({
         toast.error("No media could be read from those files");
         return;
       }
-      await Promise.all(items.map((item, index) => db.putMedia(item, accepted[index])));
+      // pair by the item's own sourceFile — never by array index, which
+      // drifts as soon as one file is skipped and stores the wrong bytes
+      await Promise.all(items.map(({ sourceFile, ...item }) => db.putMedia(item, sourceFile)));
       const all = await db.listMedia();
       setMedia(all);
       engineRef.current?.setMedia(all);
@@ -987,6 +1076,13 @@ export function Editor({
         const blob = await db.getBlob(item.id);
         if (blob) engineRef.current?.attachUrl(item.id, URL.createObjectURL(blob));
       }
+      // Proxy building waits until the import has visibly finished, so a 4K
+      // clip never delays the moment the user sees their footage. It is
+      // best-effort: a phone with no spare CPU simply keeps the original.
+      queueProxyBuilds(
+        items.filter((item) => item.kind === "video" && !item.unplayable),
+        (mediaId, proxy) => engineRef.current?.attachProxy(mediaId, URL.createObjectURL(proxy)),
+      );
       const badVideos = items.filter((item) => item.kind === "video" && item.unplayable);
       const badImages = items.filter((item) => item.kind === "image" && item.unplayable);
       toast.success(`Added ${items.length} media item${items.length === 1 ? "" : "s"}`);
@@ -1098,7 +1194,9 @@ export function Editor({
       try {
         const blob = await db.getBlob(item.id);
         if (!blob) {
-          toast.error("The original media file is missing from this device. Please import it again.");
+          toast.error(
+            "The original media file is missing from this device. Please import it again.",
+          );
           return;
         }
         if (engineRef.current !== eng) return;
@@ -1162,51 +1260,82 @@ export function Editor({
     if (clip) setSelection({ lane: "overlay", trackId: "t_text", id: clip.id });
   }
 
+  /**
+   * The main clip an apply-action should target.
+   *
+   * Falls back to whatever is under the playhead (CapCut's behaviour) instead
+   * of refusing to do anything, and selects it so the user sees what changed.
+   */
+  function targetMainClipId(): string | null {
+    const eng = engineRef.current;
+    if (!eng) return null;
+    if (selection?.lane === "main") {
+      const sel = eng.project.main.find((c) => c.id === selection.id);
+      if (sel) return sel.id;
+    }
+    const spans = mainSpans(eng.project);
+    const hit = spans.find((sp) => eng.t >= sp.start && eng.t < sp.end);
+    if (hit) {
+      setSelection({ lane: "main", id: hit.clip.id });
+      return hit.clip.id;
+    }
+    const first = eng.project.main[0];
+    if (first) {
+      setSelection({ lane: "main", id: first.id });
+      return first.id;
+    }
+    return null;
+  }
+
   function applyMainEffect(effect: EffectId) {
-    if (selection?.lane !== "main") {
-      toast.info("Select a main-track video clip first");
+    const id = targetMainClipId();
+    if (!id) {
+      toast.info("Add a clip to the timeline first, then choose an effect");
       return;
     }
     const changed = mutateVoid((eng) => {
-      const clip = eng.project.main.find((item) => item.id === selection.id);
+      const clip = eng.project.main.find((item) => item.id === id);
       if (!clip) return false;
       clip.effect = effect;
     });
-    if (changed) toast.success("Effect applied to selected clip");
+    if (changed) toast.success("Effect applied to the clip under the playhead");
   }
 
   /** Merge one clip-adjust change (used by the Adjust tab's live sliders). */
   function applyAdjust(patch: Partial<FilterAdjust>, replace = false) {
-    if (selection?.lane !== "main") {
-      toast.info("Select a main-track video clip first");
+    const id = targetMainClipId();
+    if (!id) {
+      toast.info("Add a clip to the timeline first, then adjust it");
       return;
     }
     mutateVoid((eng) => {
-      const clip = eng.project.main.find((item) => item.id === selection.id);
+      const clip = eng.project.main.find((item) => item.id === id);
       if (!clip) return false;
       clip.adjust = replace ? { ...DEFAULT_ADJUST } : { ...clip.adjust, ...patch };
     });
   }
 
   function applyMainFilter(filter: string) {
-    if (selection?.lane !== "main") {
-      toast.info("Select a main-track video clip first");
+    const id = targetMainClipId();
+    if (!id) {
+      toast.info("Add a clip to the timeline first, then choose a filter");
       return;
     }
     mutateVoid((eng) => {
-      const clip = eng.project.main.find((item) => item.id === selection.id);
+      const clip = eng.project.main.find((item) => item.id === id);
       if (!clip) return false;
       clip.filter = filter;
     });
   }
 
   function applyMainTransition(kind: TransitionKind) {
-    if (selection?.lane !== "main") {
-      toast.info("Select a main-track clip to set its incoming transition");
+    const id = targetMainClipId();
+    if (!id) {
+      toast.info("Add a second clip first — a transition needs something to cut from");
       return;
     }
     const changed = mutateVoid((eng) => {
-      const index = eng.project.main.findIndex((item) => item.id === selection.id);
+      const index = eng.project.main.findIndex((item) => item.id === id);
       const clip = eng.project.main[index];
       if (!clip || index === 0) return false;
       clip.transitionIn = kind;
@@ -1400,9 +1529,17 @@ export function Editor({
           { id: uid("exp"), name, size: blob.size, createdAt: Date.now(), mime: blob.type },
           blob,
         )
-        .catch(() => { savedToLibrary = false; });
-      if (savedToLibrary) toast.success(`Export ready (${ext.toUpperCase()}) — check downloads or the export library`);
-      else toast.warning("Export is ready for download, but could not be saved in the local export library. Check device storage.");
+        .catch(() => {
+          savedToLibrary = false;
+        });
+      if (savedToLibrary)
+        toast.success(
+          `Export ready (${ext.toUpperCase()}) — check downloads or the export library`,
+        );
+      else
+        toast.warning(
+          "Export is ready for download, but could not be saved in the local export library. Check device storage.",
+        );
     };
     const baseName = eng.project.name.replace(/[^\w\- ]+/g, "").trim() || "mayocut";
 
@@ -1411,7 +1548,9 @@ export function Editor({
     if (nativeExportSelected && (exportFmt === "auto" || exportFmt === "mp4")) {
       const bridge = nativeExportBridge();
       if (!bridge || !nativeExportInfo?.available || !nativeExportInfo.supported) {
-        toast.error("Native export is not available for this project. Choose the standard exporter.");
+        toast.error(
+          "Native export is not available for this project. Choose the standard exporter.",
+        );
         return;
       }
       setExporting(true);
@@ -1419,26 +1558,41 @@ export function Editor({
       try {
         const snapshot = makeRenderPlan(eng.project).project;
         const check = await bridge.nativeCheckProject(snapshot);
-        if (!check.supported) throw new Error(check.reason ?? "This project is not supported by native export");
-        const ids = [...new Set([
-          ...snapshot.main.map((c) => c.mediaId),
-          ...snapshot.tracks.flatMap((track) => track.clips.map((c) => c.mediaId).filter((id): id is string => !!id)),
-        ])];
+        if (!check.supported)
+          throw new Error(check.reason ?? "This project is not supported by native export");
+        const ids = [
+          ...new Set([
+            ...snapshot.main.map((c) => c.mediaId),
+            ...snapshot.tracks.flatMap((track) =>
+              track.clips.map((c) => c.mediaId).filter((id): id is string => !!id),
+            ),
+          ]),
+        ];
         const sources: { id: string; data: Uint8Array }[] = [];
         let total = 0;
         for (const id of ids) {
           const item = media.find((m) => m.id === id);
-          if (!item || (item.kind !== "video" && item.kind !== "audio")) throw new Error("Native export requires available video or audio sources");
+          if (!item || (item.kind !== "video" && item.kind !== "audio"))
+            throw new Error("Native export requires available video or audio sources");
           const blob = await db.getBlob(id);
           if (!blob) throw new Error(`Source media is missing: ${item.name}`);
           total += blob.size;
-          if (total > 512 * 1024 * 1024) throw new Error("Native export supports up to 512 MB of source media");
+          if (total > 512 * 1024 * 1024)
+            throw new Error("Native export supports up to 512 MB of source media");
           sources.push({ id, data: new Uint8Array(await blob.arrayBuffer()) });
         }
         const size = ASPECTS[snapshot.aspect];
-        const result = await bridge.nativeExport({ project: snapshot, name: baseName, options: {
-          width: size.w * exportRes, height: size.h * exportRes, fps: exportFps, kbps: exportKbps,
-        }, sources });
+        const result = await bridge.nativeExport({
+          project: snapshot,
+          name: baseName,
+          options: {
+            width: size.w * exportRes,
+            height: size.h * exportRes,
+            fps: exportFps,
+            kbps: exportKbps,
+          },
+          sources,
+        });
         if (!result.canceled) toast.success("Native MP4 saved to the location you selected");
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Native export failed");
@@ -1519,9 +1673,33 @@ export function Editor({
     setExporting(true);
     setExportProgress(0);
     try {
-      toast.info("Export runs in real time — keep this window open");
       let blob: Blob;
-      if (wantMp4 && canMp4) {
+      let stepped = wantMp4 && canMp4 ? await eng.canExportStepped() : false;
+      if (stepped) {
+        // A device slow enough that frame-stepping would take many times real
+        // time is better served by the real-time recorder. Measure once (or
+        // reuse the number the dialog already showed) before committing.
+        let plan = exportPlan;
+        if (!plan) {
+          try {
+            plan = await eng.measureThroughput();
+          } catch {
+            plan = null;
+          }
+        }
+        if (plan && plan.strategy === "realtime") {
+          stepped = false;
+          toast.info("This device is slow at frame-by-frame rendering — exporting in real time");
+        }
+      }
+      if (stepped) {
+        // Frame-stepped: every frame is confirmed before it is encoded, so the
+        // result matches the preview exactly. Slower than real time on a weak
+        // device but never drops or blanks a frame.
+        toast.info("Rendering frame by frame — keep this window open");
+        blob = await eng.exportMP4Stepped(opts, (p) => setExportProgress(p));
+      } else if (wantMp4 && canMp4) {
+        toast.info("Export runs in real time — keep this window open");
         try {
           blob = await eng.exportMP4(opts, (p) => setExportProgress(p));
         } catch (e) {
@@ -1544,6 +1722,33 @@ export function Editor({
       setExporting(false);
       setShowExport(false);
     }
+  }
+
+  /**
+   * Measure this device's real render speed, once, so the export dialog can say
+   * "about 40 seconds" instead of guessing. Runs a short probe against the live
+   * preview; the plan it returns is refreshed when fps or resolution changes.
+   */
+  async function measureExportSpeed() {
+    const eng = engineRef.current;
+    if (!eng || planning || exporting) return;
+    setPlanning(true);
+    try {
+      const plan = await eng.measureThroughput();
+      if (plan) setExportPlan(eng.planExport({ fps: exportFps, scale: exportRes }));
+    } catch {
+      /* an estimate is optional; the export still works without one */
+    } finally {
+      setPlanning(false);
+    }
+  }
+
+  // Keep the estimate in step with the chosen fps/resolution, using the last
+  // measurement. No probing happens here — only arithmetic.
+  function refreshPlan(res: 1 | 2, fps = exportFps) {
+    const eng = engineRef.current;
+    if (!eng || !exportPlan) return;
+    setExportPlan(eng.planExport({ fps, scale: res }));
   }
 
   function saveAsTemplate() {
@@ -1570,10 +1775,12 @@ export function Editor({
       (tpl.project as Project & { __mediaNames?: Record<string, string> }).__mediaNames = names;
       await db.saveTemplate(tpl);
       toast.success("Template saved — find it in the template gallery");
-    })().catch((error) => {
-      console.error("Template save failed", error);
-      toast.error("Could not save the template — check device storage");
-    }).finally(() => setSavingTemplate(false));
+    })()
+      .catch((error) => {
+        console.error("Template save failed", error);
+        toast.error("Could not save the template — check device storage");
+      })
+      .finally(() => setSavingTemplate(false));
   }
 
   function exportTemplateJson() {
@@ -1652,10 +1859,15 @@ export function Editor({
   // The existing backend shares one media element per source. Overlapping
   // instances may compete for its seek position until per-clip decoders ship.
   const sourceConflicts = useMemo(
-    () => project ? findSharedSourceConflicts(project, new Map(media.map((item) => [item.id, item.kind]))) : [],
+    () =>
+      project
+        ? findSharedSourceConflicts(project, new Map(media.map((item) => [item.id, item.kind])))
+        : [],
     [project, media],
   );
-  const conflictAtPlayhead = sourceConflicts.some((conflict) => t >= conflict.start && t < conflict.end);
+  const conflictAtPlayhead = sourceConflicts.some(
+    (conflict) => t >= conflict.start && t < conflict.end,
+  );
 
   // main clips that will export as audio-over-black on this device
   const unplayableMainCount = (project?.main ?? []).filter((c) => {
@@ -2270,13 +2482,20 @@ export function Editor({
         />
       </div>
       {buffering && !brokenAtPlayhead && (
-        <div role="status" className="absolute bottom-2 left-2 rounded bg-black/75 text-white px-2 py-1 text-xs pointer-events-none">
+        <div
+          role="status"
+          className="absolute bottom-2 left-2 rounded bg-black/75 text-white px-2 py-1 text-xs pointer-events-none"
+        >
           Preparing video…
         </div>
       )}
       {conflictAtPlayhead && !brokenAtPlayhead && (
-        <div role="status" className="absolute bottom-2 inset-x-2 bg-amber-950/90 text-amber-100 rounded px-2 py-1 text-xs pointer-events-none">
-          Overlapping uses of the same source may not play correctly. Remove the transition or use a separate copy of the media.
+        <div
+          role="status"
+          className="absolute bottom-2 inset-x-2 bg-amber-950/90 text-amber-100 rounded px-2 py-1 text-xs pointer-events-none"
+        >
+          Overlapping uses of the same source may not play correctly. Remove the transition or use a
+          separate copy of the media.
         </div>
       )}
       {brokenAtPlayhead && (
@@ -2573,6 +2792,35 @@ export function Editor({
    * Speed / Animation) rather than one long scroll; the tab strip jumps to the
    * matching section so the same sections are reused, not duplicated.
    */
+  /**
+   * Jump the inspector to a section.
+   *
+   * Two bugs were making tabs feel dead:
+   *  - `scrollIntoView` scrolls the nearest scrollable ANCESTOR, which on a
+   *    phone could be the page instead of the panel (so the sheet jumped but
+   *    the content did not move to the section);
+   *  - the section for a tab may only exist after this render, so the query
+   *    ran before it was in the DOM and silently matched nothing.
+   * Now we move the panel's own scrollTop, on the next frame.
+   */
+  const jumpToInspectorSection = (id: string) => {
+    setInspectorTab(id);
+    requestAnimationFrame(() => {
+      const body = inspectorBodyRef.current;
+      if (!body) return;
+      const el = body.querySelector<HTMLElement>(`[data-sec~="${id}"]`);
+      if (!el) {
+        // nothing for this tab on this selection — say so instead of no-oping
+        toast.info(
+          `No ${id} settings for this clip. Pick a ${id === "audio" ? "audio or clip" : "clip"} on the timeline.`,
+        );
+        return;
+      }
+      const top = el.getBoundingClientRect().top - body.getBoundingClientRect().top;
+      body.scrollTo({ top: Math.max(0, body.scrollTop + top - 4), behavior: "smooth" });
+    });
+  };
+
   const INSPECTOR_TABS = [
     { id: "video", label: "Video" },
     { id: "audio", label: "Audio" },
@@ -2581,33 +2829,23 @@ export function Editor({
     { id: "adjust", label: "Adjust" },
   ];
   const inspectorTabs = (
-      <div className="shrink-0 border-b border-border flex items-stretch overflow-x-auto no-scrollbar">
-        {INSPECTOR_TABS.map((tb) => {
-          const on = inspectorTab === tb.id;
-          return (
-            <button
-              key={tb.id}
-              onClick={() => {
-                setInspectorTab(tb.id);
-                // scroll the matching section into view inside the inspector body
-                const el = inspectorBodyRef.current?.querySelector<HTMLElement>(
-                  `[data-sec~="${tb.id}"]`,
-                );
-                if (el) el.scrollIntoView({ block: "start", behavior: "smooth" });
-                else toast.info("This section is not available for the selected clip");
-              }}
-              className={`relative flex-1 shrink-0 py-1.5 text-[10px] transition-colors ${
-                on ? "text-cyan-300" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {tb.label}
-              {on && (
-                <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-cyan-400" />
-              )}
-            </button>
-          );
-        })}
-      </div>
+    <div className="shrink-0 border-b border-border flex items-stretch overflow-x-auto no-scrollbar">
+      {INSPECTOR_TABS.map((tb) => {
+        const on = inspectorTab === tb.id;
+        return (
+          <button
+            key={tb.id}
+            onClick={() => jumpToInspectorSection(tb.id)}
+            className={`relative flex-1 shrink-0 py-1.5 text-[10px] transition-colors ${
+              on ? "text-cyan-300" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tb.label}
+            {on && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-cyan-400" />}
+          </button>
+        );
+      })}
+    </div>
   );
   const inspectorPanel = (
     <div className="w-64 md:w-80 border-l border-border shrink-0 flex flex-col min-h-0 bg-card/40">
@@ -2751,16 +2989,19 @@ export function Editor({
   const bottomSheets = (
     <>
       <Drawer open={sheet === "media"} onClose={() => setSheet(null)}>
-        <DrawerContent className="max-h-[80dvh]">
-          <DrawerHeader className="p-3 pb-2 text-left">
+        <DrawerContent className="max-h-[85dvh] flex flex-col overflow-hidden">
+          <DrawerHeader className="p-3 pb-2 text-left shrink-0">
             <DrawerTitle className="text-sm">Media library</DrawerTitle>
           </DrawerHeader>
-          <div className="flex-1 min-h-0 overflow-hidden pb-6">{libraryNode}</div>
+          {/* the ONE scrolling region — must be a flex child of a flex parent */}
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+            {libraryNode}
+          </div>
         </DrawerContent>
       </Drawer>
       <Drawer open={sheet === "tune"} onClose={() => setSheet(null)}>
-        <DrawerContent className="max-h-[82dvh]">
-          <DrawerHeader className="p-3 pb-2 text-left">
+        <DrawerContent className="max-h-[88dvh] flex flex-col overflow-hidden">
+          <DrawerHeader className="p-3 pb-2 text-left shrink-0">
             <DrawerTitle className="text-sm">
               {selection ? "Tune the selected clip" : "Tune"}
             </DrawerTitle>
@@ -2771,7 +3012,12 @@ export function Editor({
             </span>
           </DrawerHeader>
           {inspectorTabs}
-          <div ref={inspectorBodyRef} className="min-h-0 overflow-y-auto px-3 pb-8">{renderInspector()}</div>
+          <div
+            ref={inspectorBodyRef}
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 pb-[max(2rem,env(safe-area-inset-bottom))]"
+          >
+            {renderInspector()}
+          </div>
         </DrawerContent>
       </Drawer>
     </>
@@ -2932,6 +3178,14 @@ export function Editor({
                 </button>
               )}
             </div>
+            {exportBlocker() && (
+              <div className="mt-3 rounded border border-amber-400/40 bg-amber-400/10 text-amber-200 text-[11px] leading-snug px-2.5 py-2">
+                ⚠ Video export can't run here: {exportBlocker()}
+                <div className="mt-1 text-amber-200/70">
+                  You can still export the current frame as PNG, or the audio as WAV.
+                </div>
+              </div>
+            )}
             <div className="mt-4 space-y-3 text-sm">
               <div>
                 <div className="text-muted-foreground text-xs mb-1">Format</div>
@@ -2972,16 +3226,28 @@ export function Editor({
               {nativeExportBridge() && (
                 <div className="rounded border border-border p-2 text-xs space-y-1">
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={nativeExportSelected}
-                      disabled={!nativeExportInfo?.available || !nativeExportInfo?.supported || (exportFmt !== "auto" && exportFmt !== "mp4")}
-                      onChange={(e) => setNativeExportSelected(e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      checked={nativeExportSelected}
+                      disabled={
+                        !nativeExportInfo?.available ||
+                        !nativeExportInfo?.supported ||
+                        (exportFmt !== "auto" && exportFmt !== "mp4")
+                      }
+                      onChange={(e) => setNativeExportSelected(e.target.checked)}
+                    />
                     Native desktop MP4 (experimental)
                   </label>
                   <p className="text-muted-foreground">
-                    {!nativeExportInfo ? "Checking native export…" : !nativeExportInfo.available
-                      ? nativeExportInfo.bundled ? "The bundled media tools could not be started. Reinstall the desktop app, or use the standard exporter." : "Native export is not available on this platform; use the standard exporter."
-                      : !nativeExportInfo.supported ? nativeExportInfo.reason
-                      : "For simple video cuts and audio tracks. Saves to a location you choose; the standard exporter remains available."}
+                    {!nativeExportInfo
+                      ? "Checking native export…"
+                      : !nativeExportInfo.available
+                        ? nativeExportInfo.bundled
+                          ? "The bundled media tools could not be started. Reinstall the desktop app, or use the standard exporter."
+                          : "Native export is not available on this platform; use the standard exporter."
+                        : !nativeExportInfo.supported
+                          ? nativeExportInfo.reason
+                          : "For simple video cuts and audio tracks. Saves to a location you choose; the standard exporter remains available."}
                   </p>
                 </div>
               )}
@@ -3040,7 +3306,10 @@ export function Editor({
                   <div className="flex gap-1.5">
                     <button
                       className={`text-xs border rounded px-2 py-1 ${exportRes === 1 ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
-                      onClick={() => setExportRes(1)}
+                      onClick={() => {
+                        setExportRes(1);
+                        refreshPlan(1);
+                      }}
                     >
                       {ASPECTS[project.aspect].w}×{ASPECTS[project.aspect].h}
                     </button>
@@ -3054,7 +3323,10 @@ export function Editor({
                           : undefined
                       }
                       disabled={devProfile.limits.exportMaxScale < 2}
-                      onClick={() => setExportRes(2)}
+                      onClick={() => {
+                        setExportRes(2);
+                        refreshPlan(2);
+                      }}
                     >
                       4K · {ASPECTS[project.aspect].w * 2}×{ASPECTS[project.aspect].h * 2}
                     </button>
@@ -3072,7 +3344,44 @@ export function Editor({
                 </p>
               )}
               <Row k="Length" v={fmtTime(dur)} />
-              <Row k="Speed" v={nativeExportSelected && (exportFmt === "auto" || exportFmt === "mp4") ? "Native render — keep this window open" : "Real-time render — keep this window open"} />
+              {nativeExportSelected && (exportFmt === "auto" || exportFmt === "mp4") && (
+                <Row k="Speed" v="Native render — keep this window open" />
+              )}
+              {exportPlan ? (
+                <div className="rounded border border-border bg-white/[0.03] px-2.5 py-2 text-[11px] leading-snug">
+                  <div className="font-medium text-foreground">
+                    {exportPlan.summary}
+                    {exportPlan.heuristic && (
+                      <span className="text-muted-foreground"> (roughly — not measured yet)</span>
+                    )}
+                  </div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <button
+                      className="border border-border rounded px-1.5 py-0.5 hover:border-white/40 disabled:opacity-50"
+                      onClick={() => void measureExportSpeed()}
+                      disabled={planning}
+                    >
+                      {planning ? "Measuring…" : "Re-measure"}
+                    </button>
+                    <span className="text-muted-foreground">
+                      {exportPlan.totalFrames} frames · {exportPlan.width}×{exportPlan.height}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2 rounded border border-border px-2.5 py-2 text-[11px]">
+                  <span className="text-muted-foreground">
+                    Time unknown — this device hasn&apos;t rendered before.
+                  </span>
+                  <button
+                    className="shrink-0 border border-border rounded px-1.5 py-0.5 hover:border-white/40 disabled:opacity-50"
+                    onClick={() => void measureExportSpeed()}
+                    disabled={planning}
+                  >
+                    {planning ? "Measuring…" : "Measure speed"}
+                  </button>
+                </div>
+              )}
             </div>
             {exporting ? (
               <div className="mt-5">
@@ -3083,7 +3392,9 @@ export function Editor({
                   />
                 </div>
                 <div className="text-xs text-muted-foreground mt-2 text-center">
-                  {nativeExportSelected && (exportFmt === "auto" || exportFmt === "mp4") ? "Native rendering…" : `Rendering… ${Math.round(exportProgress * 100)}%`}
+                  {nativeExportSelected && (exportFmt === "auto" || exportFmt === "mp4")
+                    ? "Native rendering…"
+                    : `Rendering… ${Math.round(exportProgress * 100)}%`}
                 </div>
               </div>
             ) : (
@@ -3094,15 +3405,18 @@ export function Editor({
             )}
             {sourceConflicts.length > 0 && (
               <p className="text-[11px] text-amber-300/90 mt-3" role="status">
-                {sourceConflicts.length} overlap(s) use the same media at once. The current renderer may show the wrong picture or sound; remove the overlap or import a separate copy before exporting.
+                {sourceConflicts.length} overlap(s) use the same media at once. The current renderer
+                may show the wrong picture or sound; remove the overlap or import a separate copy
+                before exporting.
               </p>
             )}
-            {unplayableMainCount > 0 && !(nativeExportSelected && (exportFmt === "auto" || exportFmt === "mp4")) && (
-              <p className="text-[11px] text-amber-300/90 -mt-1">
-                ⚠ {unplayableMainCount} clip(s) can't be decoded on this device — they will be
-                exported as audio over a black screen.
-              </p>
-            )}
+            {unplayableMainCount > 0 &&
+              !(nativeExportSelected && (exportFmt === "auto" || exportFmt === "mp4")) && (
+                <p className="text-[11px] text-amber-300/90 -mt-1">
+                  ⚠ {unplayableMainCount} clip(s) can't be decoded on this device — they will be
+                  exported as audio over a black screen.
+                </p>
+              )}
             <p className="text-[11px] text-muted-foreground mt-3">
               MP4 (H.264 + AAC) is encoded by the WebCodecs engine — Chrome, Edge and the
               desktop/Android builds. The finished video is saved on this device (downloads + export

@@ -248,6 +248,7 @@ test("WebM export releases owned canvas tracks and restores state when playback 
     (globalThis as any).MediaRecorder = Recorder;
     (globalThis as any).MediaStream = class { constructor(_tracks: unknown[]) {} };
     const engine = new Engine(newProject("export", "16:9"));
+    engine.addMainClip(video);
     const e = engine as any;
     e.canvas = { captureStream: () => ({
       getVideoTracks: () => [{ stop: () => canvasStopped++ }],

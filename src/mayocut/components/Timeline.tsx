@@ -308,11 +308,19 @@ export function Timeline(p: Props) {
                       ? "border-cyan-400 ring-2 ring-cyan-400/60 z-10"
                       : "border-white/15 hover:border-white/40"
                   } cursor-grab active:cursor-grabbing bg-slate-800 ${isDragging ? "opacity-60 ring-2 ring-cyan-300" : ""}`}
-                  style={{ left: s.start * pps, width: Math.max(8, (s.end - s.start) * pps), touchAction: "pan-y" }}
+                  style={{
+                    left: s.start * pps,
+                    width: Math.max(8, (s.end - s.start) * pps),
+                    touchAction: "pan-y",
+                  }}
                   onPointerDown={(e) => {
                     // selecting is the click action; a real drag reorders
                     if (e.pointerType === "touch") {
-                      drag(e, () => {}, () => p.onSelect({ lane: "main", id: s.clip.id }));
+                      drag(
+                        e,
+                        () => {},
+                        () => p.onSelect({ lane: "main", id: s.clip.id }),
+                      );
                     } else {
                       p.onSelect({ lane: "main", id: s.clip.id });
                       beginReorder(e, s.clip.id);
@@ -649,7 +657,11 @@ function OverlayClipBox({
     if (e.pointerType !== "touch") e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
-    const base = { start: clip.start, duration: clip.duration, sourceOffset: clip.sourceOffset ?? 0 };
+    const base = {
+      start: clip.start,
+      duration: clip.duration,
+      sourceOffset: clip.sourceOffset ?? 0,
+    };
     const hasSource = clip.kind === "audio" || clip.kind === "video";
     const rate = clip.kind === "video" ? Math.max(0.05, clip.speed ?? 1) : 1;
     let moved = false;
@@ -674,7 +686,13 @@ function OverlayClipBox({
         return best;
       };
       // vertical drag between lanes (only while moving, once per gesture)
-      if (e.pointerType !== "touch" && mode === "move" && !laneDone && onMoveTrack && Math.abs(ev.clientY - startY) > 30) {
+      if (
+        e.pointerType !== "touch" &&
+        mode === "move" &&
+        !laneDone &&
+        onMoveTrack &&
+        Math.abs(ev.clientY - startY) > 30
+      ) {
         laneDone = true;
         // find a lane that accepts this clip kind (audio ↔ audio only)
         const wantsAudio = clip.kind === "audio";
@@ -703,11 +721,18 @@ function OverlayClipBox({
         const rawStart = Math.max(earliest, Math.min(latest, base.start + d));
         const ns = Math.max(earliest, Math.min(latest, snap(rawStart)));
         const nd = base.duration - (ns - base.start);
-        onPatch({ start: ns, duration: nd,
-          ...(hasSource ? { sourceOffset: Math.max(0, base.sourceOffset + (ns - base.start) * rate) } : {}) });
+        onPatch({
+          start: ns,
+          duration: nd,
+          ...(hasSource
+            ? { sourceOffset: Math.max(0, base.sourceOffset + (ns - base.start) * rate) }
+            : {}),
+        });
       } else {
-        const sourceEnd = hasSource && !clip.loop && mediaDuration != null && mediaDuration > 0
-          ? base.start + Math.max(0, (mediaDuration - base.sourceOffset) / rate) : total;
+        const sourceEnd =
+          hasSource && !clip.loop && mediaDuration != null && mediaDuration > 0
+            ? base.start + Math.max(0, (mediaDuration - base.sourceOffset) / rate)
+            : total;
         const maxEnd = Math.max(base.start + 0.2, Math.min(total, sourceEnd));
         const rawEnd = Math.max(base.start + 0.2, Math.min(maxEnd, base.start + base.duration + d));
         const end = Math.max(base.start + 0.2, Math.min(maxEnd, snap(rawEnd)));
@@ -733,7 +758,11 @@ function OverlayClipBox({
       className={`absolute top-1.5 bottom-1.5 rounded border flex items-center px-1.5 cursor-grab active:cursor-grabbing overflow-hidden ${kindColor} ${
         selected ? "ring-2 ring-cyan-400 z-10" : "hover:border-white/40"
       }`}
-      style={{ left: clip.start * pps, width: Math.max(14, clip.duration * pps), touchAction: "pan-y" }}
+      style={{
+        left: clip.start * pps,
+        width: Math.max(14, clip.duration * pps),
+        touchAction: "pan-y",
+      }}
       onPointerDown={(e) => begin(e, "move")}
       title={`${clip.kind}${clip.text ? `: ${clip.text.slice(0, 30)}` : ""} · ${clip.duration.toFixed(1)}s`}
     >

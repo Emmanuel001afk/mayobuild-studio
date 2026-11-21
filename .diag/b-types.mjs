@@ -497,6 +497,11 @@ function speedCurveOf(c) {
   if (pts[pts.length - 1].at < 1) pts.push({ at: 1, v: pts[pts.length - 1].v });
   return pts;
 }
+function safeSpeed(v) {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.max(0.05, Math.min(100, n));
+}
 function speedAt(c, x) {
   const curve = speedCurveOf(c);
   if (curve) {
@@ -512,16 +517,16 @@ function speedAt(c, x) {
     }
     return curve[curve.length - 1].v;
   }
-  const v0 = Math.max(0.05, c.speed);
-  const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+  const v0 = safeSpeed(c.speed);
+  const v1 = c.rampTo != null ? safeSpeed(c.rampTo) : v0;
   return v0 + (v1 - v0) * clamp(x, 0, 1);
 }
 function distanceAfter(c, L, tau) {
   if (tau <= 0) return 0;
   const curve = speedCurveOf(c);
   if (!curve) {
-    const v0 = Math.max(0.05, c.speed);
-    const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+    const v0 = safeSpeed(c.speed);
+    const v1 = c.rampTo != null ? safeSpeed(c.rampTo) : v0;
     if (Math.abs(v1 - v0) < 1e-9) return Math.min(L, tau * v0);
     const k = (v1 - v0) / L;
     return clamp(v0 / k * (Math.exp(k * tau) - 1), 0, L);
@@ -557,8 +562,8 @@ function distanceAfter(c, L, tau) {
 function timeForDistance(c, L, x) {
   const curve = speedCurveOf(c);
   if (!curve) {
-    const v0 = Math.max(0.05, c.speed);
-    const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+    const v0 = safeSpeed(c.speed);
+    const v1 = c.rampTo != null ? safeSpeed(c.rampTo) : v0;
     if (Math.abs(v1 - v0) < 1e-9) return x / v0;
     const k = (v1 - v0) / L;
     return Math.log(k * x / v0 + 1) / k;
@@ -578,10 +583,13 @@ function timeForDistance(c, L, x) {
   return t;
 }
 function mainClipDuration(c) {
-  if (c.freeze) return Math.max(0.1, c.out - c.in);
-  const L = Math.max(0, c.out - c.in);
+  const srcIn = Number.isFinite(c.in) ? c.in : 0;
+  const srcOut = Number.isFinite(c.out) ? c.out : Math.max(srcIn + 0.1, srcIn + 5);
+  if (c.freeze) return Math.max(0.1, srcOut - srcIn);
+  const L = Math.max(0, srcOut - srcIn);
   if (L <= 0) return 0.1;
-  return Math.max(0.1, timeForDistance(c, L, L));
+  const d = timeForDistance(c, L, L);
+  return Number.isFinite(d) && d > 0 ? Math.max(0.1, d) : Math.max(0.1, L / safeSpeed(c.speed));
 }
 function mainSrcAt(c, localT) {
   if (c.freeze) return c.in + 1 / 60;
@@ -596,14 +604,33 @@ function mainRateAt(c, localT) {
   const L = Math.max(1e-6, c.out - c.in);
   const src = mainSrcAt(c, localT);
   const x = c.reverse ? c.out - src : src - c.in;
-  return Math.max(0.05, speedAt(c, x / L));
+  const r = speedAt(c, x / L);
+  return Number.isFinite(r) && r > 0 ? Math.max(0.05, r) : safeSpeed(c.speed);
 }
 function mainPlaybackRate(c, localT) {
   if (c.freeze) return 1;
   const L = Math.max(1e-6, c.out - c.in);
   const src = mainSrcAt(c, localT);
   const x = c.reverse ? c.out - src : src - c.in;
-  return Math.max(0.05, speedAt(c, x / L));
+  const r = speedAt(c, x / L);
+  return Number.isFinite(r) && r > 0 ? Math.max(0.05, Math.min(16, r)) : safeSpeed(c.speed);
+}
+function mainClipGain(clip, span, next, t, hasPrevious = true) {
+  if (clip.reverse || clip.freeze) return 0;
+  const baseVolume = Number.isFinite(clip.volume) ? clip.volume : 1;
+  let v = clip.muted ? 0 : Math.max(0, Math.min(1, baseVolume));
+  if (hasPrevious && clip.transitionIn !== "none" && t < span.start && clip.transitionDur > 0) {
+    v *= Math.max(0, Math.min(1, (t - (span.start - clip.transitionDur)) / clip.transitionDur));
+  }
+  if (next && next.clip.transitionIn !== "none" && next.clip.transitionDur > 0) {
+    const winStart = next.start - next.clip.transitionDur;
+    if (t >= winStart) {
+      v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
+    }
+  } else if (span.end - t < 0.3 && clip.transitionIn === "none") {
+    v *= Math.max(0, Math.min(1, (span.end - t) / 0.3));
+  }
+  return Math.max(0, Math.min(1, v));
 }
 function nudgeWord(words, index, delta, duration, step = 0.05) {
   if (index < 0 || index >= words.length) return words;
@@ -682,6 +709,7 @@ export {
   freezeClipFrom,
   isDipTo,
   mainClipDuration,
+  mainClipGain,
   mainPlaybackRate,
   mainRateAt,
   mainSpans,
