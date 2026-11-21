@@ -16,7 +16,9 @@ var __export = (target, all) => {
 // src/mayocut/idb.ts
 var idb_exports = {};
 __export(idb_exports, {
-  db: () => db
+  db: () => db,
+  requestPersistentStorage: () => requestPersistentStorage,
+  storageUsage: () => storageUsage
 });
 function open() {
   if (dbPromise) return dbPromise;
@@ -28,10 +30,41 @@ function open() {
         if (!db2.objectStoreNames.contains(s)) db2.createObjectStore(s, { keyPath: "id" });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error("Failed to open Mayocut local storage"));
+    req.onsuccess = () => {
+      const db2 = req.result;
+      db2.onversionchange = () => {
+        db2.close();
+        dbPromise = null;
+      };
+      resolve(db2);
+    };
+    req.onerror = () => {
+      dbPromise = null;
+      reject(req.error ?? new Error("Failed to open Mayocut local storage"));
+    };
+  }).catch((e) => {
+    dbPromise = null;
+    throw e;
   });
   return dbPromise;
+}
+async function requestPersistentStorage() {
+  try {
+    if (!navigator.storage?.persist) return false;
+    if (await navigator.storage.persisted?.()) return true;
+    return await navigator.storage.persist();
+  } catch {
+    return false;
+  }
+}
+async function storageUsage() {
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (!est) return null;
+    return { used: est.usage ?? 0, quota: est.quota ?? 0 };
+  } catch {
+    return null;
+  }
 }
 function tx(store, mode, fn) {
   return open().then(
@@ -66,6 +99,12 @@ var init_idb = __esm({
       getBlob: (id) => tx("blobs", "readonly", (s) => s.get(id)).then(
         (r) => r?.blob
       ),
+      // --- preview proxies (never used for export) ---
+      getProxy: (mediaId) => tx("blobs", "readonly", (s) => s.get(`proxy_${mediaId}`)).then(
+        (r) => r?.blob
+      ),
+      putProxy: (mediaId, blob) => tx("blobs", "readwrite", (s) => s.put({ id: `proxy_${mediaId}`, blob })),
+      deleteProxy: (mediaId) => tx("blobs", "readwrite", (s) => s.delete(`proxy_${mediaId}`)),
       /** Store a blob with a custom id (TTS model files) without touching the media store. */
       putRawBlob: (id, blob) => tx("blobs", "readwrite", (s) => s.put({ id, blob })),
       deleteMedia: (id) => open().then(

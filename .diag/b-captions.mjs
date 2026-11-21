@@ -29629,12 +29629,17 @@ function speedCurveOf(c) {
   if (pts[pts.length - 1].at < 1) pts.push({ at: 1, v: pts[pts.length - 1].v });
   return pts;
 }
+function safeSpeed(v) {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.max(0.05, Math.min(100, n));
+}
 function distanceAfter(c, L, tau) {
   if (tau <= 0) return 0;
   const curve = speedCurveOf(c);
   if (!curve) {
-    const v0 = Math.max(0.05, c.speed);
-    const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+    const v0 = safeSpeed(c.speed);
+    const v1 = c.rampTo != null ? safeSpeed(c.rampTo) : v0;
     if (Math.abs(v1 - v0) < 1e-9) return Math.min(L, tau * v0);
     const k = (v1 - v0) / L;
     return clamp(v0 / k * (Math.exp(k * tau) - 1), 0, L);
@@ -29670,8 +29675,8 @@ function distanceAfter(c, L, tau) {
 function timeForDistance(c, L, x) {
   const curve = speedCurveOf(c);
   if (!curve) {
-    const v0 = Math.max(0.05, c.speed);
-    const v1 = c.rampTo != null ? Math.max(0.05, c.rampTo) : v0;
+    const v0 = safeSpeed(c.speed);
+    const v1 = c.rampTo != null ? safeSpeed(c.rampTo) : v0;
     if (Math.abs(v1 - v0) < 1e-9) return x / v0;
     const k = (v1 - v0) / L;
     return Math.log(k * x / v0 + 1) / k;
@@ -29691,10 +29696,13 @@ function timeForDistance(c, L, x) {
   return t;
 }
 function mainClipDuration(c) {
-  if (c.freeze) return Math.max(0.1, c.out - c.in);
-  const L = Math.max(0, c.out - c.in);
+  const srcIn = Number.isFinite(c.in) ? c.in : 0;
+  const srcOut = Number.isFinite(c.out) ? c.out : Math.max(srcIn + 0.1, srcIn + 5);
+  if (c.freeze) return Math.max(0.1, srcOut - srcIn);
+  const L = Math.max(0, srcOut - srcIn);
   if (L <= 0) return 0.1;
-  return Math.max(0.1, timeForDistance(c, L, L));
+  const d = timeForDistance(c, L, L);
+  return Number.isFinite(d) && d > 0 ? Math.max(0.1, d) : Math.max(0.1, L / safeSpeed(c.speed));
 }
 function mainSrcAt(c, localT) {
   if (c.freeze) return c.in + 1 / 60;

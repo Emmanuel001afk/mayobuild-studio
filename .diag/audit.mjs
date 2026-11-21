@@ -14,6 +14,8 @@ function t(name, fn) {
 const T = await import('./b-types.mjs');
 const R = await import('./b-timeline-resolver.mjs');
 const E = await import('./b-engine.mjs');
+const P = await import('./b-export-plan.mjs');
+const X = await import('./b-proxy.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
   const tr = T.emptyTracks();
@@ -1721,6 +1723,135 @@ await t('stepped export muxes an audio track when audio exists', () => {
   const src = readFileSync('src/mayocut/engine.ts', 'utf8');
   assert.ok(/audio: \{ codec: "aac" as const/.test(src), 'must declare the AAC track');
   assert.ok(/addAudioChunk/.test(src), 'must feed encoded audio to the muxer');
+});
+
+
+// ================= stage 3: export planning + proxies =================
+console.log('export-plan.ts');
+await t('recordThroughput rejects nonsense measurements', () => {
+  assert.equal(P.recordThroughput(0, 1000, { width: 1920, height: 1080 }), null);
+  assert.equal(P.recordThroughput(12, 0, { width: 1920, height: 1080 }), null);
+  assert.equal(P.recordThroughput(12, NaN, { width: 1920, height: 1080 }), null);
+  assert.equal(P.recordThroughput(-4, 1000, { width: 1920, height: 1080 }), null);
+});
+await t('recordThroughput turns frames+time into fps', () => {
+  const th = P.recordThroughput(24, 2000, { width: 1920, height: 1080 });
+  assert.ok(th, 'must accept a real measurement');
+  assert.ok(Math.abs(th.framesPerSecond - 12) < 1e-9, `want 12 fps, got ${th.framesPerSecond}`);
+});
+await t('planSteppedExport on a measurement is not heuristic', () => {
+  const th = P.recordThroughput(24, 2000, { width: 1920, height: 1080 }); // 12 fps @1080p
+  const plan = P.planSteppedExport(
+    { durationSec: 10, fps: 30, width: 1920, height: 1080 },
+    th,
+  );
+  assert.equal(plan.totalFrames, 300);
+  assert.equal(plan.heuristic, false, 'a measured plan must not be flagged');
+  // 12 frames/s measured, 300 frames to render -> ~25s
+  assert.ok(Math.abs(plan.estimatedSec - 25) < 1.5, `want ~25s, got ${plan.estimatedSec}`);
+  assert.equal(plan.strategy, 'stepped');
+});
+await t('planSteppedExport without a measurement is flagged heuristic', () => {
+  const plan = P.planSteppedExport({ durationSec: 10, fps: 30, width: 1920, height: 1080 }, null);
+  assert.equal(plan.heuristic, true);
+  assert.ok(plan.estimatedSec > 0, 'still gives an honest ballpark');
+  assert.ok(/about|rough|~|around/i.test(plan.summary), `summary should hedge: ${plan.summary}`);
+});
+await t('4K costs more than 1080p for the same duration', () => {
+  const th = P.recordThroughput(24, 2000, { width: 1920, height: 1080 });
+  const hd = P.planSteppedExport({ durationSec: 10, fps: 30, width: 1920, height: 1080 }, th);
+  const uhd = P.planSteppedExport({ durationSec: 10, fps: 30, width: 3840, height: 2160 }, th);
+  assert.ok(uhd.estimatedSec > hd.estimatedSec * 1.5, '4K must not look as cheap as 1080p');
+});
+await t('a hopelessly slow device is steered to real time', () => {
+  const slow = { framesPerSecond: 1, width: 1920, height: 1080, sampleMs: 5000 };
+  const plan = P.planSteppedExport({ durationSec: 60, fps: 30, width: 1920, height: 1080 }, slow);
+  assert.equal(plan.strategy, 'realtime');
+  assert.ok(plan.slowFactor > 6);
+});
+await t('a merely-slow device keeps the accurate path', () => {
+  const slow = { framesPerSecond: 5, width: 1920, height: 1080, sampleMs: 5000 }; // 5x real time
+  const plan = P.planSteppedExport({ durationSec: 10, fps: 30, width: 1920, height: 1080 }, slow);
+  assert.equal(plan.strategy, 'stepped', 'correct beats fast below the cutoff');
+});
+await t('fmtDuration reads like a person wrote it', () => {
+  assert.equal(P.fmtDuration(5), '5 s');
+  assert.equal(P.fmtDuration(65), '1 min 5 s');
+  assert.equal(P.fmtDuration(0), '0 s');
+});
+
+console.log('proxy.ts');
+await t('small footage does not get a proxy', () => {
+  const d = X.shouldProxyVideo({ width: 1280, height: 720, size: 20e6, kind: 'video' });
+  assert.equal(d.wanted, false, '720p decodes fine already');
+});
+await t('4K footage does get a proxy at 720p', () => {
+  const d = X.shouldProxyVideo({ width: 3840, height: 2160, size: 200e6, kind: 'video' });
+  assert.equal(d.wanted, true);
+  assert.equal(d.targetHeight, 720);
+});
+await t('audio never gets a proxy', () => {
+  const d = X.shouldProxyVideo({ width: 0, height: 0, size: 200e6, kind: 'audio' });
+  assert.equal(d.wanted, false);
+});
+await t('unknown height falls back to file size', () => {
+  assert.equal(X.shouldProxyVideo({ size: 20e6, kind: 'video' }).wanted, false);
+  assert.equal(X.shouldProxyVideo({ size: 900e6, kind: 'video' }).wanted, true);
+});
+await t('proxy sizing preserves aspect and stays even', () => {
+  const s = X.proxySize(3840, 2160, 720);
+  assert.equal(s.height, 720);
+  assert.equal(s.width, 1280);
+  const odd = X.proxySize(1921, 1081, 720);
+  assert.equal(odd.width % 2, 0, 'odd widths break H.264');
+  assert.equal(odd.height % 2, 0);
+});
+await t('portrait footage keeps portrait dimensions', () => {
+  const s = X.proxySize(1080, 1920, 720);
+  assert.equal(s.height, 720);
+  assert.equal(s.width, 406); // 405 rounded up to an even width
+  assert.ok(s.height > s.width, 'must not silently rotate');
+});
+await t('a proxy never upscales past the source', () => {
+  const s = X.proxySize(640, 360, 720);
+  assert.ok(s.height <= 360, `upscaled to ${s.height}`);
+});
+await t('EXPORT ALWAYS GETS THE ORIGINAL', () => {
+  assert.equal(X.sourceFor('export', 'blob:original', 'blob:proxy'), 'blob:original');
+  assert.equal(X.sourceFor('export', 'blob:original', undefined), 'blob:original');
+  assert.equal(X.sourceFor('export', 'blob:original', 'blob:proxy'), 'blob:original');
+});
+await t('preview prefers the proxy but survives without one', () => {
+  assert.equal(X.sourceFor('preview', 'blob:original', 'blob:proxy'), 'blob:proxy');
+  assert.equal(X.sourceFor('preview', 'blob:original', undefined), 'blob:original');
+});
+await t('every export path re-points at originals and restores after', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const stepped = src.slice(src.indexOf('async exportMP4Stepped'));
+  assert.ok(/this\.useOriginalSources\(\)/.test(stepped.slice(0, 2000)), 'stepped export must switch');
+  assert.ok(
+    stepped.slice(0, stepped.indexOf('async exportMP4(')).includes('usePreviewSources'),
+    'stepped export must restore previews',
+  );
+  const rt = src.slice(src.indexOf('async exportMedia'));
+  assert.ok(/this\.useOriginalSources\(\)/.test(rt.slice(0, 1500)), 'real-time export must switch');
+});
+await t('the UI loads a stored proxy and builds one after import', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/db\.getProxy\(/.test(ed), 'must reuse an existing proxy on open');
+  assert.ok(/queueProxyBuilds\(/.test(ed), 'must build proxies after import');
+  assert.ok(/db\.putProxy\(/.test(ed), 'must store what it builds');
+});
+await t('proxy generation bundles no new dependency', () => {
+  const src = readFileSync('src/mayocut/proxy-build.ts', 'utf8');
+  assert.ok(!/from "(?!\.)/.test(src), 'must not import a package');
+  assert.ok(/MediaRecorder/.test(src), 'must use the platform encoder');
+});
+await t('the export dialog shows an estimate before rendering', () => {
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/measureThroughput/.test(ed), 'must be able to measure');
+  assert.ok(/exportPlan\.summary/.test(ed), 'must surface the estimate');
+  assert.ok(/planExport/.test(ed), 'must re-plan when fps/res change');
 });
 
 

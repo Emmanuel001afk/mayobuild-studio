@@ -19,6 +19,9 @@ const MODULES = [
   "templates",
   "background-math",
   "timeline-resolver",
+  "export-plan",
+  "proxy",
+  "proxy-build",
 ];
 
 for (const name of MODULES) {
