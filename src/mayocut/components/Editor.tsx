@@ -1439,9 +1439,16 @@ export function Editor({
     setExporting(true);
     setExportProgress(0);
     try {
-      toast.info("Export runs in real time — keep this window open");
       let blob: Blob;
-      if (wantMp4 && canMp4) {
+      const stepped = wantMp4 && canMp4 ? await eng.canExportStepped() : false;
+      if (stepped) {
+        // Frame-stepped: every frame is confirmed before it is encoded, so the
+        // result matches the preview exactly. Slower than real time on a weak
+        // device but never drops or blanks a frame.
+        toast.info("Rendering frame by frame — keep this window open");
+        blob = await eng.exportMP4Stepped(opts, (p) => setExportProgress(p));
+      } else if (wantMp4 && canMp4) {
+        toast.info("Export runs in real time — keep this window open");
         try {
           blob = await eng.exportMP4(opts, (p) => setExportProgress(p));
         } catch (e) {

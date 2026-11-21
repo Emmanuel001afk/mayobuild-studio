@@ -3481,6 +3481,226 @@ export class Engine {
     return blob;
   }
 
+  // ------------------------------------------- export (MP4, frame-stepped)
+  //
+  // The reliable path. Instead of playing the timeline in real time and hoping
+  // the recorder samples each frame, this walks the timeline one output frame at
+  // a time:
+  //
+  //   for each frame index f:
+  //     t = f / fps
+  //     seek every visible element and WAIT for its decoded frame
+  //     draw
+  //     hand the canvas to the encoder with an explicit timestamp
+  //
+  // Wall-clock no longer matters. A slow phone produces the same file as a fast
+  // laptop, just later — no dropped frames, no black frames from a half-seeked
+  // element, no audio drifting out of sync. Audio is rendered offline from the
+  // same resolver gains the preview uses, so what you hear while editing is what
+  // lands in the file.
+
+  /** Can this device export frame-stepped MP4? */
+  async canExportStepped(): Promise<boolean> {
+    if (!mp4Supported()) return false;
+    const { w, h } = ASPECTS[this.project.aspect];
+    return !!(await pickAvcCodec(w, h, 30, 4_000_000));
+  }
+
+  /**
+   * Render the project's audio to PCM, offline.
+   *
+   * Used by the frame-stepped exporter. Returns null when there is no audio at
+   * all (a timeline of stills), so the caller can produce a valid video-only
+   * file instead of failing.
+   */
+  async renderOfflineAudioTrack(): Promise<{
+    channels: Float32Array[];
+    sampleRate: number;
+    frames: number;
+  } | null> {
+    const dur = this.duration();
+    if (dur <= 0.05) return null;
+    const OCtor: typeof OfflineAudioContext | undefined =
+      window.OfflineAudioContext ??
+      (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext })
+        .webkitOfflineAudioContext;
+    if (!OCtor) return null;
+    const sampleRate = 48000;
+    const frames = Math.ceil(dur * sampleRate);
+    const off = new OCtor(2, frames, sampleRate);
+    const ids = new Set<string>();
+    for (const c of this.project.main) ids.add(c.mediaId);
+    for (const tr of this.project.tracks)
+      for (const c of tr.clips) if (c.mediaId) ids.add(c.mediaId);
+    const bufs = await this.decodeAllAudio(off, ids);
+    await this.scheduleOfflineAudio(off, off.destination, bufs);
+    const rendered = await off.startRendering();
+    const channels: Float32Array[] = [];
+    for (let i = 0; i < rendered.numberOfChannels; i++) {
+      channels.push(rendered.getChannelData(i).slice(0));
+    }
+    if (channels.length === 0) return null;
+    if (channels.length === 1) channels.push(channels[0].slice(0));
+    return { channels, sampleRate, frames: rendered.length };
+  }
+
+  async exportMP4Stepped(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
+    if (!this.canvas) throw new Error("Canvas not ready — wait for the preview, then retry.");
+    if (!mp4Supported()) {
+      throw new Error(
+        "Frame-accurate MP4 needs WebCodecs. Use Chrome or Edge, or export WebM (real-time).",
+      );
+    }
+    const dur0 = this.duration();
+    if (dur0 <= 0.05) throw new Error("Nothing to export — add a clip to the timeline first.");
+    const { w: W, h: H } = ASPECTS[this.project.aspect];
+    const fps = Math.max(1, Math.round(opts.fps));
+    const codec = await pickAvcCodec(W, H, fps, opts.videoBitsPerSecond);
+    if (!codec) {
+      throw new Error(`H.264 encoding is not available at ${W}×${H} here — try WebM.`);
+    }
+
+    const prevScale = this.exportScale;
+    const prevCap = this.previewMaxSide;
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.pause();
+    this.exportScale = opts.scale ?? 1;
+    this.exporting = true;
+    this.previewMaxSide = 0;
+    this.loop = false;
+
+    const W_ = window as unknown as {
+      VideoEncoder: typeof VideoEncoder;
+      VideoFrame: typeof VideoFrame;
+    };
+    const W2Audio = window as unknown as {
+      AudioEncoder: typeof AudioEncoder;
+      AudioData: typeof AudioData;
+    };
+    // Render the audio ONCE, offline, from the same resolver gains the preview
+    // uses. Doing it up front means the file can never end up video-only by
+    // accident, and it is not tied to rendering speed.
+    const audio = await this.renderOfflineAudioTrack();
+    const sampleRate = audio?.sampleRate ?? 48000;
+
+    const target = new ArrayBufferTarget();
+    const muxer = new Muxer({
+      target,
+      video: { codec: "avc", width: W, height: H, frameRate: fps },
+      ...(audio ? { audio: { codec: "aac" as const, numberOfChannels: 2, sampleRate } } : {}),
+      fastStart: "in-memory",
+    });
+    let encError: unknown = null;
+    const videoEncoder = new W_.VideoEncoder({
+      output: (chunk, meta) => {
+        try {
+          muxer.addVideoChunk(chunk, meta);
+        } catch (e) {
+          encError = encError ?? e;
+        }
+      },
+      error: (e) => {
+        encError = encError ?? e;
+      },
+    });
+
+    try {
+      // Round to whole frames so the last one is never a sliver.
+      const totalFrames = Math.max(1, Math.round(dur0 * fps));
+      await videoEncoder.configure({
+        codec,
+        width: W,
+        height: H,
+        framerate: fps,
+        bitrate: opts.videoBitsPerSecond,
+        latencyMode: "quality",
+      });
+      const keyEvery = Math.max(1, fps * 2);
+      const frameDurUs = Math.round(1_000_000 / fps);
+
+      for (let f = 0; f < totalFrames; f++) {
+        if (encError) break;
+        const t = Math.min(dur0, f / fps);
+        // waits for the decoder, then draws — never captures a blank frame
+        await this.frameReadyAt(t, 3000);
+        const vf = new W_.VideoFrame(this.canvas, { timestamp: f * frameDurUs });
+        videoEncoder.encode(vf, { keyFrame: f % keyEvery === 0 });
+        vf.close();
+        onProgress(Math.min(0.99, (f + 1) / totalFrames));
+        // yield so the UI stays responsive and the decoder can progress
+        if (f % 4 === 0) await new Promise((r) => setTimeout(r, 0));
+      }
+      await videoEncoder.flush();
+
+      // Audio: one AAC pass over the pre-rendered PCM.
+      if (audio && !encError) {
+        const audioEncoder = new W2Audio.AudioEncoder({
+          output: (chunk, meta) => {
+            try {
+              muxer.addAudioChunk(chunk, meta);
+            } catch (e) {
+              encError = encError ?? e;
+            }
+          },
+          error: (e) => {
+            encError = encError ?? e;
+          },
+        });
+        await audioEncoder.configure({
+          codec: "mp4a.40.2",
+          sampleRate,
+          numberOfChannels: 2,
+          bitrate: opts.audioBitsPerSecond,
+        });
+        // feed in ~1 s chunks so memory stays flat on long timelines
+        const chunkFrames = sampleRate;
+        const data = audio.channels;
+        for (let off = 0; off < audio.frames; off += chunkFrames) {
+          const n = Math.min(chunkFrames, audio.frames - off);
+          const l = data[0].slice(off, off + n);
+          const r = data[1].slice(off, off + n);
+          const ad = new W2Audio.AudioData({
+            format: "f32-planar",
+            sampleRate,
+            numberOfFrames: n,
+            numberOfChannels: 2,
+            timestamp: Math.round((off / sampleRate) * 1_000_000),
+            data: [l, r] as unknown as BufferSource,
+          });
+          audioEncoder.encode(ad);
+          ad.close();
+          if (off % (chunkFrames * 20) === 0) await new Promise((r) => setTimeout(r, 0));
+        }
+        await audioEncoder.flush();
+        try {
+          audioEncoder.close();
+        } catch {
+          /* already closed */
+        }
+      }
+
+      if (encError) {
+        throw encError instanceof Error ? encError : new Error(String(encError));
+      }
+      muxer.finalize();
+      const blob = new Blob([target.buffer], { type: "video/mp4" });
+      if (blob.size < 1000) throw new Error("Export produced no data — try again.");
+      onProgress(1);
+      return blob;
+    } finally {
+      try {
+        videoEncoder.close();
+      } catch {
+        /* already closed */
+      }
+      this.exportScale = prevScale;
+      this.exporting = false;
+      this.previewMaxSide = prevCap;
+      this.seek(0);
+      if (wasPlaying) void this.play();
+    }
+  }
+
   // ------------------------------------------------------------- export (MP4)
   // WebCodecs: H.264 video + Opus audio, muxed by mp4-muxer. Real-time render
   // (the timeline plays once while frames are captured), same as the WebM path.
@@ -3794,6 +4014,137 @@ export class Engine {
    * OfflineAudioContext, then encode 16-bit WAV. Used for podcast / voiceover
    * workflows and as the audio half of the WAV download option.
    */
+  /**
+   * Decode every media blob to an AudioBuffer once, for the offline mixers.
+   *
+   * Shared by the WAV export and the frame-stepped MP4/WebM export so both get
+   * identical audio. Returns null for media whose audio cannot be decoded
+   * (silent videos, broken files) rather than throwing.
+   */
+  async decodeAllAudio(
+    ctx: BaseAudioContext,
+    mediaIds: Iterable<string>,
+  ): Promise<Map<string, AudioBuffer | null>> {
+    const bufs = new Map<string, AudioBuffer | null>();
+    for (const mediaId of mediaIds) {
+      if (bufs.has(mediaId)) continue;
+      const rec = this.els.get(mediaId);
+      let buf: AudioBuffer | null = null;
+      try {
+        if (rec?.url) {
+          const blob = await fetch(rec.url).then((r) => r.blob());
+          buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+        }
+      } catch {
+        buf = null;
+      }
+      bufs.set(mediaId, buf);
+    }
+    return bufs;
+  }
+
+  /**
+   * Schedule the whole project's audio into an offline context.
+   *
+   * This is the audio half of a frame-stepped export. The gains come from
+   * `mainClipGain` — the SAME function the preview's clock uses — so a muted
+   * clip, a transition crossfade or an extracted-and-muted source behaves
+   * identically in the exported file. The previous recorder path sampled a live
+   * graph and could not guarantee that.
+   *
+   * Fades are written with short ramps rather than steps so transitions do not
+   * click.
+   */
+  async scheduleOfflineAudio(
+    off: BaseAudioContext,
+    dest: AudioNode,
+    bufs: Map<string, AudioBuffer | null>,
+    opts: { from?: number; to?: number; step?: number } = {},
+  ): Promise<void> {
+    const spans = mainSpans(this.project);
+    const from = Math.max(0, opts.from ?? 0);
+    const to = Math.min(this.duration(), opts.to ?? this.duration());
+    if (to <= from) return;
+    // 60 Hz is finer than any visible fade and cheap to schedule.
+    const step = Math.max(0.004, opts.step ?? 1 / 60);
+    const hasSolo = this.project.tracks.some((t) => t.solo);
+    const master = off.createGain();
+    master.gain.value = this.project.masterGain ?? 1;
+    master.connect(dest);
+
+    const rampedSource = (
+      buf: AudioBuffer,
+      startAt: number,
+      srcOffset: number,
+      length: number,
+      rate: number,
+      gainAt: (localSec: number) => number,
+    ) => {
+      const src = off.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = Math.max(0.05, rate);
+      const g = off.createGain();
+      src.connect(g);
+      g.connect(master);
+      // piecewise-constant gain, smoothed with linear ramps
+      let last = Math.max(0, Math.min(2, gainAt(0)));
+      g.gain.setValueAtTime(last, startAt);
+      for (let dt = step; dt < length; dt += step) {
+        const v = Math.max(0, Math.min(2, gainAt(dt)));
+        if (Math.abs(v - last) > 1e-4) {
+          g.gain.linearRampToValueAtTime(v, startAt + dt);
+          last = v;
+        }
+      }
+      const dur2 = Math.min(length, buf.duration - srcOffset);
+      if (dur2 > 0.001) src.start(startAt, Math.max(0, srcOffset), dur2);
+    };
+
+    // --- main track ---
+    if (!hasSolo) {
+      for (const s of spans) {
+        if (s.clip.freeze || s.clip.reverse || s.clip.muted) continue;
+        if (s.end <= from || s.start >= to) continue;
+        const buf = bufs.get(s.clip.mediaId);
+        if (!buf) continue;
+        const idx = spans.indexOf(s);
+        const nextSpan = idx + 1 < spans.length ? spans[idx + 1] : null;
+        const clipDur = Math.max(0.01, s.end - s.start);
+        rampedSource(buf, Math.max(from, s.start), s.clip.in, clipDur, s.clip.speed, (dt) =>
+          mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0),
+        );
+      }
+    }
+
+    // --- overlay tracks (audio clips and any video with sound) ---
+    for (const tr of this.project.tracks) {
+      if (tr.hidden) continue;
+      // A muted track (or one excluded by another track's solo) is inaudible:
+      // schedule nothing rather than a source with a zero gain.
+      const trackGain = hasSolo ? (tr.solo ? 1 : 0) : tr.muted ? 0 : 1;
+      if (trackGain === 0) continue;
+      for (const c of tr.clips) {
+        if (!c.mediaId) continue;
+        if (c.kind === "text") continue;
+        if (c.kind === "video") continue; // sticker video is silent by design
+        const start = Math.max(0, c.start);
+        const end = start + Math.max(0, c.duration);
+        if (end <= from || start >= to) continue;
+        const buf = bufs.get(c.mediaId);
+        if (!buf) continue;
+        const vol = Math.max(0, Math.min(1, c.volume ?? 1));
+        const fadeIn = Math.max(0, c.fadeIn ?? 0.15);
+        const fadeOut = Math.max(0, c.fadeOut ?? 0.15);
+        rampedSource(buf, Math.max(from, start), 0, end - start, 1, (dt) => {
+          let v = vol;
+          if (fadeIn > 0) v *= Math.min(1, dt / fadeIn);
+          if (fadeOut > 0) v *= Math.min(1, (end - start - dt) / fadeOut);
+          return v * trackGain;
+        });
+      }
+    }
+  }
+
   async exportAudioWav(
     onProgress: (p: number) => void,
     opts: { sampleRate?: number; seconds?: number } = {},
