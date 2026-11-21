@@ -4,6 +4,7 @@
 // (WebM via MediaRecorder, MP4 via WebCodecs + mp4-muxer).
 
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
+import { Muxer as WebmMuxer, ArrayBufferTarget as WebmTarget } from "webm-muxer";
 import {
   ASPECTS,
   DEFAULT_ADJUST,
@@ -365,10 +366,10 @@ const MIME_CANDIDATES = [
 /** Human-readable reason a video export cannot run on this device, or null. */
 export function exportBlocker(): string | null {
   if (typeof MediaRecorder === "undefined") {
-    return "This browser has no video recorder (MediaRecorder). Use Chrome or Edge, or export a PNG/WAV instead.";
+    return "This browser has no video recorder (MediaRecorder), so it cannot write a video file. Export a PNG frame or the WAV audio instead — both work here.";
   }
   if (!pickMime()) {
-    return "This browser's recorder supports none of the formats we can write (WebM/MP4). Try Chrome or Edge.";
+    return "This browser's recorder supports none of the formats this editor can write (WebM/MP4), so a video file cannot be produced here. Export a PNG frame or the WAV audio instead.";
   }
   return null;
 }
@@ -382,6 +383,47 @@ export function pickMime(): { mime: string; ext: string } | null {
       }
     } catch {
       /* ignore */
+    }
+  }
+  return null;
+}
+
+/**
+ * Pick a WebM video codec string this device can actually encode.
+ *
+ * VP9 first (better quality per bit), then VP8 (older phones), then AV1 (rare
+ * but real). Returns both the WebCodecs config codec and the Matroska
+ * `CodecID` the muxer needs, because they are not the same string.
+ */
+async function pickVpCodec(
+  width: number,
+  height: number,
+  fps: number,
+  bitrate: number,
+): Promise<{ config: string; mkv: string } | null> {
+  const Ctor = (
+    window as unknown as {
+      VideoEncoder?: { isConfigSupported: (c: object) => Promise<{ supported: boolean }> };
+    }
+  ).VideoEncoder;
+  if (!Ctor?.isConfigSupported) return null;
+  const candidates: { config: string; mkv: string }[] = [
+    { config: "vp09.00.10.08", mkv: "V_VP9" },
+    { config: "vp8", mkv: "V_VP8" },
+    { config: "av01.0.04M.08", mkv: "V_AV1" },
+  ];
+  for (const c of candidates) {
+    try {
+      const res = await Ctor.isConfigSupported({
+        codec: c.config,
+        width,
+        height,
+        framerate: fps,
+        bitrate,
+      });
+      if (res.supported) return c;
+    } catch {
+      /* try the next candidate */
     }
   }
   return null;
@@ -3572,7 +3614,10 @@ export class Engine {
     const blocked = exportBlocker();
     if (blocked) throw new Error(blocked);
     const picked = pickMime();
-    if (!picked) throw new Error("This browser does not support video recording. Use Chrome/Edge.");
+    if (!picked)
+      throw new Error(
+        "This browser does not support video recording, so a video file cannot be written here. Export a PNG frame or the WAV audio instead.",
+      );
     await this.ensureAudio();
     if (!this.audioCtx || !this.exportDest) {
       throw new Error(
@@ -3694,6 +3739,20 @@ export class Engine {
     if (!mp4Supported()) return false;
     const { w, h } = ASPECTS[this.project.aspect];
     return !!(await pickAvcCodec(w, h, 30, 4_000_000));
+  }
+
+  /**
+   * Can this device export frame-stepped WebM?
+   *
+   * This matters on Safari and Firefox, which have no H.264 *encoder*: until
+   * now those users got the real-time recorder and all of its dropped frames.
+   * `VideoEncoder` + VP9 closes that gap without adding a codec of our own.
+   */
+  async canExportSteppedWebm(): Promise<boolean> {
+    const Ctor = (window as unknown as { VideoEncoder?: unknown }).VideoEncoder;
+    if (!Ctor) return false;
+    const { w, h } = ASPECTS[this.project.aspect];
+    return !!(await pickVpCodec(w, h, 30, 4_000_000));
   }
 
   /**
@@ -3824,7 +3883,7 @@ export class Engine {
     if (!this.canvas) throw new Error("Canvas not ready — wait for the preview, then retry.");
     if (!mp4Supported()) {
       throw new Error(
-        "Frame-accurate MP4 needs WebCodecs. Use Chrome or Edge, or export WebM (real-time).",
+        "This browser cannot encode H.264, so frame-accurate MP4 is unavailable here. The frame-accurate WebM path produces the same result.",
       );
     }
     const dur0 = this.duration();
@@ -3980,6 +4039,191 @@ export class Engine {
     }
   }
 
+  // ------------------------------------------ export (WebM, frame-stepped)
+  //
+  // The same frame-by-frame guarantee as the MP4 path, for the browsers that
+  // cannot encode H.264 (Safari, Firefox). WebCodecs + VP8/VP9 + webm-muxer,
+  // so this is still the platform's encoder — not a codec of our own.
+  //
+  // Audio is Opus, fed from the same offline PCM render the MP4 path uses, so
+  // muting, crossfades and extracted-and-muted sources sound identical in
+  // both formats.
+
+  async exportWebmStepped(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
+    if (!this.canvas) throw new Error("Canvas not ready — wait for the preview, then retry.");
+    const dur0 = this.duration();
+    if (dur0 <= 0.05) throw new Error("Nothing to export — add a clip to the timeline first.");
+    const { w: W, h: H } = ASPECTS[this.project.aspect];
+    const fps = Math.max(1, Math.round(opts.fps));
+    const vp = await pickVpCodec(W, H, fps, opts.videoBitsPerSecond);
+    if (!vp) {
+      throw new Error("Frame-accurate WebM needs WebCodecs VP8/VP9 — this browser can't do it.");
+    }
+
+    const prevScale = this.exportScale;
+    const prevCap = this.previewMaxSide;
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.pause();
+    this.exportScale = opts.scale ?? 1;
+    this.exporting = true;
+    this.previewMaxSide = 0;
+    this.loop = false;
+    // Exports always read the ORIGINAL files, never a preview proxy.
+    this.useOriginalSources();
+
+    const W_ = window as unknown as {
+      VideoEncoder: typeof VideoEncoder;
+      VideoFrame: typeof VideoFrame;
+    };
+    const W2Audio = window as unknown as {
+      AudioEncoder: typeof AudioEncoder;
+      AudioData: typeof AudioData;
+    };
+
+    const audio = await this.renderOfflineAudioTrack();
+    const sampleRate = audio?.sampleRate ?? 48000;
+    // Opus is defined at 48 kHz. If the offline render ever came back at a
+    // different rate, resample here rather than declaring a rate the encoder
+    // will not honour (that plays back at the wrong speed).
+    const opusRate = 48000;
+    if (audio && audio.sampleRate !== opusRate) {
+      const ratio = opusRate / audio.sampleRate;
+      const n = Math.max(1, Math.round(audio.frames * ratio));
+      const resampled: Float32Array[] = [];
+      for (let ch = 0; ch < 2; ch++) {
+        const src = audio.channels[ch] ?? audio.channels[0];
+        const out = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          const x = i / ratio;
+          const i0 = Math.floor(x);
+          const i1 = Math.min(src.length - 1, i0 + 1);
+          const frac = x - i0;
+          out[i] = (src[i0] ?? 0) * (1 - frac) + (src[i1] ?? 0) * frac;
+        }
+        resampled.push(out);
+      }
+      audio.channels = resampled;
+      audio.frames = n;
+      audio.sampleRate = opusRate;
+    }
+
+    const target = new WebmTarget();
+    const muxer = new WebmMuxer({
+      target,
+      video: { codec: vp.mkv, width: W, height: H, frameRate: fps },
+      ...(audio
+        ? { audio: { codec: "A_OPUS" as const, numberOfChannels: 2, sampleRate: opusRate } }
+        : {}),
+    });
+    let encError: unknown = null;
+    const videoEncoder = new W_.VideoEncoder({
+      output: (chunk, meta) => {
+        try {
+          muxer.addVideoChunk(chunk, meta);
+        } catch (e) {
+          encError = encError ?? e;
+        }
+      },
+      error: (e) => {
+        encError = encError ?? e;
+      },
+    });
+
+    try {
+      const totalFrames = Math.max(1, Math.round(dur0 * fps));
+      await videoEncoder.configure({
+        codec: vp.config,
+        width: W,
+        height: H,
+        framerate: fps,
+        bitrate: opts.videoBitsPerSecond,
+        latencyMode: "quality",
+      });
+      const keyEvery = Math.max(1, fps * 2);
+      const frameDurUs = Math.round(1_000_000 / fps);
+
+      for (let f = 0; f < totalFrames; f++) {
+        if (encError) break;
+        const t = Math.min(dur0, f / fps);
+        await this.frameReadyAt(t, 3000);
+        const vf = new W_.VideoFrame(this.canvas, { timestamp: f * frameDurUs });
+        videoEncoder.encode(vf, { keyFrame: f % keyEvery === 0 });
+        vf.close();
+        onProgress(Math.min(0.99, (f + 1) / totalFrames));
+        if (f % 4 === 0) await new Promise((r) => setTimeout(r, 0));
+      }
+      await videoEncoder.flush();
+
+      if (audio && !encError) {
+        const audioEncoder = new W2Audio.AudioEncoder({
+          output: (chunk, meta) => {
+            try {
+              muxer.addAudioChunk(chunk, meta);
+            } catch (e) {
+              encError = encError ?? e;
+            }
+          },
+          error: (e) => {
+            encError = encError ?? e;
+          },
+        });
+        await audioEncoder.configure({
+          codec: "opus",
+          sampleRate: opusRate,
+          numberOfChannels: 2,
+          bitrate: opts.audioBitsPerSecond,
+        });
+        // Resample on the fly only if the offline render used another rate.
+        const data = audio.channels;
+        const chunkFrames = sampleRate;
+        for (let off = 0; off < audio.frames; off += chunkFrames) {
+          if (encError) break;
+          const n = Math.min(chunkFrames, audio.frames - off);
+          const l = data[0].slice(off, off + n);
+          const r = data[1].slice(off, off + n);
+          const ad = new W2Audio.AudioData({
+            format: "f32-planar",
+            sampleRate,
+            numberOfFrames: n,
+            numberOfChannels: 2,
+            timestamp: Math.round((off / sampleRate) * 1_000_000),
+            data: [l, r] as unknown as BufferSource,
+          });
+          audioEncoder.encode(ad);
+          ad.close();
+          if (off % (chunkFrames * 20) === 0) await new Promise((r) => setTimeout(r, 0));
+        }
+        await audioEncoder.flush();
+        try {
+          audioEncoder.close();
+        } catch {
+          /* already closed */
+        }
+      }
+
+      if (encError) {
+        throw encError instanceof Error ? encError : new Error(String(encError));
+      }
+      muxer.finalize();
+      const blob = new Blob([target.buffer], { type: "video/webm" });
+      if (blob.size < 1000) throw new Error("Export produced no data — try again.");
+      onProgress(1);
+      return blob;
+    } finally {
+      try {
+        videoEncoder.close();
+      } catch {
+        /* already closed */
+      }
+      this.exportScale = prevScale;
+      this.exporting = false;
+      this.previewMaxSide = prevCap;
+      this.usePreviewSources();
+      this.seek(0);
+      if (wasPlaying) void this.play();
+    }
+  }
+
   // ------------------------------------------------------------- export (MP4)
   // WebCodecs: H.264 video + AAC audio, muxed by mp4-muxer. Real-time render
   // (the timeline plays once while frames are captured), same as the WebM path.
@@ -3987,7 +4231,9 @@ export class Engine {
   async exportMP4(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
     if (!this.canvas) throw new Error("Canvas not ready");
     if (!mp4Supported())
-      throw new Error("MP4 export needs WebCodecs — use Chrome or Edge (WebM also works).");
+      throw new Error(
+        "This browser cannot encode H.264 through WebCodecs, so MP4 is unavailable here. WebM works and can be exported frame-accurately.",
+      );
     const baseSize = ASPECTS[this.project.aspect];
     const W = baseSize.w * (opts.scale ?? 1);
     const H = baseSize.h * (opts.scale ?? 1);

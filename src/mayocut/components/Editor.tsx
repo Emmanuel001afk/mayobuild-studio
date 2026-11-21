@@ -1093,15 +1093,15 @@ export function Editor({
           .filter((codec) => codec && codec !== "Unknown");
         const detail =
           hevcCount > 0
-            ? `Detected HEVC/H.265 in ${hevcCount} clip(s). This browser cannot decode that codec here. Convert to MP4 with H.264 video and AAC audio for broad compatibility.`
+            ? `Detected HEVC/H.265 in ${hevcCount} clip(s). This device has no HEVC decoder, so those clips cannot be played or exported here.`
             : knownCodecs.length > 0
-              ? `Detected ${Array.from(new Set(knownCodecs)).join(", ")} in media that this device could not decode. Use MP4 with H.264 video and AAC audio for broad compatibility.`
-              : "The browser could not decode these video files. Their container or codec may not be supported, or the files may be damaged.";
+              ? `Detected ${Array.from(new Set(knownCodecs)).join(", ")} in media that this device could not decode, so those clips cannot be played or exported here.`
+              : "This device could not decode these video files — their container or codec may be unsupported, or the files may be damaged.";
         toast.warning(detail, { duration: 12000 });
       }
       if (badImages.length) {
         toast.warning(
-          `${badImages.length} image file(s) could not be decoded here. Convert them to PNG or JPEG and reimport.`,
+          `${badImages.length} image file(s) could not be decoded here — the file may be damaged or in an unsupported variant.`,
           { duration: 10000 },
         );
       }
@@ -1207,15 +1207,13 @@ export function Editor({
       }
     }
     if (item.kind === "image" && item.unplayable) {
-      toast.error(
-        "This image format cannot be decoded on this device. Convert it to PNG or JPEG first.",
-      );
+      toast.error("This image format cannot be decoded on this device, so it cannot be added.");
       return;
     }
     if (item.kind === "video" && item.unplayable) {
       toast.warning(
         item.codecHint === "HEVC/H.265"
-          ? "HEVC/H.265 was detected. This device cannot decode it for preview; convert to MP4 with H.264 video and AAC audio."
+          ? "HEVC/H.265 was detected. This device has no HEVC decoder, so this clip cannot be previewed or exported here."
           : "This video could not be decoded for preview on this device. You can still try its audio track if the audio codec is supported.",
       );
     }
@@ -1645,7 +1643,9 @@ export function Editor({
 
     // --- video formats -----------------------------------------------------
     if (!pickMime() && !canMp4) {
-      toast.error("This browser can't record video. Use Chrome or Edge, or the desktop app.");
+      toast.error(
+        "This browser can't record video, so a video file can't be written here. Export a PNG frame or the WAV audio instead.",
+      );
       return;
     }
     // Respect this device's capability limits — downgrade (with a note) rather
@@ -1674,7 +1674,16 @@ export function Editor({
     setExportProgress(0);
     try {
       let blob: Blob;
-      let stepped = wantMp4 && canMp4 ? await eng.canExportStepped() : false;
+      // Two frame-stepped paths: MP4 (H.264) where the device can encode it,
+      // and WebM (VP9/VP8) where it cannot — Safari and Firefox. Both give the
+      // same "every frame confirmed" guarantee, so neither is a downgrade in
+      // correctness, only in container.
+      let steppedKind: "mp4" | "webm" | null = null;
+      if (wantMp4 && canMp4 && (await eng.canExportStepped())) steppedKind = "mp4";
+      // No H.264 encoder here, or it refused this size: VP9 still gives the
+      // exact same frame-by-frame guarantee, just in a WebM container.
+      if (!steppedKind && (await eng.canExportSteppedWebm())) steppedKind = "webm";
+      let stepped = steppedKind !== null;
       if (stepped) {
         // A device slow enough that frame-stepping would take many times real
         // time is better served by the real-time recorder. Measure once (or
@@ -1692,12 +1701,15 @@ export function Editor({
           toast.info("This device is slow at frame-by-frame rendering — exporting in real time");
         }
       }
-      if (stepped) {
+      if (stepped && steppedKind === "mp4") {
         // Frame-stepped: every frame is confirmed before it is encoded, so the
         // result matches the preview exactly. Slower than real time on a weak
         // device but never drops or blanks a frame.
         toast.info("Rendering frame by frame — keep this window open");
         blob = await eng.exportMP4Stepped(opts, (p) => setExportProgress(p));
+      } else if (stepped && steppedKind === "webm") {
+        toast.info("Rendering frame by frame (WebM) — keep this window open");
+        blob = await eng.exportWebmStepped(opts, (p) => setExportProgress(p));
       } else if (wantMp4 && canMp4) {
         toast.info("Export runs in real time — keep this window open");
         try {
@@ -1710,7 +1722,8 @@ export function Editor({
           blob = await eng.exportMedia(opts, (p) => setExportProgress(p));
         }
       } else {
-        if (exportFmt === "mp4" && !canMp4) toast.warning("MP4 needs Chrome/Edge — exported WebM");
+        if (exportFmt === "mp4" && !canMp4)
+          toast.warning("This browser can't encode MP4 — exported WebM instead");
         blob = await eng.exportMedia(opts, (p) => setExportProgress(p));
       }
       const ext = blob.type.includes("mp4") ? "mp4" : "webm";
@@ -2036,7 +2049,7 @@ export function Editor({
           title={
             m.codecHint && m.codecHint !== "Unknown"
               ? `${m.codecHint} detected; this device could not decode the video. Audio may still be available if its codec is supported.`
-              : "This device could not decode this media file. Convert it to a supported format before adding it to the timeline."
+              : "This device could not decode this media file, so it cannot be previewed or exported here."
           }
         >
           ⚠ unsupported
@@ -2501,8 +2514,8 @@ export function Editor({
       {brokenAtPlayhead && (
         <div className="absolute bottom-2 inset-x-2 sm:inset-x-8 bg-amber-400/15 border border-amber-400/40 text-amber-200 rounded-lg px-3 py-2 text-[11px] sm:text-xs leading-snug pointer-events-none">
           ⚠ “{brokenAtPlayhead}” can't be decoded on this device (usually an HEVC camera clip). Its{" "}
-          <b>audio + captions still work</b> — for the picture, convert it to H.264 (any video
-          converter / compressor app) and import it again.
+          <b>audio + captions still work</b>, so you can cut, caption and export the sound here —
+          the picture needs a device with an HEVC decoder.
         </div>
       )}
       {spans.length === 0 && project.tracks.every((tr) => tr.clips.length === 0) && (
@@ -3201,7 +3214,9 @@ export function Editor({
                             : "border-border hover:border-white/40"
                         } ${unsupported ? "opacity-50" : ""}`}
                         title={
-                          unsupported ? "MP4 needs Chrome/Edge — WebM works everywhere" : f.note
+                          unsupported
+                            ? "This browser can't encode MP4 — WebM works and exports frame-accurately"
+                            : f.note
                         }
                         onClick={() => {
                           setExportFmt(f.id);
