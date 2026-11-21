@@ -10,8 +10,6 @@ import {
   DEFAULT_ANIM,
   fontCss,
   mainClipDuration,
-  mainClipGain,
-  mainPlaybackRate,
   wipeDir,
   mainSpans,
   mainSrcAt,
@@ -33,6 +31,7 @@ import {
   freezeClipFrom,
 } from "./types";
 import { applyLut, type LutTable } from "./luts";
+import { sampleTimeline } from "./timeline";
 import { makeImpulse, probeGif } from "./utils";
 import { GifReader, GifWriter } from "omggif";
 
@@ -443,6 +442,8 @@ export class Engine {
   private lastNow = 0;
   private lastPaintAt = 0;
   private lastUiTimeAt = 0;
+  private buffering = false;
+  onBufferingChange: ((buffering: boolean) => void) | null = null;
 
   private audioCtx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -544,6 +545,10 @@ export class Engine {
     return record;
   }
 
+  hasMediaUrl(mediaId: string): boolean {
+    return !!this.els.get(mediaId)?.url;
+  }
+
   attachUrl(mediaId: string, url: string) {
     const media = this.media.get(mediaId);
     if (!media) return;
@@ -584,7 +589,11 @@ export class Engine {
           if (rec.videoLoadTimer) window.clearTimeout(rec.videoLoadTimer);
           rec.videoLoadTimer = undefined;
         };
-        video.addEventListener("loadeddata", clearWatchdog);
+        video.addEventListener("loadeddata", () => {
+          clearWatchdog();
+          this.draw();
+        });
+        video.addEventListener("seeked", () => { if (!this.playing) this.draw(); });
         video.addEventListener("canplay", clearWatchdog);
         video.addEventListener("error", () => {
           clearWatchdog();
@@ -627,10 +636,11 @@ export class Engine {
     if (rec.videoLoadRequested) return;
     rec.videoLoadRequested = true;
     video.preload = "auto";
-    try {
-      video.load();
-    } catch {
-      /* browser rejected a redundant load */
+    // Changing preload is enough for a media element which already has a
+    // source. Calling load() here resets its seek position and interrupts
+    // playback, especially at cuts on slower phones.
+    if (video.networkState === HTMLMediaElement.NETWORK_EMPTY) {
+      try { video.load(); } catch { /* browser rejected the load */ }
     }
     rec.videoLoadTimer = window.setTimeout(() => {
       rec.videoLoadTimer = undefined;
@@ -805,15 +815,15 @@ export class Engine {
   }
 
   /**
-   * Decode a source segment [inS, outS) of a media's embedded audio to mono.
-   * Powers "Extract audio" (CapCut-style detach). On-device limit: sources
+   * Decode a source segment [inS, outS), preserving its channels and also
+   * producing a mono waveform for analysis. Powers "Extract audio". Limit: sources
    * up to ~15 min (decodeAudioData needs the whole file in memory).
    */
   async extractAudioWav(
     mediaId: string,
     inS: number,
     outS: number,
-  ): Promise<{ samples: Float32Array; sampleRate: number; duration: number } | null> {
+  ): Promise<{ samples: Float32Array; channels: Float32Array[]; sampleRate: number; duration: number } | null> {
     if (!this.audioBufferAllowed(mediaId)) return null;
     await this.ensureAudio();
     const buf = await this.audioBuffer(mediaId);
@@ -829,7 +839,8 @@ export class Engine {
       const d = buf.getChannelData(c);
       for (let i = 0; i < n; i++) out[i] += d[start + i] / chs;
     }
-    return { samples: out, sampleRate: sr, duration: n / sr };
+    const channels = Array.from({ length: chs }, (_, c) => buf.getChannelData(c).slice(start, end));
+    return { samples: out, channels, sampleRate: sr, duration: n / sr };
   }
 
   /** On-device memory guard for full-file audio decode. */
@@ -912,7 +923,7 @@ export class Engine {
     src.detune.value = Math.max(-1200, Math.min(1200, (c.fx?.pitch ?? 0) * 100));
     src.connect(rec.fx.in);
     rec.bufSrc = src;
-    rec.bufClip = { clipId: c.id, start: c.start };
+    rec.bufClip = { clipId: c.id, start: local };
     rec.bufStartWall = this.audioCtx.currentTime;
     try {
       src.start(0, Math.min(local, buf.duration));
@@ -964,9 +975,60 @@ export class Engine {
     this.loopRaf();
   }
 
+  private setBuffering(value: boolean) {
+    if (this.buffering === value) return;
+    this.buffering = value;
+    this.onBufferingChange?.(value);
+  }
+
+  /** Only active visual sources can hold up the timeline. */
+  private videosAwaitingFrame(): HTMLVideoElement[] {
+    const ids = new Set<string>();
+    const sample = sampleTimeline(this.project, this.t);
+    for (const s of sample.main) ids.add(s.clip.mediaId);
+    for (const layer of sample.overlays) {
+      const track = this.project.tracks.find((tr) => tr.id === layer.trackId);
+      if (!track?.hidden && layer.clip.kind === "video" && layer.clip.mediaId) ids.add(layer.clip.mediaId);
+    }
+    const pending: HTMLVideoElement[] = [];
+    for (const id of ids) {
+      const rec = this.els.get(id);
+      if (!rec || rec.videoBroken || !(rec.el instanceof HTMLVideoElement)) continue;
+      this.requestVideoLoad(id);
+      if (rec.el.readyState < 2 || rec.el.seeking) pending.push(rec.el);
+    }
+    return pending;
+  }
+
+  /** Wait for the first frame before starting a real-time export recording. */
+  private async prepareExportFrame() {
+    this.syncElements(true);
+    const pending = this.videosAwaitingFrame();
+    await Promise.all(pending.map((el) => new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const cleanup = () => {
+        clearTimeout(timer);
+        el.removeEventListener("loadeddata", check);
+        el.removeEventListener("seeked", check);
+        el.removeEventListener("error", fail);
+      };
+      const check = () => {
+        if (el.readyState >= 2 && !el.seeking) { cleanup(); resolve(); }
+      };
+      const fail = () => { cleanup(); reject(new Error("Video could not be decoded for export")); };
+      el.addEventListener("loadeddata", check);
+      el.addEventListener("seeked", check);
+      el.addEventListener("error", fail);
+      timer = setTimeout(() => { cleanup(); reject(new Error("Video took too long to load for export. Try a smaller H.264 video.")); }, 15000);
+      check();
+    })));
+    this.draw();
+  }
+
   pause() {
     if (!this.playing) return;
     this.playing = false;
+    this.setBuffering(false);
     cancelAnimationFrame(this.raf);
     for (const rec of this.els.values()) {
       const e = rec.el as Partial<AudioEl>;
@@ -987,6 +1049,28 @@ export class Engine {
     cancelAnimationFrame(this.raf);
     const step = (now: number) => {
       if (!this.playing) return;
+      // Do not advance the timeline or let audio run ahead while a preview
+      // video is still loading or seeking. Real-time exports preflight their
+      // first frame separately and must not silently insert recording time.
+      if (!this.exporting && this.videosAwaitingFrame().length) {
+        if (!this.buffering) {
+          this.setBuffering(true);
+          for (const [id, rec] of this.els) {
+            const el = rec.el as Partial<AudioEl>;
+            if (el && !el.paused) el.pause?.();
+            if (rec.audioFallback && !rec.audioFallback.paused) rec.audioFallback.pause();
+            if (rec.bufSrc) this.stopBufSource(id);
+          }
+        }
+        this.lastNow = now;
+        this.raf = requestAnimationFrame(step);
+        return;
+      }
+      if (this.buffering) {
+        this.setBuffering(false);
+        this.syncElements(true);
+        this.lastNow = now;
+      }
       const dt = Math.min(0.25, (now - this.lastNow) / 1000);
       this.lastNow = now;
       this.t += dt;
@@ -1028,7 +1112,7 @@ export class Engine {
   /**
    * Glue media elements to the timeline clock.
    * Reverse clips: the element is held paused and re-seeked to the mirrored
-   * source position every frame (its audio is muted — see effectiveVolume).
+   * source position every frame (its audio is muted by the timeline gain).
    */
   private syncElements(hard: boolean) {
     // Back-fill WebAudio routing for any element created before the
@@ -1041,11 +1125,13 @@ export class Engine {
     }
     const spans = mainSpans(this.project);
     const t = this.t;
+    // Warm the next source shortly before a cut instead of starting its
+    // decoder only after the playhead arrives there.
+    const next = spans.find((s) => s.start > t && s.start - t <= 3);
+    if (next) this.requestVideoLoad(next.clip.mediaId);
     const activeIds = new Set<string>();
-    for (const s of spans) {
-      const winStart = s.clip.transitionIn !== "none" ? s.start - s.clip.transitionDur : s.start;
-      const active = t >= winStart && t < s.end + 0.001;
-      if (!active) continue;
+    const sample = sampleTimeline(this.project, t);
+    for (const s of sample.main) {
       activeIds.add(s.clip.mediaId);
       const rec = this.els.get(s.clip.mediaId);
       const el = this.audioEl(s.clip.mediaId);
@@ -1066,7 +1152,7 @@ export class Engine {
           if (!el.paused) el.pause();
           continue;
         }
-        const local = mainSrcAt(s.clip, t - s.start);
+        const local = s.sourceTime;
         if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
           try {
             el.currentTime = Math.max(0, local);
@@ -1079,11 +1165,11 @@ export class Engine {
         // browser, which leaves the element at the previous clip's rate —
         // "speed says 1x but it plays at 2x".
         {
-          const rate = mainPlaybackRate(s.clip, t - s.start);
+          const rate = s.playbackRate;
           const safe = Number.isFinite(rate) && rate > 0 ? Math.min(16, rate) : 1;
           if (el.playbackRate !== safe) el.playbackRate = safe;
         }
-        el.volume = this.effectiveVolume(s.clip, t, s);
+        el.volume = Math.max(0, Math.min(1, s.gain * (this.mainTrackAudible() ? this.duckFactor(t) : 0)));
         if (s.clip.reverse) {
           if (!el.paused) el.pause();
         } else if (this.playing && el.paused) {
@@ -1094,15 +1180,15 @@ export class Engine {
       }
     }
     // overlay audio clips
-    for (const tr of this.project.tracks) {
-      for (const c of tr.clips) {
+    for (const layer of sample.overlays) {
+      const c = layer.clip;
         if (c.kind === "audio") {
           if (!c.mediaId) continue;
           if (t >= c.start && t < c.start + c.duration) {
             activeIds.add(c.mediaId);
             const el = this.audioEl(c.mediaId);
             if (!el) continue;
-            const local = t - c.start;
+            const local = layer.sourceTime;
             const pitch = c.fx?.pitch ?? 0;
             const media = this.media.get(c.mediaId);
             const md = media?.duration ?? 0;
@@ -1123,6 +1209,7 @@ export class Engine {
                   /* ignore */
                 }
               }
+              if (el.playbackRate !== 1) el.playbackRate = 1;
               el.volume = this.overlayAudioVolume(c, t) * this.duckFactor(t);
               if (this.playing && el.paused) void el.play().catch(() => undefined);
             }
@@ -1134,7 +1221,7 @@ export class Engine {
             const el = this.audioEl(c.mediaId);
             if (el instanceof HTMLVideoElement) {
               this.requestVideoLoad(c.mediaId);
-              let local = (t - c.start) * (c.speed ?? 1);
+              let local = layer.sourceTime;
               if (c.loop) {
                 const md = this.media.get(c.mediaId)?.duration ?? 0;
                 if (md > 0.05) local %= md;
@@ -1146,13 +1233,12 @@ export class Engine {
                   /* ignore */
                 }
               }
-              el.playbackRate = 1;
+              el.playbackRate = Math.max(0.05, Math.min(16, c.speed ?? 1));
               el.volume = 0;
               if (this.playing && el.paused) void el.play().catch(() => undefined);
             }
           }
         }
-      }
     }
     this.syncFx();
     // pause everything else
@@ -1165,52 +1251,24 @@ export class Engine {
   }
 
   private activeAudioEls(): { el: AudioEl; clipReverse: boolean }[] {
-    const spans = mainSpans(this.project);
     const out: { el: AudioEl; clipReverse: boolean }[] = [];
-    const t = this.t;
-    for (const s of spans) {
-      const winStart = s.clip.transitionIn !== "none" ? s.start - s.clip.transitionDur : s.start;
-      if (t >= winStart && t < s.end) {
-        if (s.clip.freeze) continue;
-        const rec = this.els.get(s.clip.mediaId);
-        // A video we had to swap to a shadow <audio> element cannot render,
-        // but its own element may still carry an audible track. Mute + pause
-        // it here or it doubles the fallback.
-        if (rec?.videoBroken && rec.el instanceof HTMLVideoElement) {
-          rec.el.muted = true;
-          if (!rec.el.paused) rec.el.pause();
-        }
-        const el = this.audioEl(s.clip.mediaId);
-        if (el) out.push({ el, clipReverse: !!s.clip.reverse });
+    const sample = sampleTimeline(this.project, this.t);
+    for (const s of sample.main) {
+      if (s.clip.freeze) continue;
+      const rec = this.els.get(s.clip.mediaId);
+      if (rec?.videoBroken && rec.el instanceof HTMLVideoElement) {
+        rec.el.muted = true;
+        if (!rec.el.paused) rec.el.pause();
       }
+      const el = this.audioEl(s.clip.mediaId);
+      if (el) out.push({ el, clipReverse: !!s.clip.reverse });
     }
-    for (const tr of this.project.tracks)
-      for (const c of tr.clips)
-        if (
-          (c.kind === "audio" || c.kind === "video") &&
-          c.mediaId &&
-          t >= c.start &&
-          t < c.start + c.duration
-        ) {
-          const el = this.audioEl(c.mediaId);
-          if (el) out.push({ el, clipReverse: c.kind === "video" });
-        }
+    for (const { clip } of sample.overlays) {
+      if ((clip.kind !== "audio" && clip.kind !== "video") || !clip.mediaId) continue;
+      const el = this.audioEl(clip.mediaId);
+      if (el) out.push({ el, clipReverse: clip.kind === "video" });
+    }
     return out;
-  }
-
-  private effectiveVolume(clip: MainClip, t: number, s: { start: number; end: number }): number {
-    // The transition crossfade maths lives in types.ts so it can be asserted
-    // without a DOM (see mainClipGain). Here we only add the runtime factors.
-    let v = mainClipGain(clip, s, this.nextMainSpan(s), t);
-    v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
-    return Math.max(0, Math.min(1, v));
-  }
-
-  /** The span immediately after `s`, or null when `s` is the last one. */
-  private nextMainSpan(s: { start: number; end: number }) {
-    const spans = mainSpans(this.project);
-    const i = spans.findIndex((x) => Math.abs(x.start - s.start) < 1e-6);
-    return i >= 0 && i + 1 < spans.length ? spans[i + 1] : null;
   }
 
   private overlayAudioVolume(c: OverlayClip, t: number): number {
@@ -1431,29 +1489,19 @@ export class Engine {
     ctx.fillRect(0, 0, W, H);
 
     // --- main track (with transitions) ---
-    const spans = mainSpans(this.project);
-    for (let i = 0; i < spans.length; i++) {
-      const s = spans[i];
-      const c = s.clip;
-      const dur = c.transitionIn !== "none" ? Math.max(0, c.transitionDur) : 0;
-      const winStart = dur > 0 ? s.start - dur : s.start;
-      if (t < winStart || t >= s.end + 0.001) continue;
-      // not inside the transition window → plain draw
-      if (!(dur > 0 && t < s.start) || i === 0) {
-        this.drawMainItem(ctx, s, 1, W, H, t);
-        continue;
-      }
-      const k = clamp01((t - winStart) / dur);
-      this.composeTransition(ctx, spans[i - 1], s, c.transitionIn, k, W, H, t);
+    const sample = sampleTimeline(this.project, t);
+    for (const s of sample.main) {
+      if (!s.transition) this.drawMainItem(ctx, s, 1, W, H, t);
+      else this.composeTransition(ctx, s.transition.previous, s, s.transition.kind, s.transition.progress, W, H, t);
     }
 
     // --- overlay tracks ---
     this.overlayRects.length = 0;
-    for (const tr of this.project.tracks) {
-      if (tr.hidden) continue;
-      for (const c of tr.clips) {
-        if (t < c.start || t >= c.start + c.duration) continue;
-        const localT = t - c.start;
+    for (const layer of sample.overlays) {
+      const tr = this.project.tracks.find((track) => track.id === layer.trackId);
+      if (tr?.hidden) continue;
+      const c = layer.clip;
+      const localT = layer.localTime;
         const rampIn = Math.min(1, localT / 0.4);
         const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
         const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
@@ -1531,7 +1579,6 @@ export class Engine {
             ctx.restore();
           }
         }
-      }
     }
 
     ctx.restore();
@@ -2417,10 +2464,6 @@ export class Engine {
       ctx.fillStyle = "rgba(255,255,255,0.4)";
       ctx.font = `500 ${Math.round(H * 0.016)}px system-ui, sans-serif`;
       ctx.fillText(m?.name ?? "", W / 2, H / 2 + H * 0.085);
-    } else {
-      ctx.fillStyle = "rgba(255,255,255,0.45)";
-      ctx.font = `500 ${Math.round(H * 0.022)}px system-ui, sans-serif`;
-      ctx.fillText(m ? m.name : "media loading…", W / 2, H / 2);
     }
     ctx.restore();
   }
@@ -2768,6 +2811,13 @@ export class Engine {
 
   // ------------------------------------------------------------- mutations
 
+  /** Notify the editor after a direct model edit and update playback immediately. */
+  commitChange() {
+    this.bump();
+    this.syncElements(false);
+    this.draw();
+  }
+
   private bump() {
     this.version++;
     this.onVersion?.();
@@ -2791,8 +2841,8 @@ export class Engine {
       adjust: { ...DEFAULT_ADJUST },
       volume: 1,
       muted: false,
-      transitionIn: "crossfade",
-      transitionDur: 0.5,
+      transitionIn: "none",
+      transitionDur: 0,
     };
     if (!atEnd) this.project.main.unshift(clip);
     else this.project.main.push(clip);
@@ -2810,6 +2860,9 @@ export class Engine {
       const s = spans[i];
       if (t <= s.start || t >= s.end) continue;
       const c = s.clip;
+      // Splitting a variable-speed curve requires reparameterizing its curve.
+      // Refuse rather than silently change the duration and sync of the edit.
+      if (c.freeze || c.rampTo != null || (c.curve?.length ?? 0) >= 2) return false;
       const srcAt = mainSrcAt(c, t - s.start);
       if (srcAt - c.in < 0.08 || c.out - srcAt < 0.08) return false;
       const local = t - s.start;
@@ -2820,17 +2873,17 @@ export class Engine {
       const a: MainClip = {
         ...c,
         id: uid("mc"),
-        in: c.in,
-        out: srcAt,
-        transitionIn: "none",
-        transitionDur: 0,
+        in: c.reverse ? srcAt : c.in,
+        out: c.reverse ? c.out : srcAt,
         keyframes: kfsA && kfsA.length ? kfsA : undefined,
       };
       const b: MainClip = {
         ...c,
         id: uid("mc"),
-        in: srcAt,
-        out: c.out,
+        in: c.reverse ? c.in : srcAt,
+        out: c.reverse ? srcAt : c.out,
+        transitionIn: "none",
+        transitionDur: 0,
         keyframes: kfsB && kfsB.length ? kfsB : undefined,
       };
       this.project.main.splice(i, 1, a, b);
@@ -3015,7 +3068,7 @@ export class Engine {
       this.bump();
       return f;
     }
-    this.splitAt(t);
+    if (!this.splitAt(t)) return false;
     const spans2 = mainSpans(this.project);
     const idx2 = spans2.findIndex((sp) => t >= sp.start - 0.001 && t < sp.start + 0.02);
     const f = freezeClipFrom(c, srcAt, hold);
@@ -3235,74 +3288,91 @@ export class Engine {
     this.exportScale = opts.scale ?? 1;
     this.exporting = true;
     this.previewMaxSide = 0; // exports always render at full quality
-    for (const [id, rec] of this.els) {
-      if (rec.el instanceof HTMLImageElement) continue;
-      const target = (rec.videoBroken ? rec.audioFallback : rec.el) as AudioEl | undefined;
-      if (!target) continue;
-      if (!rec.sourceNode) {
-        rec.sourceNode = this.audioCtx.createMediaElementSource(target);
-        rec.sourceNode.connect(this.ensureFx(id)!.in);
-      }
-    }
     const wasLoop = this.loop;
+    let canvasStream: MediaStream | undefined;
+    let recorder: MediaRecorder | undefined;
     this.loop = false;
-    const wasPlaying = this.playing;
-    if (wasPlaying) this.pause();
-    this.seek(0);
-    this.draw();
-
-    const canvasStream = this.canvas.captureStream(opts.fps);
-    const mixed = new MediaStream([
-      ...canvasStream.getVideoTracks(),
-      ...this.exportDest.stream.getAudioTracks(),
-    ]);
-    const rec = new MediaRecorder(mixed, {
-      mimeType: picked.mime,
-      videoBitsPerSecond: opts.videoBitsPerSecond,
-      audioBitsPerSecond: opts.audioBitsPerSecond,
-    });
-    const chunks: BlobPart[] = [];
-    rec.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-    const stopped = new Promise<Blob>((resolve) => {
-      rec.onstop = () => resolve(new Blob(chunks, { type: picked.mime }));
-    });
-
-    const dur = this.duration();
     try {
+      for (const [id, rec] of this.els) {
+        if (rec.el instanceof HTMLImageElement) continue;
+        const target = (rec.videoBroken ? rec.audioFallback : rec.el) as AudioEl | undefined;
+        if (!target) continue;
+        if (!rec.sourceNode) {
+          rec.sourceNode = this.audioCtx.createMediaElementSource(target);
+          rec.sourceNode.connect(this.ensureFx(id)!.in);
+        }
+      }
+      if (this.playing) this.pause();
+      this.seek(0);
+      await this.prepareExportFrame();
+      canvasStream = this.canvas.captureStream(opts.fps);
+      const mixed = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...this.exportDest.stream.getAudioTracks(),
+      ]);
+      recorder = new MediaRecorder(mixed, {
+        mimeType: picked.mime,
+        videoBitsPerSecond: opts.videoBitsPerSecond,
+        audioBitsPerSecond: opts.audioBitsPerSecond,
+      });
+      const rec = recorder;
+      const chunks: BlobPart[] = [];
+      let recorderError: Error | undefined;
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      const stopped = new Promise<void>((resolve) => {
+        rec.onstop = () => resolve();
+        rec.onerror = (event) => {
+          recorderError = (event as Event & { error?: DOMException }).error ?? new Error("Video recording failed");
+          resolve();
+        };
+      });
+      const dur = this.duration();
       rec.start(500);
       await this.play();
       const deadline = performance.now() + (dur + 15) * 1000;
-      while (rec.state === "recording") {
+      while (rec.state === "recording" && !recorderError) {
         onProgress(Math.min(1, this.t / Math.max(0.001, dur)));
-        if (performance.now() > deadline) break;
+        if (!this.playing) break;
+        if (performance.now() > deadline) throw new Error("Export timed out before playback finished");
         await new Promise((r) => setTimeout(r, 200));
       }
-    } finally {
-      if (!wasPlaying) this.pause();
-      this.loop = wasLoop;
+      const endedEarly = this.t < dur - 0.03;
       if (rec.state !== "inactive") rec.stop();
+      await stopped;
+      if (recorderError) throw recorderError;
+      if (endedEarly) throw new Error("Recording stopped before the timeline finished");
+      const blob = new Blob(chunks, { type: picked.mime });
+      if (blob.size < 1000) throw new Error("Export produced no data — try again");
+      onProgress(1);
+      return blob;
+    } finally {
+      this.pause();
+      if (recorder && recorder.state !== "inactive") {
+        try { recorder.stop(); } catch { /* already stopping */ }
+      }
+      // Only the canvas tracks are owned by this export. Audio tracks belong
+      // to the shared audio graph and must remain available for later exports.
+      canvasStream?.getTracks().forEach((track) => track.stop());
+      this.loop = wasLoop;
       this.exportScale = prevScale;
       this.exporting = false;
       this.previewMaxSide = prevCap;
     }
-    const blob = await stopped;
-    canvasStream.getTracks().forEach((t) => t.stop());
-    if (blob.size < 1000) throw new Error("Export produced no data — try again");
-    onProgress(1);
-    return blob;
   }
 
   // ------------------------------------------------------------- export (MP4)
-  // WebCodecs: H.264 video + Opus audio, muxed by mp4-muxer. Real-time render
+  // WebCodecs: H.264 video + AAC audio, muxed by mp4-muxer. Real-time render
   // (the timeline plays once while frames are captured), same as the WebM path.
 
   async exportMP4(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
     if (!this.canvas) throw new Error("Canvas not ready");
     if (!mp4Supported())
       throw new Error("MP4 export needs WebCodecs — use Chrome or Edge (WebM also works).");
-    const { w: W, h: H } = ASPECTS[this.project.aspect];
+    const baseSize = ASPECTS[this.project.aspect];
+    const W = baseSize.w * (opts.scale ?? 1);
+    const H = baseSize.h * (opts.scale ?? 1);
     const codec = await pickAvcCodec(W, H, opts.fps, opts.videoBitsPerSecond);
     if (!codec)
       throw new Error("H.264 encoding is not supported at this resolution here — use WebM.");
@@ -3330,6 +3400,15 @@ export class Engine {
     this.exportScale = opts.scale ?? 1;
     this.exporting = true;
     this.previewMaxSide = 0; // exports always render at full quality
+    const wasLoop = this.loop;
+    const wasPlaying = this.playing;
+    this.loop = false;
+    let videoEncoder: VideoEncoder | undefined;
+    let audioEncoder: AudioEncoder | undefined;
+    let streamSource: MediaStreamAudioSourceNode | undefined;
+    let sp: ScriptProcessorNode | undefined;
+    let silence: GainNode | undefined;
+    let audioArmed = false;
     try {
       for (const [id, rec] of this.els) {
         if (rec.el instanceof HTMLImageElement) continue;
@@ -3340,6 +3419,10 @@ export class Engine {
           rec.sourceNode.connect(this.ensureFx(id)!.in);
         }
       }
+
+      if (wasPlaying) this.pause();
+      this.seek(0);
+      await this.prepareExportFrame();
 
       const target = new ArrayBufferTarget();
       const muxer = new Muxer({
@@ -3355,7 +3438,7 @@ export class Engine {
         AudioEncoder: typeof AudioEncoder;
         VideoFrame: typeof VideoFrame;
       };
-      const videoEncoder = new W_.VideoEncoder({
+      videoEncoder = new W_.VideoEncoder({
         output: (chunk, meta) => {
           try {
             muxer.addVideoChunk(chunk, meta);
@@ -3374,7 +3457,7 @@ export class Engine {
         framerate: opts.fps,
         bitrate: opts.videoBitsPerSecond,
       });
-      const audioEncoder = new W_.AudioEncoder({
+      audioEncoder = new W_.AudioEncoder({
         output: (chunk, meta) => {
           try {
             muxer.addAudioChunk(chunk, meta);
@@ -3389,14 +3472,13 @@ export class Engine {
       await audioEncoder.configure(aacConfig);
       // Bridge: exportDest's MediaStream → ScriptProcessor → AudioData → AudioEncoder.
       // (WebAudio nodes cannot be connected directly to a WebCodecs encoder.)
-      const streamSource = this.audioCtx.createMediaStreamSource(this.exportDest.stream);
-      const sp = this.audioCtx.createScriptProcessor(4096, 2, 2);
-      const silence = this.audioCtx.createGain();
+      streamSource = this.audioCtx.createMediaStreamSource(this.exportDest.stream);
+      sp = this.audioCtx.createScriptProcessor(4096, 2, 2);
+      silence = this.audioCtx.createGain();
       silence.gain.value = 0;
       streamSource.connect(sp);
       sp.connect(silence);
       silence.connect(this.audioCtx.destination);
-      let audioArmed = false;
       let audioT0: number | null = null;
       sp.onaudioprocess = (e: AudioProcessingEvent) => {
         if (!audioArmed || encError) return;
@@ -3406,34 +3488,29 @@ export class Engine {
         try {
           const ch0 = ab.getChannelData(0);
           const ch1 = ab.numberOfChannels > 1 ? ab.getChannelData(1) : ch0;
+          const samples = new Float32Array(ab.length * 2);
+          samples.set(ch0, 0);
+          samples.set(ch1, ab.length);
           const ad = new AudioData({
             format: "f32-planar",
             sampleRate: ab.sampleRate,
             numberOfFrames: ab.length,
             numberOfChannels: 2,
             timestamp: Math.max(0, Math.round(rawTs - audioT0)),
-            // f32-planar: one Float32Array per channel (lib.dom types lag the spec)
-            data: [ch0.slice(0), ch1.slice(0)] as unknown as BufferSource,
+            data: samples,
           });
-          audioEncoder.encode(ad);
+          try { audioEncoder!.encode(ad); } finally { ad.close(); }
         } catch (er) {
           encError = encError ?? er;
         }
       };
-
-      const wasLoop = this.loop;
-      this.loop = false;
-      const wasPlaying = this.playing;
-      if (wasPlaying) this.pause();
-      this.seek(0);
-      this.draw();
 
       const dur = this.duration();
       const frameDurUs = 1_000_000 / opts.fps;
       const keyEvery = opts.fps * 2; // IDR roughly every 2s
       let frame = 0;
       let lastKeyFrame = -keyEvery; // force frame 0 to be a keyframe
-      void this.play();
+      await this.play();
       audioArmed = true; // audio timestamps start now (no pre-roll silence)
 
       const deadline = performance.now() + (dur + 15) * 1000;
@@ -3441,13 +3518,15 @@ export class Engine {
         const targetT = frame / opts.fps;
         if (this.t >= targetT - 0.002) {
           try {
+            // Keep timestamps tied to the timeline even if a slow device
+            // misses a frame, rather than compressing time and desyncing audio.
+            frame = Math.max(frame, Math.floor(this.t * opts.fps));
             const wantKey = frame - lastKeyFrame >= keyEvery;
             const vf = new W_.VideoFrame(this.canvas, {
               timestamp: Math.round(frame * frameDurUs),
             });
-            videoEncoder.encode(vf, { keyFrame: wantKey });
+            try { videoEncoder.encode(vf, { keyFrame: wantKey }); } finally { vf.close(); }
             if (wantKey) lastKeyFrame = frame;
-            vf.close();
             frame++;
           } catch (e) {
             encError = encError ?? e;
@@ -3455,50 +3534,18 @@ export class Engine {
         }
         onProgress(Math.min(1, this.t / Math.max(0.001, dur)));
         if (encError) break;
-        if (performance.now() > deadline) break;
+        if (performance.now() > deadline) {
+          encError = new Error("MP4 export timed out before the timeline finished");
+          break;
+        }
         await new Promise((r) => setTimeout(r, 16));
       }
-      // final frame at the end
-      if (!encError && this.t >= dur - 0.05) {
-        try {
-          const vf = new W_.VideoFrame(this.canvas, { timestamp: Math.round(frame * frameDurUs) });
-          videoEncoder.encode(vf);
-          vf.close();
-          frame++;
-        } catch {
-          /* ignore */
-        }
-      }
+      // The playhead at exactly duration lies beyond every clip. Encoding
+      // the canvas there would append a black frame to the finished video.
 
-      try {
-        await videoEncoder.flush();
-        await audioEncoder.flush();
-      } finally {
-        audioArmed = false;
-        sp.onaudioprocess = null;
-        try {
-          sp.disconnect();
-          silence.disconnect();
-          streamSource.disconnect();
-        } catch {
-          /* ignore */
-        }
-        try {
-          audioEncoder.close();
-        } catch {
-          /* ignore */
-        }
-        try {
-          videoEncoder.close();
-        } catch {
-          /* ignore */
-        }
-        if (!wasPlaying) this.pause();
-        this.loop = wasLoop;
-        this.exportScale = prevScale;
-        this.exporting = false;
-        this.previewMaxSide = prevCap;
-      }
+      audioArmed = false;
+      await videoEncoder.flush();
+      await audioEncoder.flush();
       if (encError)
         throw encError instanceof Error
           ? encError
@@ -3509,6 +3556,16 @@ export class Engine {
       onProgress(1);
       return blob;
     } finally {
+      audioArmed = false;
+      if (sp) sp.onaudioprocess = null;
+      for (const node of [sp, silence, streamSource]) {
+        try { node?.disconnect(); } catch { /* partially constructed graph */ }
+      }
+      for (const encoder of [audioEncoder, videoEncoder]) {
+        try { if (encoder && encoder.state !== "closed") encoder.close(); } catch { /* already closed */ }
+      }
+      this.pause();
+      this.loop = wasLoop;
       this.exportScale = prevScale;
       this.exporting = false;
       this.previewMaxSide = prevCap;
@@ -3659,8 +3716,8 @@ export class Engine {
       g.connect(master);
       const start = Math.max(0, at);
       const offset = Math.max(0, srcStart);
-      const dur2 = Math.min(length, buf.duration - offset);
-      if (dur2 > 0.001) s2.start(start, offset, dur2 / rate);
+      const dur2 = Math.min(length * rate, buf.duration - offset);
+      if (dur2 > 0.001) s2.start(start, offset, dur2);
     };
 
     const spans = mainSpans(this.project);
@@ -3693,7 +3750,7 @@ export class Engine {
         if (c.kind !== "audio" || !c.mediaId || trackGain === 0) continue;
         const buf = await decode(c.mediaId);
         if (!buf) continue;
-        schedule(buf, c.start, 0, c.duration, (c.volume ?? 1) * trackGain);
+        schedule(buf, c.start, c.sourceOffset ?? 0, c.duration, (c.volume ?? 1) * trackGain);
       }
     }
 

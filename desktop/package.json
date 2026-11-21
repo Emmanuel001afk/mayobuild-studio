@@ -2,12 +2,13 @@
   "name": "mayocut-desktop",
   "version": "0.6.5",
   "private": true,
-  "description": "MayoCut \u2014 offline video editor (Windows desktop build)",
+  "description": "MayoCut — offline video editor (Windows desktop build)",
   "main": "main.cjs",
   "author": "Mayobuild",
   "license": "UNLICENSED",
   "devDependencies": {
     "electron": "^31.7.7",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "tar": "^7.5.23"
   }
 }

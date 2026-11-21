@@ -137,6 +137,8 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
         toast.error("No supported media files found (video, image or audio)");
         return;
       }
+      // Ask the browser to protect the local library from automatic eviction.
+      void navigator.storage?.persist?.().catch(() => false);
       const items = await importFiles(accepted);
       for (let i = 0; i < items.length; i++) await db.putMedia(items[i], accepted[i]);
       toast.success(`${items.length} item${items.length > 1 ? "s" : ""} added to your library`);

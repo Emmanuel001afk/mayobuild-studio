@@ -154,14 +154,17 @@ overlapping transition frames, per-clip `ctx.filter` chains, text and overlays.
 Preview and export share the identical compositor, so WYSIWYG is exact.
 
 **Export.** Four paths, all client-side:
-- **MP4** — WebCodecs `VideoEncoder` (H.264) + `AudioEncoder` (Opus) muxed by
+- **MP4** — WebCodecs `VideoEncoder` (H.264) + `AudioEncoder` (AAC) muxed by
   `mp4-muxer`, with a ScriptProcessor bridge from the WebAudio graph.
 - **WebM** — `canvas.captureStream()` + `MediaStreamAudioDestinationNode`
   → `MediaRecorder` (VP9/Opus). Works everywhere MediaRecorder exists.
 - **GIF** — frame-stepped render into a 256-colour cube palette via `omggif`.
 - **WAV / PNG** — `OfflineAudioContext` stereo mixdown / `canvas.toBlob`.
 
-All four share the same compositor, so what you preview is what ships.
+The browser video and GIF paths share the preview compositor, but encoding and
+realtime playback limitations can still cause differences. Desktop also offers
+an experimental native MP4 exporter with FFmpeg and FFprobe bundled in the
+Windows x64 installer; see `docs/mayocut-engine-foundation.md`.
 
 **The device as database.** All state lives in IndexedDB (`mayocut-db`):
 `media` (items) + `blobs` (files), `projects`, `templates`, `exports`.

@@ -111,7 +111,7 @@ export function Timeline(p: Props) {
     onMove: (dx: number, e: PointerEvent) => void,
     onClick: () => void,
   ) => {
-    e.preventDefault();
+    if (e.pointerType !== "touch") e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
     let moved = false;
@@ -120,13 +120,18 @@ export function Timeline(p: Props) {
       if (Math.abs(dx) > 2) moved = true;
       onMove(dx, ev);
     };
-    const onPointerUp = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", cleanup);
+    };
+    const onPointerUp = () => {
+      cleanup();
       if (!moved) onClick();
     };
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", cleanup);
   };
 
   // ruler scrub (click = seek, drag = scrub)
@@ -260,10 +265,10 @@ export function Timeline(p: Props) {
 
       <div
         ref={scrollRef}
-        className="flex-1 overflow-x-auto overflow-y-hidden select-none"
+        className="flex-1 min-h-0 overflow-auto select-none overscroll-contain"
         onWheel={wheelZoom}
       >
-        <div className="relative h-full" style={{ width }}>
+        <div className="relative min-h-full" style={{ width, minWidth: "100%" }}>
           {/* ruler */}
           <div
             className="h-6 border-b border-border relative cursor-ew-resize bg-slate-950/60"
@@ -303,16 +308,15 @@ export function Timeline(p: Props) {
                       ? "border-cyan-400 ring-2 ring-cyan-400/60 z-10"
                       : "border-white/15 hover:border-white/40"
                   } cursor-grab active:cursor-grabbing bg-slate-800 ${isDragging ? "opacity-60 ring-2 ring-cyan-300" : ""}`}
-                  style={{ left: s.start * pps, width: Math.max(8, (s.end - s.start) * pps) }}
+                  style={{ left: s.start * pps, width: Math.max(8, (s.end - s.start) * pps), touchAction: "pan-y" }}
                   onPointerDown={(e) => {
                     // selecting is the click action; a real drag reorders
-                    drag(
-                      e,
-                      (dx) => {
-                        if (Math.abs(dx) > 6) beginReorder(e, s.clip.id);
-                      },
-                      () => p.onSelect({ lane: "main", id: s.clip.id }),
-                    );
+                    if (e.pointerType === "touch") {
+                      drag(e, () => {}, () => p.onSelect({ lane: "main", id: s.clip.id }));
+                    } else {
+                      p.onSelect({ lane: "main", id: s.clip.id });
+                      beginReorder(e, s.clip.id);
+                    }
                   }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
@@ -404,11 +408,13 @@ export function Timeline(p: Props) {
                     className="absolute left-0 top-0 bottom-0 w-3.5 cursor-ew-resize bg-cyan-400/30 hover:bg-cyan-400/70 border-r border-black/30 z-10"
                     onPointerDown={(e) => {
                       e.stopPropagation();
+                      const startIn = s.clip.in;
+                      const rate = s.clip.freeze ? 1 : s.clip.speed;
                       drag(
                         e,
                         (dx) => {
-                          const dSrc = (dx / pps) * (s.clip.freeze ? 1 : s.clip.speed);
-                          p.onMainTrim(s.clip.id, "in", s.clip.in + dSrc);
+                          const dSrc = (dx / pps) * rate;
+                          p.onMainTrim(s.clip.id, "in", startIn + dSrc);
                         },
                         () => p.onSelect({ lane: "main", id: s.clip.id }),
                       );
@@ -418,11 +424,13 @@ export function Timeline(p: Props) {
                     className="absolute right-0 top-0 bottom-0 w-3.5 cursor-ew-resize bg-cyan-400/30 hover:bg-cyan-400/70 border-l border-black/30 z-10"
                     onPointerDown={(e) => {
                       e.stopPropagation();
+                      const startOut = s.clip.out;
+                      const rate = s.clip.freeze ? 1 : s.clip.speed;
                       drag(
                         e,
                         (dx) => {
-                          const dSrc = (dx / pps) * (s.clip.freeze ? 1 : s.clip.speed);
-                          p.onMainTrim(s.clip.id, "out", s.clip.out + dSrc);
+                          const dSrc = (dx / pps) * rate;
+                          p.onMainTrim(s.clip.id, "out", startOut + dSrc);
                         },
                         () => p.onSelect({ lane: "main", id: s.clip.id }),
                       );
@@ -464,7 +472,7 @@ export function Timeline(p: Props) {
                 dim={tr.hidden || tr.muted}
               >
                 {/* track controls */}
-                <div className="absolute right-1 top-0 z-20 flex items-center gap-0.5">
+                <div className="sticky left-1 top-0 z-20 flex w-fit items-center gap-0.5">
                   <button
                     className="h-4 w-4 rounded bg-black/50 hover:bg-slate-700 text-muted-foreground hover:text-cyan-300 flex items-center justify-center"
                     title={tr.hidden ? "Show track" : "Hide track"}
@@ -516,6 +524,8 @@ export function Timeline(p: Props) {
                   <OverlayClipBox
                     key={c.id}
                     clip={c}
+                    trackId={tr.id}
+                    mediaDuration={mediaById(c.mediaId)?.duration}
                     pps={pps}
                     total={total}
                     selected={p.selection?.lane === "overlay" && p.selection.id === c.id}
@@ -595,6 +605,8 @@ function Lane({
 
 function OverlayClipBox({
   clip,
+  trackId,
+  mediaDuration,
   pps,
   total,
   selected,
@@ -609,6 +621,8 @@ function OverlayClipBox({
   onMoveTrack,
 }: {
   clip: OverlayClip;
+  trackId: string;
+  mediaDuration?: number;
   pps: number;
   total: number;
   selected: boolean;
@@ -632,10 +646,12 @@ function OverlayClipBox({
           : "bg-emerald-500/25 border-emerald-400/50";
 
   const begin = (e: React.PointerEvent, mode: "move" | "in" | "out") => {
-    e.preventDefault();
+    if (e.pointerType !== "touch") e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
-    const base = { start: clip.start, duration: clip.duration };
+    const base = { start: clip.start, duration: clip.duration, sourceOffset: clip.sourceOffset ?? 0 };
+    const hasSource = clip.kind === "audio" || clip.kind === "video";
+    const rate = clip.kind === "video" ? Math.max(0.05, clip.speed ?? 1) : 1;
     let moved = false;
     const startY = e.clientY;
     let laneDone = false;
@@ -658,7 +674,7 @@ function OverlayClipBox({
         return best;
       };
       // vertical drag between lanes (only while moving, once per gesture)
-      if (mode === "move" && !laneDone && onMoveTrack && Math.abs(ev.clientY - startY) > 30) {
+      if (e.pointerType !== "touch" && mode === "move" && !laneDone && onMoveTrack && Math.abs(ev.clientY - startY) > 30) {
         laneDone = true;
         // find a lane that accepts this clip kind (audio ↔ audio only)
         const wantsAudio = clip.kind === "audio";
@@ -666,7 +682,7 @@ function OverlayClipBox({
           wantsAudio ? l.id === "t_audio" : l.id !== "t_audio",
         );
         const dir = ev.clientY > startY ? 1 : -1;
-        const curIdx = candidates.findIndex((l) => l.id === onMoveTrackId(lanes, clip));
+        const curIdx = candidates.findIndex((l) => l.id === trackId);
         const next =
           candidates[
             Math.max(0, Math.min(candidates.length - 1, (curIdx === -1 ? 0 : curIdx) + dir))
@@ -682,23 +698,34 @@ function OverlayClipBox({
           Math.abs(snappedStart - raw) <= Math.abs(snappedEnd - raw) ? snappedStart : snappedEnd;
         onPatch({ start: Math.max(0, Math.min(total - base.duration, ns)) });
       } else if (mode === "in") {
-        const rawStart = Math.max(0, Math.min(base.start + base.duration - 0.2, base.start + d));
-        const ns = Math.max(0, Math.min(base.start + base.duration - 0.2, snap(rawStart)));
+        const earliest = hasSource ? Math.max(0, base.start - base.sourceOffset / rate) : 0;
+        const latest = base.start + base.duration - 0.2;
+        const rawStart = Math.max(earliest, Math.min(latest, base.start + d));
+        const ns = Math.max(earliest, Math.min(latest, snap(rawStart)));
         const nd = base.duration - (ns - base.start);
-        onPatch({ start: ns, duration: nd });
+        onPatch({ start: ns, duration: nd,
+          ...(hasSource ? { sourceOffset: Math.max(0, base.sourceOffset + (ns - base.start) * rate) } : {}) });
       } else {
-        const rawEnd = Math.max(base.start + 0.2, Math.min(total, base.start + base.duration + d));
-        const end = Math.max(base.start + 0.2, Math.min(total, snap(rawEnd)));
+        const sourceEnd = hasSource && !clip.loop && mediaDuration != null && mediaDuration > 0
+          ? base.start + Math.max(0, (mediaDuration - base.sourceOffset) / rate) : total;
+        const maxEnd = Math.max(base.start + 0.2, Math.min(total, sourceEnd));
+        const rawEnd = Math.max(base.start + 0.2, Math.min(maxEnd, base.start + base.duration + d));
+        const end = Math.max(base.start + 0.2, Math.min(maxEnd, snap(rawEnd)));
         onPatch({ duration: end - base.start });
       }
     };
-    const onUp = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", cleanup);
+    };
+    const onUp = () => {
+      cleanup();
       if (!moved) onSelect();
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", cleanup);
   };
 
   return (
@@ -706,7 +733,7 @@ function OverlayClipBox({
       className={`absolute top-1.5 bottom-1.5 rounded border flex items-center px-1.5 cursor-grab active:cursor-grabbing overflow-hidden ${kindColor} ${
         selected ? "ring-2 ring-cyan-400 z-10" : "hover:border-white/40"
       }`}
-      style={{ left: clip.start * pps, width: Math.max(14, clip.duration * pps) }}
+      style={{ left: clip.start * pps, width: Math.max(14, clip.duration * pps), touchAction: "pan-y" }}
       onPointerDown={(e) => begin(e, "move")}
       title={`${clip.kind}${clip.text ? `: ${clip.text.slice(0, 30)}` : ""} · ${clip.duration.toFixed(1)}s`}
     >
@@ -772,12 +799,6 @@ function OverlayClipBox({
 /** Filter and de-duplicate finite timeline snap positions. */
 function beatsForSnap(values: number[]): number[] {
   return values.filter((value) => Number.isFinite(value) && value >= 0);
-}
-
-/** Current lane id for a clip (used to pick a neighbour lane on drag). */
-function onMoveTrackId(lanes: { id: string; name: string }[], clip: OverlayClip): string {
-  if (clip.kind === "audio") return "t_audio";
-  return lanes.find((l) => l.id !== "t_audio")?.id ?? lanes[0]?.id ?? "";
 }
 
 /** Tiny amplitude bars drawn once per size — audio clips get a real waveform. */

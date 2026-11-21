@@ -37,8 +37,9 @@ function tx<T>(
       new Promise<T>((resolve, reject) => {
         const t = db.transaction(store, mode);
         const req = fn(t.objectStore(store));
-        req.onsuccess = () => resolve(req.result as T);
-        req.onerror = () => reject(req.error);
+        t.oncomplete = () => resolve(req.result as T);
+        t.onabort = () => reject(t.error ?? req.error ?? new Error("Local storage transaction aborted"));
+        t.onerror = () => reject(t.error ?? req.error ?? new Error("Local storage transaction failed"));
       }),
   );
 }
@@ -55,6 +56,7 @@ export const db = {
           t.objectStore("blobs").put({ id: item.id, blob });
           t.oncomplete = () => resolve(undefined);
           t.onerror = () => reject(t.error);
+          t.onabort = () => reject(t.error ?? new Error("Local storage transaction aborted"));
         }),
     ),
   getBlob: (id: string): Promise<Blob | undefined> =>
@@ -73,6 +75,7 @@ export const db = {
           t.objectStore("blobs").delete(id);
           t.oncomplete = () => resolve(undefined);
           t.onerror = () => reject(t.error);
+          t.onabort = () => reject(t.error ?? new Error("Local storage transaction aborted"));
         }),
     ),
 
@@ -117,6 +120,7 @@ export const db = {
           t.objectStore("blobs").put({ id: `exp_${item.id}`, blob });
           t.oncomplete = () => resolve(undefined);
           t.onerror = () => reject(t.error);
+          t.onabort = () => reject(t.error ?? new Error("Local storage transaction aborted"));
         }),
     ),
   getExportBlob: (id: string): Promise<Blob | undefined> =>
@@ -132,6 +136,7 @@ export const db = {
           t.objectStore("blobs").delete(`exp_${id}`);
           t.oncomplete = () => resolve(undefined);
           t.onerror = () => reject(t.error);
+          t.onabort = () => reject(t.error ?? new Error("Local storage transaction aborted"));
         }),
     ),
 };
