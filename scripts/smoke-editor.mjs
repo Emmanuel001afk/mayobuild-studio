@@ -325,6 +325,25 @@ for (const tb of LIBRARY_TABS) {
   checks.push(["filter cards render preview artwork", previews.length >= 8]);
 }
 
+// Exercise a real filter click and wait for the debounced IndexedDB autosave.
+{
+  const mainClip = [...document.querySelectorAll("[title]")].find((el) =>
+    (el.getAttribute("title") || "").startsWith("clip.mp4 · 4.00s"),
+  );
+  mainClip?.dispatchEvent(new window.PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", clientX: 10 }));
+  window.dispatchEvent(new window.PointerEvent("pointerup", { bubbles: true, pointerType: "mouse", clientX: 10 }));
+  await wait(100);
+  const filter = [...document.querySelectorAll("button")].find((el) => el.title === "Noir");
+  filter?.click();
+  await wait(1600);
+  const saved = await new Promise((resolve, reject) => {
+    const req = db.transaction("projects", "readonly").objectStore("projects").get("prj_smoke");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  checks.push(["selected filter persists in project storage", !!mainClip && !!filter && saved?.main[0]?.filter === "noir"]);
+}
+
 failed = 0;
 for (const [name, ok] of checks) {
   console.log(ok ? "  PASS" : "  FAIL", name);

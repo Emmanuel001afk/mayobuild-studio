@@ -70,6 +70,18 @@ jobs:
           path: app-shell-dist
       - run: npm --prefix desktop ci
       - run: cd desktop && npx electron-builder --win --x64
+      - name: Verify bundled media tools and native rendering
+        shell: pwsh
+        run: |
+          $env:MAYOCUT_TEST_FFMPEG = "$PWD/desktop/release/win-unpacked/resources/media-tools/ffmpeg.exe"
+          $env:MAYOCUT_TEST_FFPROBE = "$PWD/desktop/release/win-unpacked/resources/media-tools/ffprobe.exe"
+          if (!(Test-Path $env:MAYOCUT_TEST_FFMPEG) -or !(Test-Path $env:MAYOCUT_TEST_FFPROBE)) { throw "Bundled FFmpeg or FFprobe missing" }
+          & $env:MAYOCUT_TEST_FFMPEG -version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:MAYOCUT_TEST_FFPROBE -version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/native-export.test.cjs tests/media-tool-paths.test.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Launch + CDP render check
         shell: pwsh
         working-directory: desktop

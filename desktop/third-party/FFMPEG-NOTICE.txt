@@ -1,0 +1,20 @@
+Mayobuild Studio bundles FFmpeg and FFprobe executables separately from the app.
+They are third-party free software and are not created by Mayobuild.
+
+FFmpeg: @ffmpeg-installer/win32-x64 4.1.0, package reports GPLv3 and FFmpeg
+revision 20181217-f22fcd4. Package:
+https://www.npmjs.com/package/@ffmpeg-installer/win32-x64/v/4.1.0
+Upstream FFmpeg source: https://github.com/FFmpeg/FFmpeg/tree/f22fcd4
+
+FFprobe: @ffprobe-installer/win32-x64 5.1.0, package reports GPL-3.0 and build
+20230213-2296078. Package:
+https://www.npmjs.com/package/@ffprobe-installer/win32-x64/v/5.1.0
+Upstream FFmpeg source: https://github.com/FFmpeg/FFmpeg/tree/2296078
+Build provider: https://www.gyan.dev/ffmpeg/builds/
+
+The GNU GPL version 3 text is in FFMPEG-GPL-3.0.txt. The upstream packages and
+build providers should be consulted for exact source, build configuration and
+third-party dependency information. Before distributing a release, confirm the
+complete corresponding source and all applicable license obligations for the
+specific binary builds. The FFmpeg binary is an older build; replace it with a
+maintained build after validating its licensing and behavior.

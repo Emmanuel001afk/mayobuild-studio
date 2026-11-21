@@ -10,6 +10,14 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
+const nativeExport = require("./native-export.cjs");
+const { mediaToolPaths } = require("./media-tool-paths.cjs");
+const mediaTools = mediaToolPaths({
+  platform: process.platform,
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  baseDir: __dirname,
+});
 
 // Dev: the repo layout (desktop/../app-shell-dist). Packaged: electron-builder
 // places the bundle in resources/app-shell-dist (extraResources), NOT inside
@@ -77,7 +85,8 @@ function startServer() {
             return;
           }
           res.writeHead(200, {
-            "Content-Type": MIME[path.extname(filePath).toLowerCase()] || "application/octet-stream",
+            "Content-Type":
+              MIME[path.extname(filePath).toLowerCase()] || "application/octet-stream",
             "Content-Length": st.size,
             // local-only, always fresh (the bundle is immutable per build anyway)
             "Cache-Control": "no-cache",
@@ -122,7 +131,7 @@ function createWindow() {
   void win.loadURL(`http://127.0.0.1:${localPort}/`).catch((e) => {
     win.webContents
       .executeJavaScript(
-        "document.body.innerHTML = '<pre style=color:red;padding:20px>Failed to load the app: ' + (window.__loadErr || 'unknown')"
+        "document.body.innerHTML = '<pre style=color:red;padding:20px>Failed to load the app: ' + (window.__loadErr || 'unknown')",
       )
       .catch(() => undefined);
     console.error("loadURL failed:", e);
@@ -151,6 +160,75 @@ ipcMain.handle("mayocut:save-file", async (_event, payload) => {
   if (canceled || !filePath) return { canceled: true };
   await fs.promises.writeFile(filePath, Buffer.from(data));
   return { canceled: false, path: filePath };
+});
+
+// Accept native jobs only from the top-level window served by our own local shell.
+function trustedNativeSender(event) {
+  try {
+    const url = new URL(event.senderFrame.url);
+    return (
+      event.senderFrame === event.sender.mainFrame &&
+      url.protocol === "http:" &&
+      url.hostname === "127.0.0.1" &&
+      Number(url.port) === localPort
+    );
+  } catch {
+    return false;
+  }
+}
+let nativeBusy = false;
+ipcMain.handle("mayocut:native-status", async (event) => {
+  if (!trustedNativeSender(event)) throw new Error("Untrusted native export request");
+  return {
+    available: await nativeExport.available(mediaTools.ffmpeg, mediaTools.ffprobe),
+    bundled: mediaTools.bundled,
+  };
+});
+ipcMain.handle("mayocut:native-check", (event, project) => {
+  if (!trustedNativeSender(event)) throw new Error("Untrusted native export request");
+  try {
+    nativeExport.validateProject(project);
+    return { supported: true };
+  } catch (error) {
+    return { supported: false, reason: error.message };
+  }
+});
+ipcMain.handle("mayocut:native-export", async (event, payload) => {
+  if (!trustedNativeSender(event)) throw new Error("Untrusted native export request");
+  if (nativeBusy) throw new Error("A native export is already running");
+  nativeExport.validateProject(payload?.project);
+  nativeExport.validateOptions(payload?.options);
+  const name =
+    typeof payload.name === "string"
+      ? payload.name.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 100)
+      : "mayocut";
+  nativeBusy = true;
+  try {
+    if (!(await nativeExport.available(mediaTools.ffmpeg, mediaTools.ffprobe)))
+      throw new Error(
+        mediaTools.bundled
+          ? "Bundled media tools are missing or could not start. Please reinstall the desktop app."
+          : "Native media tools are unavailable on this platform.",
+      );
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: "Save native MP4 export",
+      defaultPath: `${name || "mayocut"}.mp4`,
+      filters: [{ name: "MP4 video", extensions: ["mp4"] }],
+    });
+    if (canceled || !filePath) return { canceled: true };
+    const result = await nativeExport.render({
+      project: payload.project,
+      options: payload.options,
+      sources: payload.sources,
+      destination: filePath,
+      ffmpeg: mediaTools.ffmpeg,
+      ffprobe: mediaTools.ffprobe,
+    });
+    return { canceled: false, size: result.size };
+  } finally {
+    nativeBusy = false;
+  }
 });
 
 // CI/verification hook: MAYOBUILD_CDP=9222 exposes a CDP endpoint so

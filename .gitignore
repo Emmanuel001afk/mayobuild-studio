@@ -20,6 +20,7 @@ dist-ssr
 app-shell-dist
 desktop/release
 desktop/node_modules
+desktop/media-tools
 android/.gradle
 android/build
 android/app/build

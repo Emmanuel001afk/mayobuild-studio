@@ -13,7 +13,9 @@
     "format": "prettier --write .",
     "build:shell": "node scripts/onnx-assets.mjs && node scripts/wllama-assets.mjs && vite build --config shell/vite.config.mts",
     "dist:win": "npm run build:shell && npm --prefix desktop ci --ignore-scripts && cd desktop && npx electron-builder --win --x64",
-    "dist:android": "npm run build:shell && npx cap sync android && cd android && ./gradlew assembleDebug"
+    "dist:android": "npm run build:shell && npx cap sync android && cd android && ./gradlew assembleDebug",
+    "test:mayocut": "tsx --test tests/mayocut.test.ts",
+    "test:native": "node --test tests/native-export.test.cjs tests/media-tool-paths.test.cjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -63,6 +65,7 @@
     "lucide-react": "^0.575.0",
     "mp4-muxer": "^5.2.2",
     "omggif": "^1.0.10",
+    "onnxruntime-web": "1.14.0",
     "pdfjs-dist": "^6.0.227",
     "react": "^19.2.0",
     "react-day-picker": "^9.14.0",
@@ -78,8 +81,7 @@
     "tw-animate-css": "^1.3.4",
     "vaul": "^1.1.2",
     "vite-tsconfig-paths": "^6.0.2",
-    "zod": "^3.24.2",
-    "onnxruntime-web": "1.14.0"
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@capacitor/android": "^8.6.2",
@@ -96,13 +98,15 @@
     "eslint-plugin-prettier": "^5.2.6",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
+    "fake-indexeddb": "^6.2.8",
     "globals": "^15.15.0",
     "nitro": "3.0.260603-beta",
+    "onnxruntime-node": "1.14.0",
     "prettier": "^3.7.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
-    "vite": "^8.3.8",
-    "onnxruntime-node": "1.14.0"
+    "vite": "^8.3.8"
   },
   "overrides": {
     "@zxing/library": "0.22.0"

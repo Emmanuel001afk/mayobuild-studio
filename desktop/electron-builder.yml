@@ -7,6 +7,8 @@ directories:
 files:
   - main.cjs
   - preload.cjs
+  - native-export.cjs
+  - media-tool-paths.cjs
   - package.json
 # The web bundle is a REAL folder next to app.asar (not inside it): main.cjs
 # serves it over a local http server, and keeping the big wasm/onnx assets
@@ -15,7 +17,13 @@ extraResources:
   - from: ../app-shell-dist
     to: app-shell-dist
 asar: true
+beforePack: ./stage-media-tools.cjs
 win:
+  extraResources:
+    - from: media-tools/win-x64
+      to: media-tools
+    - from: third-party
+      to: third-party
   target:
     - target: nsis
       arch:

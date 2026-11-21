@@ -694,6 +694,8 @@ export interface OverlayClip {
   mediaId?: string; // image / video / audio
   start: number; // timeline seconds
   duration: number;
+  /** Source time of the left edge for trimmed audio/video overlays. */
+  sourceOffset?: number;
   // text
   text?: string;
   size?: number; // px at 1080 reference height
@@ -1099,8 +1101,6 @@ export function mainClipGain(
     if (t >= winStart) {
       v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
     }
-  } else if (span.end - t < 0.3 && clip.transitionIn === "none") {
-    v *= Math.max(0, Math.min(1, (span.end - t) / 0.3));
   }
   return Math.max(0, Math.min(1, v));
 }

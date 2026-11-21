@@ -76,6 +76,42 @@ export function encodeWavMono(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buf], { type: "audio/wav" });
 }
 
+/** Encode interleaved PCM16 WAV while preserving source channels. */
+export function encodeWavChannels(channels: Float32Array[], sampleRate: number): Blob {
+  if (!channels.length) throw new Error("No audio channels");
+  const frames = channels[0].length;
+  if (channels.some((channel) => channel.length !== frames))
+    throw new Error("Unequal audio channels");
+  const count = channels.length;
+  const bytes = frames * count * 2;
+  const buffer = new ArrayBuffer(44 + bytes);
+  const view = new DataView(buffer);
+  const tag = (at: number, text: string) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(at + i, text.charCodeAt(i));
+  };
+  tag(0, "RIFF");
+  view.setUint32(4, 36 + bytes, true);
+  tag(8, "WAVE");
+  tag(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, count, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * count * 2, true);
+  view.setUint16(32, count * 2, true);
+  view.setUint16(34, 16, true);
+  tag(36, "data");
+  view.setUint32(40, bytes, true);
+  let offset = 44;
+  for (let i = 0; i < frames; i++)
+    for (const channel of channels) {
+      const value = Math.max(-1, Math.min(1, channel[i]));
+      view.setInt16(offset, value < 0 ? value * 32768 : value * 32767, true);
+      offset += 2;
+    }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
 /** ~128 normalized peak bins + RMS, same shape as importFiles' audio analysis. */
 export function analyzeMono(samples: Float32Array): { wave: number[]; rms: number } {
   const bins = 128;
