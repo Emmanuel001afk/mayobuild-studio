@@ -107,6 +107,15 @@ export const db = {
     tx<{ id: string; blob: Blob } | undefined>("blobs", "readonly", (s) => s.get(id)).then(
       (r) => r?.blob,
     ),
+  // --- preview proxies (never used for export) ---
+  getProxy: (mediaId: string): Promise<Blob | undefined> =>
+    tx<{ id: string; blob: Blob } | undefined>("blobs", "readonly", (s) =>
+      s.get(`proxy_${mediaId}`),
+    ).then((r) => r?.blob),
+  putProxy: (mediaId: string, blob: Blob): Promise<unknown> =>
+    tx("blobs", "readwrite", (s) => s.put({ id: `proxy_${mediaId}`, blob })),
+  deleteProxy: (mediaId: string): Promise<unknown> =>
+    tx("blobs", "readwrite", (s) => s.delete(`proxy_${mediaId}`)),
   /** Store a blob with a custom id (TTS model files) without touching the media store. */
   putRawBlob: (id: string, blob: Blob): Promise<void> =>
     tx("blobs", "readwrite", (s) => s.put({ id, blob })) as Promise<void>,

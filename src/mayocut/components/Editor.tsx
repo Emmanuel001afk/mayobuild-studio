@@ -31,6 +31,7 @@ import { can, device } from "../device";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { importLut, loadAllLuts } from "../luts";
 import { db, requestPersistentStorage } from "../idb";
+import { buildProxy, canBuildProxy } from "../proxy-build";
 import { Engine, FILTER_PRESETS, exportBlocker, mp4Supported, pickMime } from "../engine";
 import {
   ASPECTS,
@@ -99,6 +100,44 @@ const EMPTY_PROJECT: Project = {
  *  (or off-screen), leaving only the editing area visible. Short viewports
  *  always get the mobile layout, with a compact timeline/tab bar in landscape.
  */
+/**
+ * Build preview proxies for freshly imported footage, one at a time, off the
+ * interactive path.
+ *
+ * Photograph-quality phone footage (4K, high bitrate) is the main cause of a
+ * laggy scrub, so it is worth a background re-encode — but never at the cost of
+ * the import itself. Each proxy is stored beside its original and only ever
+ * used for preview; exports re-point at the original first.
+ */
+function queueProxyBuilds(
+  items: {
+    id: string;
+    kind: string;
+    width?: number;
+    height?: number;
+    duration?: number;
+    size?: number;
+  }[],
+  onBuilt?: (mediaId: string, proxy: Blob) => void,
+) {
+  if (!canBuildProxy() || !items.length) return;
+  void (async () => {
+    for (const item of items) {
+      try {
+        if (await db.getProxy(item.id)) continue; // already built
+        const blob = await db.getBlob(item.id);
+        if (!blob) continue;
+        const built = await buildProxy(blob, item);
+        if (!built) continue;
+        await db.putProxy(item.id, built.blob);
+        onBuilt?.(item.id, built.blob);
+      } catch {
+        /* a proxy is an optimisation; never surface its failure */
+      }
+    }
+  })();
+}
+
 function useIsMobile() {
   const [m, setM] = useState(() =>
     typeof window !== "undefined"
@@ -153,6 +192,10 @@ export function Editor({
   const [exportFps, setExportFps] = useState(30);
   const [exportKbps, setExportKbps] = useState(8000);
   const [exportRes, setExportRes] = useState<1 | 2>(1);
+  // Measured render speed for THIS device, so the export dialog can show an
+  // honest time estimate before a long render starts.
+  const [exportPlan, setExportPlan] = useState<ReturnType<Engine["planExport"]> | null>(null);
+  const [planning, setPlanning] = useState(false);
   const [previewQuality, setPreviewQuality] = useState<"auto" | "540" | "720" | "1080">("auto");
   const devProfile = device(); // memoized; drives export/feature gating
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
@@ -265,7 +308,12 @@ export function Editor({
         const item = media.find((m) => m.id === id);
         if (!item) continue;
         const blob = await db.getBlob(id);
-        if (blob) eng.attachUrl(id, URL.createObjectURL(blob));
+        if (!blob) continue;
+        eng.attachUrl(id, URL.createObjectURL(blob));
+        // A preview proxy, when one was built, keeps scrubbing responsive on
+        // large footage. Export always re-points at the original.
+        const proxy = await db.getProxy(id);
+        if (proxy) eng.attachProxy(id, URL.createObjectURL(proxy));
       }
       setEngineReady(true);
       const canvas = canvasWrapRef.current?.querySelector("canvas");
@@ -935,6 +983,13 @@ export function Editor({
         const blob = await db.getBlob(item.id);
         if (blob) engineRef.current?.attachUrl(item.id, URL.createObjectURL(blob));
       }
+      // Proxy building waits until the import has visibly finished, so a 4K
+      // clip never delays the moment the user sees their footage. It is
+      // best-effort: a phone with no spare CPU simply keeps the original.
+      queueProxyBuilds(
+        items.filter((item) => item.kind === "video" && !item.unplayable),
+        (mediaId, proxy) => engineRef.current?.attachProxy(mediaId, URL.createObjectURL(proxy)),
+      );
       const badVideos = items.filter((item) => item.kind === "video" && item.unplayable);
       const badImages = items.filter((item) => item.kind === "image" && item.unplayable);
       toast.success(`Added ${items.length} media item${items.length === 1 ? "" : "s"}`);
@@ -1440,7 +1495,24 @@ export function Editor({
     setExportProgress(0);
     try {
       let blob: Blob;
-      const stepped = wantMp4 && canMp4 ? await eng.canExportStepped() : false;
+      let stepped = wantMp4 && canMp4 ? await eng.canExportStepped() : false;
+      if (stepped) {
+        // A device slow enough that frame-stepping would take many times real
+        // time is better served by the real-time recorder. Measure once (or
+        // reuse the number the dialog already showed) before committing.
+        let plan = exportPlan;
+        if (!plan) {
+          try {
+            plan = await eng.measureThroughput();
+          } catch {
+            plan = null;
+          }
+        }
+        if (plan && plan.strategy === "realtime") {
+          stepped = false;
+          toast.info("This device is slow at frame-by-frame rendering — exporting in real time");
+        }
+      }
       if (stepped) {
         // Frame-stepped: every frame is confirmed before it is encoded, so the
         // result matches the preview exactly. Slower than real time on a weak
@@ -1471,6 +1543,33 @@ export function Editor({
       setExporting(false);
       setShowExport(false);
     }
+  }
+
+  /**
+   * Measure this device's real render speed, once, so the export dialog can say
+   * "about 40 seconds" instead of guessing. Runs a short probe against the live
+   * preview; the plan it returns is refreshed when fps or resolution changes.
+   */
+  async function measureExportSpeed() {
+    const eng = engineRef.current;
+    if (!eng || planning || exporting) return;
+    setPlanning(true);
+    try {
+      const plan = await eng.measureThroughput();
+      if (plan) setExportPlan(eng.planExport({ fps: exportFps, scale: exportRes }));
+    } catch {
+      /* an estimate is optional; the export still works without one */
+    } finally {
+      setPlanning(false);
+    }
+  }
+
+  // Keep the estimate in step with the chosen fps/resolution, using the last
+  // measurement. No probing happens here — only arithmetic.
+  function refreshPlan(res: 1 | 2, fps = exportFps) {
+    const eng = engineRef.current;
+    if (!eng || !exportPlan) return;
+    setExportPlan(eng.planExport({ fps, scale: res }));
   }
 
   function saveAsTemplate() {
@@ -2957,7 +3056,10 @@ export function Editor({
                   <div className="flex gap-1.5">
                     <button
                       className={`text-xs border rounded px-2 py-1 ${exportRes === 1 ? "border-cyan-400 bg-cyan-400/10" : "border-border"}`}
-                      onClick={() => setExportRes(1)}
+                      onClick={() => {
+                        setExportRes(1);
+                        refreshPlan(1);
+                      }}
                     >
                       {ASPECTS[project.aspect].w}×{ASPECTS[project.aspect].h}
                     </button>
@@ -2971,7 +3073,10 @@ export function Editor({
                           : undefined
                       }
                       disabled={devProfile.limits.exportMaxScale < 2}
-                      onClick={() => setExportRes(2)}
+                      onClick={() => {
+                        setExportRes(2);
+                        refreshPlan(2);
+                      }}
                     >
                       4K · {ASPECTS[project.aspect].w * 2}×{ASPECTS[project.aspect].h * 2}
                     </button>
@@ -2989,7 +3094,41 @@ export function Editor({
                 </p>
               )}
               <Row k="Length" v={fmtTime(dur)} />
-              <Row k="Speed" v="Real-time render — keep this window open" />
+              {exportPlan ? (
+                <div className="rounded border border-border bg-white/[0.03] px-2.5 py-2 text-[11px] leading-snug">
+                  <div className="font-medium text-foreground">
+                    {exportPlan.summary}
+                    {exportPlan.heuristic && (
+                      <span className="text-muted-foreground"> (roughly — not measured yet)</span>
+                    )}
+                  </div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <button
+                      className="border border-border rounded px-1.5 py-0.5 hover:border-white/40 disabled:opacity-50"
+                      onClick={() => void measureExportSpeed()}
+                      disabled={planning}
+                    >
+                      {planning ? "Measuring…" : "Re-measure"}
+                    </button>
+                    <span className="text-muted-foreground">
+                      {exportPlan.totalFrames} frames · {exportPlan.width}×{exportPlan.height}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2 rounded border border-border px-2.5 py-2 text-[11px]">
+                  <span className="text-muted-foreground">
+                    Time unknown — this device hasn&apos;t rendered before.
+                  </span>
+                  <button
+                    className="shrink-0 border border-border rounded px-1.5 py-0.5 hover:border-white/40 disabled:opacity-50"
+                    onClick={() => void measureExportSpeed()}
+                    disabled={planning}
+                  >
+                    {planning ? "Measuring…" : "Measure speed"}
+                  </button>
+                </div>
+              )}
             </div>
             {exporting ? (
               <div className="mt-5">

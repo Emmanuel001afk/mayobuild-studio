@@ -33,6 +33,8 @@ import {
   freezeClipFrom,
 } from "./types";
 import { resolveComposition } from "./timeline-resolver";
+import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-plan";
+import { sourceFor } from "./proxy";
 import { applyLut, type LutTable } from "./luts";
 import { makeImpulse, probeGif } from "./utils";
 import { GifReader, GifWriter } from "omggif";
@@ -336,6 +338,10 @@ interface ElRecord {
    */
   videoBroken?: boolean;
   audioFallback?: HTMLAudioElement;
+  /** low-res preview copy (never used for export) */
+  proxyUrl?: string;
+  /** which url is currently applied to the element */
+  appliedUrl?: string;
   videoLoadRequested?: boolean;
   videoLoadTimer?: number;
   /** true once a slow load has already been retried — avoids a retry loop */
@@ -455,6 +461,10 @@ export class Engine {
   private lastNow = 0;
   /** ms the clock has been held waiting for a frame (reset when ready) */
   private stallMs = 0;
+  /** measured frame throughput, from measureThroughput() */
+  private throughput: import("./export-plan").ExportThroughput | null = null;
+  /** proxies registered before their element existed */
+  private pendingProxies = new Map<string, string>();
   private lastPaintAt = 0;
   private lastUiTimeAt = 0;
 
@@ -558,11 +568,121 @@ export class Engine {
     return record;
   }
 
+  /**
+   * Register a preview proxy for a media item.
+   *
+   * The proxy is used for decoding while editing; `attachUrl` is then re-called
+   * for the active source. Exports never see this.
+   */
+  attachProxy(mediaId: string, proxyUrl: string) {
+    const rec = this.els.get(mediaId);
+    if (rec) {
+      if (rec.proxyUrl && rec.proxyUrl !== proxyUrl) URL.revokeObjectURL(rec.proxyUrl);
+      rec.proxyUrl = proxyUrl;
+      return;
+    }
+    this.pendingProxies.set(mediaId, proxyUrl);
+  }
+
+  /** Which URL should a consumer use for this media right now? */
+  private urlForMedia(mediaId: string, consumer: "preview" | "export"): string | undefined {
+    const rec = this.els.get(mediaId);
+    if (!rec) return undefined;
+    return sourceFor(consumer, rec.url, rec.proxyUrl);
+  }
+
+  /**
+   * Point the element at the right source for a consumer.
+   *
+   * Preview gets the proxy when one exists, export always gets the original.
+   * Everything that chooses between the two goes through sourceFor(), so proxy
+   * quality cannot leak into a delivered file.
+   */
+  private applySource(
+    rec: ElRecord,
+    media: MediaItem,
+    mediaId: string,
+    consumer: "preview" | "export",
+  ) {
+    const url = sourceFor(consumer, rec.url, rec.proxyUrl);
+    if (!url) return;
+    if (rec.appliedUrl === url) return;
+    rec.appliedUrl = url;
+    if (rec.el instanceof HTMLImageElement) {
+      rec.el.src = url;
+      return;
+    }
+    const element = rec.el as HTMLVideoElement | HTMLAudioElement;
+    if (media.kind === "video") {
+      const video = element as HTMLVideoElement;
+      video.preload = "metadata";
+      video.playsInline = true;
+      // Attach listeners before src: cached object URLs may dispatch quickly.
+      video.addEventListener("loadedmetadata", () => {
+        if (
+          Number.isFinite(video.duration) &&
+          video.duration > 0 &&
+          (!media.duration || media.duration <= 0)
+        ) {
+          media.duration = video.duration;
+          this.bump();
+        }
+        if (video.readyState >= 2 && rec.videoLoadTimer) {
+          window.clearTimeout(rec.videoLoadTimer);
+          rec.videoLoadTimer = undefined;
+        }
+      });
+      const clearWatchdog = () => {
+        if (rec.videoLoadTimer) window.clearTimeout(rec.videoLoadTimer);
+        rec.videoLoadTimer = undefined;
+      };
+      video.addEventListener("loadeddata", clearWatchdog);
+      video.addEventListener("canplay", clearWatchdog);
+      // A PROXY failing to decode must not condemn the original: fall back to
+      // the real file before declaring the media unplayable.
+      video.addEventListener("error", () => {
+        clearWatchdog();
+        if (consumer === "preview" && rec.proxyUrl && rec.appliedUrl === rec.proxyUrl) {
+          rec.proxyUrl = undefined;
+          rec.appliedUrl = undefined;
+          this.applySource(rec, media, mediaId, "preview");
+          return;
+        }
+        this.markVideoBroken(mediaId, "video decoder rejected this media file");
+      });
+    }
+    element.src = url;
+    element.load();
+  }
+
+  /** Re-point every element at the original files, for an export. */
+  private useOriginalSources() {
+    for (const [id, rec] of this.els) {
+      const media = this.media.get(id);
+      if (!media || !rec.url) continue;
+      this.applySource(rec, media, id, "export");
+    }
+  }
+
+  /** Re-point every element back at preview sources (proxies). */
+  private usePreviewSources() {
+    for (const [id, rec] of this.els) {
+      const media = this.media.get(id);
+      if (!media || !rec.url) continue;
+      this.applySource(rec, media, id, "preview");
+    }
+  }
+
   attachUrl(mediaId: string, url: string) {
     const media = this.media.get(mediaId);
     if (!media) return;
     const rec = this.ensureEl(media);
-    if (rec.url && rec.url !== url) URL.revokeObjectURL(rec.url);
+    const proxy = rec.proxyUrl ?? this.pendingProxies.get(mediaId);
+    if (proxy) {
+      rec.proxyUrl = proxy;
+      this.pendingProxies.delete(mediaId);
+    }
+    // preview prefers the proxy; keep BOTH urls alive so export can switch back
     rec.url = url;
     this.chromaCache.forEach((c, k) => {
       void c;
@@ -571,43 +691,7 @@ export class Engine {
         this.keyColorCache.delete(k);
       }
     });
-    if (rec.el instanceof HTMLImageElement) {
-      rec.el.src = url;
-    } else {
-      const element = rec.el as HTMLVideoElement | HTMLAudioElement;
-      if (media.kind === "video") {
-        const video = element as HTMLVideoElement;
-        video.preload = "metadata";
-        video.playsInline = true;
-        // Attach listeners before src: cached object URLs may dispatch quickly.
-        video.addEventListener("loadedmetadata", () => {
-          if (
-            Number.isFinite(video.duration) &&
-            video.duration > 0 &&
-            (!media.duration || media.duration <= 0)
-          ) {
-            media.duration = video.duration;
-            this.bump();
-          }
-          if (video.readyState >= 2 && rec.videoLoadTimer) {
-            window.clearTimeout(rec.videoLoadTimer);
-            rec.videoLoadTimer = undefined;
-          }
-        });
-        const clearWatchdog = () => {
-          if (rec.videoLoadTimer) window.clearTimeout(rec.videoLoadTimer);
-          rec.videoLoadTimer = undefined;
-        };
-        video.addEventListener("loadeddata", clearWatchdog);
-        video.addEventListener("canplay", clearWatchdog);
-        video.addEventListener("error", () => {
-          clearWatchdog();
-          this.markVideoBroken(mediaId, "video decoder rejected this media file");
-        });
-      }
-      element.src = url;
-      element.load();
-    }
+    this.applySource(rec, media, mediaId, "preview");
     if (media.isGif && !rec.gif) {
       void fetch(url)
         .then((r) => r.blob())
@@ -3422,6 +3506,7 @@ export class Engine {
     this.exportScale = opts.scale ?? 1;
     this.exporting = true;
     this.previewMaxSide = 0; // exports always render at full quality
+    this.useOriginalSources(); // never encode a preview proxy
     for (const [id, rec] of this.els) {
       if (rec.el instanceof HTMLImageElement) continue;
       const target = (rec.videoBroken ? rec.audioFallback : rec.el) as AudioEl | undefined;
@@ -3473,6 +3558,7 @@ export class Engine {
       this.exportScale = prevScale;
       this.exporting = false;
       this.previewMaxSide = prevCap;
+      this.usePreviewSources();
     }
     const blob = await stopped;
     canvasStream.getTracks().forEach((t) => t.stop());
@@ -3544,6 +3630,92 @@ export class Engine {
     return { channels, sampleRate, frames: rendered.length };
   }
 
+  /**
+   * Measure how fast THIS device can render frames.
+   *
+   * Frame-stepped export is slower than real time, and how much slower varies by
+   * an order of magnitude across devices. Rather than guess, we time a small
+   * number of real frames through the same path the exporter uses (seek, wait,
+   * draw, hand to the encoder) and keep the result.
+   *
+   * The sample is intentionally small — 12 frames — so calling this before an
+   * export costs well under a second on any device.
+   */
+  async measureThroughput(sampleFrames = 12): Promise<ExportPlan | null> {
+    if (!this.canvas || !mp4Supported()) return null;
+    const dur = this.duration();
+    if (dur <= 0.05) return null;
+    const { w, h } = ASPECTS[this.project.aspect];
+    const fps = 30;
+    const codec = await pickAvcCodec(w, h, fps, 2_000_000);
+    if (!codec) return null;
+
+    const W_ = window as unknown as {
+      VideoEncoder: typeof VideoEncoder;
+      VideoFrame: typeof VideoFrame;
+    };
+    let counted = 0;
+    let encError: unknown = null;
+    const probe = new W_.VideoEncoder({
+      output: () => {
+        counted++;
+      },
+      error: (e) => {
+        encError = encError ?? e;
+      },
+    });
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.pause();
+    const prevScale = this.exportScale;
+    const prevCap = this.previewMaxSide;
+    try {
+      await probe.configure({ codec, width: w, height: h, framerate: fps, bitrate: 2_000_000 });
+      const n = Math.max(4, Math.min(24, sampleFrames));
+      const started = performance.now();
+      for (let f = 0; f < n; f++) {
+        if (encError) break;
+        const t = (f / n) * dur;
+        await this.frameReadyAt(t, 1500);
+        const vf = new W_.VideoFrame(this.canvas, { timestamp: f * 33333 });
+        probe.encode(vf, { keyFrame: f === 0 });
+        vf.close();
+      }
+      await probe.flush();
+      const elapsed = performance.now() - started;
+      if (encError || counted === 0) return null;
+      const throughput = recordThroughput(counted, elapsed, { width: w, height: h });
+      this.throughput = throughput;
+      return planSteppedExport({ durationSec: dur, fps, width: w, height: h }, throughput);
+    } catch {
+      return null;
+    } finally {
+      try {
+        probe.close();
+      } catch {
+        /* already closed */
+      }
+      this.exportScale = prevScale;
+      this.previewMaxSide = prevCap;
+      this.seek(this.t);
+      if (wasPlaying) void this.play();
+    }
+  }
+
+  /** Plan an export from the last measurement, if any. */
+  planExport(opts: { fps: number; scale?: number }): ExportPlan {
+    const { w, h } = ASPECTS[this.project.aspect];
+    const scale = opts.scale ?? 1;
+    return planSteppedExport(
+      {
+        durationSec: this.duration(),
+        fps: opts.fps,
+        width: Math.round(w * scale),
+        height: Math.round(h * scale),
+      },
+      this.throughput,
+    );
+  }
+
   async exportMP4Stepped(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
     if (!this.canvas) throw new Error("Canvas not ready — wait for the preview, then retry.");
     if (!mp4Supported()) {
@@ -3568,6 +3740,8 @@ export class Engine {
     this.exporting = true;
     this.previewMaxSide = 0;
     this.loop = false;
+    // Exports always read the ORIGINAL files, never a preview proxy.
+    this.useOriginalSources();
 
     const W_ = window as unknown as {
       VideoEncoder: typeof VideoEncoder;
@@ -3696,6 +3870,7 @@ export class Engine {
       this.exportScale = prevScale;
       this.exporting = false;
       this.previewMaxSide = prevCap;
+      this.usePreviewSources();
       this.seek(0);
       if (wasPlaying) void this.play();
     }
@@ -3737,6 +3912,7 @@ export class Engine {
     this.exportScale = opts.scale ?? 1;
     this.exporting = true;
     this.previewMaxSide = 0; // exports always render at full quality
+    this.useOriginalSources(); // never encode a preview proxy
     try {
       for (const [id, rec] of this.els) {
         if (rec.el instanceof HTMLImageElement) continue;
@@ -3905,6 +4081,7 @@ export class Engine {
         this.exportScale = prevScale;
         this.exporting = false;
         this.previewMaxSide = prevCap;
+        this.usePreviewSources();
       }
       if (encError)
         throw encError instanceof Error

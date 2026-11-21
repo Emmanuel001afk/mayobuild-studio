@@ -241,6 +241,48 @@ Fallbacks, in order:
 
 Only the first is frame-accurate. WebM has no frame-stepped path yet.
 
+### Measuring before promising (Stage 3)
+
+Frame-stepping is *correct*, but correct is not the same as fast, and a phone is
+not a laptop. Rather than guess, the export dialog measures:
+
+- `measureThroughput(sampleFrames = 12)` renders a handful of real frames
+  through the same encode path and times them. It runs against the live
+  preview and restores the playhead afterwards.
+- `recordThroughput()` turns that into frames/second; `planSteppedExport()`
+  scales it by output pixel area to produce a time estimate.
+- With no measurement the plan is still shown, but flagged `heuristic: true`
+  and worded "roughly" — a documented 12 fps at 1080p guess, never presented
+  as a measurement.
+- `chooseStrategy()` keeps the accurate path until an export would take more
+  than **6× real time**; only then does it prefer the real-time recorder. Below
+  that, a slow-but-correct export beats a fast-but-wrong one.
+
+The point is that "fast enough" is a claim about a specific device, so the app
+makes the measurement instead of the README making the claim.
+
+### Proxy media (Stage 3)
+
+A 4K phone clip costs a full decode per seek. Proxies fix the scrubbing without
+touching the output:
+
+- `proxy.ts` (pure policy) decides *whether* a proxy is worth building: source
+  taller than 720p, or — when the height is unknown — a file over 80 MB.
+  `proxySize()` computes an even-dimension 720p-class size for the same aspect.
+- `proxy-build.ts` builds it using only the platform: a detached `<video>`
+  decodes, a canvas downscales, `MediaRecorder` re-encodes to VP9/VP8 WebM.
+  No library, no bundled codec. Any failure returns `null` and the original is
+  used unchanged.
+- Proxies are stored beside the original (`proxy_<mediaId>` in the existing
+  `blobs` store — no schema migration) and built **after** import finishes, so
+  they never delay the moment footage appears.
+- **The one rule:** `sourceFor("export", …)` always returns the original.
+  `exportMP4Stepped`, `exportMP4` and `exportMedia` each call
+  `useOriginalSources()` before capturing and `usePreviewSources()` in their
+  `finally`, so a low-resolution proxy cannot reach a delivered file. A proxy
+  that fails to decode on preview falls back to the original rather than
+  declaring the media unplayable.
+
 ### Platform split
 
 The resolver and the Project JSON are the contract between platforms:
@@ -255,10 +297,15 @@ current stack, which uses only the platform's own decoders).
 
 ### What is NOT done yet
 
-- Proxy media / thumbnail caching for large files on weak devices.
-- Frame-stepping export for MP4/WebM (GIF only so far).
+- A measurement on a real low-end phone. `measureThroughput` exists and the UI
+  uses it, but no hardware run has been recorded — so no "fast enough" claim is
+  made anywhere in this document.
+- Frame-stepping for WebM. Only the MP4 path is frame-accurate.
+- Proxy generation is best-effort and single-file; it does not yet run in a
+  worker, so a large import queue can still warm the device.
 - Real-video integration fixtures: the audit runs against synthetic Project
   fixtures, not actual sample files.
+- No native shell exists yet.
 
 ## AI policy
 
