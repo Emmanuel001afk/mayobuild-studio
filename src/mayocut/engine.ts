@@ -32,6 +32,7 @@ import {
   isDipTo,
   freezeClipFrom,
 } from "./types";
+import { resolveComposition } from "./timeline-resolver";
 import { applyLut, type LutTable } from "./luts";
 import { makeImpulse, probeGif } from "./utils";
 import { GifReader, GifWriter } from "omggif";
@@ -355,6 +356,17 @@ const MIME_CANDIDATES = [
   "video/mp4",
 ];
 
+/** Human-readable reason a video export cannot run on this device, or null. */
+export function exportBlocker(): string | null {
+  if (typeof MediaRecorder === "undefined") {
+    return "This browser has no video recorder (MediaRecorder). Use Chrome or Edge, or export a PNG/WAV instead.";
+  }
+  if (!pickMime()) {
+    return "This browser's recorder supports none of the formats we can write (WebM/MP4). Try Chrome or Edge.";
+  }
+  return null;
+}
+
 export function pickMime(): { mime: string; ext: string } | null {
   if (typeof MediaRecorder === "undefined") return null;
   for (const mime of MIME_CANDIDATES) {
@@ -441,6 +453,8 @@ export class Engine {
   loop = true;
   private raf = 0;
   private lastNow = 0;
+  /** ms the clock has been held waiting for a frame (reset when ready) */
+  private stallMs = 0;
   private lastPaintAt = 0;
   private lastUiTimeAt = 0;
 
@@ -953,6 +967,11 @@ export class Engine {
     if (this.duration() === 0) return;
     await this.ensureAudio();
     if (this.t >= this.duration() - 0.02) this.t = 0;
+    // Wait for the opening frame before the clock starts moving. Without this
+    // the first ~0.3 s of every video played over a blank/placeholder frame
+    // while the element was still seeking — the "starts black with no volume"
+    // report. Bounded, so a broken source cannot hang Play.
+    await this.awaitFrameFor(this.t, 700);
     this.playing = true;
     this.lastNow = performance.now();
     this.lastPaintAt = 0;
@@ -983,14 +1002,161 @@ export class Engine {
     else void this.play();
   }
 
+  /**
+   * Position the timeline at `t` and make sure the picture is actually ready
+   * before a frame is captured.
+   *
+   * The real-time export paths sampled `draw()` on a timer, so any moment where
+   * the element was still seeking became a blank (black) frame in the exported
+   * file — the same class of bug as the black opening in the preview. Export
+   * must never capture a frame it has not confirmed.
+   */
+  private async frameReadyAt(t: number, budgetMs = 500): Promise<void> {
+    this.seek(t);
+    const comp = resolveComposition(this.project, t);
+    const waits: Promise<void>[] = [];
+    for (const layer of comp.main) {
+      const rec = this.els.get(layer.clip.mediaId);
+      const el = rec?.el;
+      if (!(el instanceof HTMLVideoElement)) continue;
+      if (el.readyState >= 2 && Math.abs(el.currentTime - layer.src) <= 0.15) continue;
+      waits.push(
+        new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            window.clearTimeout(timer);
+            el.removeEventListener("seeked", finish);
+            el.removeEventListener("loadeddata", finish);
+            el.removeEventListener("canplay", finish);
+            resolve();
+          };
+          const timer = window.setTimeout(finish, budgetMs);
+          el.addEventListener("seeked", finish);
+          el.addEventListener("loadeddata", finish);
+          el.addEventListener("canplay", finish);
+          try {
+            el.currentTime = layer.src;
+          } catch {
+            finish();
+          }
+        }),
+      );
+    }
+    if (waits.length) await Promise.all(waits);
+    this.draw();
+  }
+
+  /**
+   * Is the picture for `t` actually on screen?
+   *
+   * Returns "loading" when a visible layer's element has no decoded frame yet,
+   * so the transport can hold the clock rather than run over a blank frame.
+   * Images and text are always ready; only video can be late.
+   */
+  private visibleLayerReady(t: number): "ready" | "loading" {
+    const comp = resolveComposition(this.project, t);
+    for (const layer of comp.main) {
+      const rec = this.els.get(layer.clip.mediaId);
+      const el = rec?.el;
+      if (!(el instanceof HTMLVideoElement)) continue;
+      if (el.readyState < 2 || el.videoWidth === 0) return "loading";
+    }
+    return "ready";
+  }
+
+  /**
+   * Wait (bounded) until every visible media element has a frame for `t`.
+   *
+   * Resolves early if everything is already ready, and gives up after
+   * `budgetMs` so a genuinely broken source cannot hang the transport. The
+   * caller uses this before starting playback, which is what stops the first
+   * moments of a clip from being black.
+   */
+  private awaitFrameFor(t: number, budgetMs = 700): Promise<void> {
+    const comp = resolveComposition(this.project, t);
+    const pending: { el: HTMLVideoElement; src: number }[] = [];
+    for (const layer of comp.main) {
+      const rec = this.els.get(layer.clip.mediaId);
+      const el = rec?.el;
+      if (!(el instanceof HTMLVideoElement)) continue;
+      if (el.readyState >= 2) {
+        // have data; nudge it to the exact position if it is far off
+        if (Math.abs(el.currentTime - layer.src) > 0.2) {
+          try {
+            el.currentTime = layer.src;
+          } catch {
+            /* not seekable yet */
+          }
+        }
+        continue;
+      }
+      this.requestVideoLoad(layer.clip.mediaId);
+      pending.push({ el, src: layer.src });
+    }
+    if (!pending.length) return Promise.resolve();
+
+    return new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        window.clearTimeout(timer);
+        for (const p of pending) {
+          p.el.removeEventListener("loadeddata", onReady);
+          p.el.removeEventListener("canplay", onReady);
+          p.el.removeEventListener("seeked", onReady);
+        }
+        resolve();
+      };
+      const onReady = () => {
+        if (pending.every((p) => p.el.readyState >= 2)) finish();
+      };
+      const timer = window.setTimeout(finish, budgetMs);
+      for (const p of pending) {
+        p.el.addEventListener("loadeddata", onReady);
+        p.el.addEventListener("canplay", onReady);
+        p.el.addEventListener("seeked", onReady);
+      }
+    });
+  }
+
   private loopRaf() {
     cancelAnimationFrame(this.raf);
     const step = (now: number) => {
       if (!this.playing) return;
-      const dt = Math.min(0.25, (now - this.lastNow) / 1000);
+      const rawDt = (now - this.lastNow) / 1000;
+      const dur = this.duration();
+
+      // Hold the clock while the picture is not ready.
+      //
+      // At a cut (or right after an effect/split forces a seek) the next clip's
+      // element still has to load and seek. Advancing `t` regardless meant the
+      // playhead ran on over a clip that had no frame, which is what showed as
+      // black in the middle of playback and let audio drift away from picture.
+      // We stall for a bounded time, then give up and keep playing so a broken
+      // source cannot freeze the editor.
+      const holdVerdict = this.visibleLayerReady(this.t);
+      if (holdVerdict === "loading") {
+        this.stallMs = (this.stallMs ?? 0) + rawDt * 1000;
+        if (this.stallMs < 900) {
+          // still draw the last good frame; do not move time forward
+          if (now - this.lastPaintAt >= 1000 / 30) {
+            this.lastPaintAt = now;
+            this.draw();
+          }
+          this.lastNow = now;
+          this.raf = requestAnimationFrame(step);
+          return;
+        }
+      } else {
+        this.stallMs = 0;
+      }
+
+      const dt = Math.min(0.25, rawDt);
       this.lastNow = now;
       this.t += dt;
-      const dur = this.duration();
       if (this.t >= dur) {
         if (this.loop && dur > 0) {
           this.t = 0;
@@ -1201,7 +1367,8 @@ export class Engine {
   private effectiveVolume(clip: MainClip, t: number, s: { start: number; end: number }): number {
     // The transition crossfade maths lives in types.ts so it can be asserted
     // without a DOM (see mainClipGain). Here we only add the runtime factors.
-    let v = mainClipGain(clip, s, this.nextMainSpan(s), t);
+    const hasPrevious = this.project.main[0]?.id !== clip.id;
+    let v = mainClipGain(clip, s, this.nextMainSpan(s), t, hasPrevious);
     v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
     return Math.max(0, Math.min(1, v));
   }
@@ -1431,20 +1598,30 @@ export class Engine {
     ctx.fillRect(0, 0, W, H);
 
     // --- main track (with transitions) ---
+    //
+    // The decision of WHICH clips are visible at `t` and at what progress now
+    // comes from the shared timeline resolver, not from transition-window maths
+    // duplicated here. Preview, export and the node tests therefore agree by
+    // construction.
+    const comp = resolveComposition(this.project, t);
     const spans = mainSpans(this.project);
-    for (let i = 0; i < spans.length; i++) {
-      const s = spans[i];
-      const c = s.clip;
-      const dur = c.transitionIn !== "none" ? Math.max(0, c.transitionDur) : 0;
-      const winStart = dur > 0 ? s.start - dur : s.start;
-      if (t < winStart || t >= s.end + 0.001) continue;
-      // not inside the transition window → plain draw
-      if (!(dur > 0 && t < s.start) || i === 0) {
-        this.drawMainItem(ctx, s, 1, W, H, t);
-        continue;
+    if (comp.transition) {
+      const from = comp.transition.from;
+      const to = comp.transition.to;
+      this.composeTransition(
+        ctx,
+        spans[from.index],
+        spans[to.index],
+        comp.transition.kind,
+        comp.transition.progress,
+        W,
+        H,
+        t,
+      );
+    } else {
+      for (const layer of comp.main) {
+        this.drawMainItem(ctx, spans[layer.index], layer.alpha, W, H, t);
       }
-      const k = clamp01((t - winStart) / dur);
-      this.composeTransition(ctx, spans[i - 1], s, c.transitionIn, k, W, H, t);
     }
 
     // --- overlay tracks ---
@@ -3225,11 +3402,21 @@ export class Engine {
   // ------------------------------------------------------------- export (WebM)
 
   async exportMedia(opts: ExportOptions, onProgress: (p: number) => void): Promise<Blob> {
-    if (!this.canvas) throw new Error("Canvas not ready");
+    if (!this.canvas)
+      throw new Error("Canvas not ready — wait for the preview to appear, then retry.");
+    const blocked = exportBlocker();
+    if (blocked) throw new Error(blocked);
     const picked = pickMime();
     if (!picked) throw new Error("This browser does not support video recording. Use Chrome/Edge.");
     await this.ensureAudio();
-    if (!this.audioCtx || !this.exportDest) throw new Error("Audio engine unavailable");
+    if (!this.audioCtx || !this.exportDest) {
+      throw new Error(
+        "Could not start the audio engine. Tap anywhere in the editor first (browsers block audio until you interact), then retry.",
+      );
+    }
+    if (this.duration() <= 0.05) {
+      throw new Error("Nothing to export — add a clip to the timeline first.");
+    }
     const prevScale = this.exportScale;
     const prevCap = this.previewMaxSide;
     this.exportScale = opts.scale ?? 1;
@@ -3578,7 +3765,8 @@ export class Engine {
         while (this.t < targetT && performance.now() < deadline) {
           await new Promise((r) => requestAnimationFrame(() => r(null)));
         }
-        this.draw();
+        // readiness-checked capture: never sample a half-seeked frame
+        await this.frameReadyAt(Math.min(dur, targetT), 400);
         octx.filter = "none";
         octx.globalAlpha = 1;
         octx.drawImage(this.canvas, 0, 0, W, H);
@@ -3673,17 +3861,13 @@ export class Engine {
       tick();
       if (s.clip.freeze || s.clip.reverse) continue;
       if (hasSolo) continue; // solos win; main sound goes quiet
+      // A clip the user muted (e.g. after "extract audio") must contribute
+      // NOTHING to the exported mix, or the extracted copy doubles it.
+      if (s.clip.muted) continue;
       const buf = await decode(s.clip.mediaId);
       if (!buf) continue;
       const dur2 = mainClipDuration(s.clip);
-      schedule(
-        buf,
-        s.start,
-        s.clip.in,
-        dur2,
-        s.clip.muted ? 0 : s.clip.volume,
-        Math.max(0.05, s.clip.speed),
-      );
+      schedule(buf, s.start, s.clip.in, dur2, s.clip.volume, Math.max(0.05, s.clip.speed));
     }
 
     for (const tr of this.project.tracks) {
@@ -3733,6 +3917,21 @@ export class Engine {
   }
 
   /** PNG still of the current frame — instant thumbnail/cover export. */
+  /**
+   * Render one frame at an arbitrary time, guaranteeing it is real.
+   *
+   * This is the primitive a frame-stepping (non-real-time) exporter needs: it
+   * seeks, waits for the decoder, and only then reports the canvas as valid.
+   * The real-time recorder paths cannot use it directly, but the GIF path and
+   * any future offline encoder can — and, importantly, it is the same code the
+   * tests exercise.
+   */
+  async renderFrameAt(t: number, budgetMs = 500): Promise<HTMLCanvasElement | null> {
+    if (!this.canvas) return null;
+    await this.frameReadyAt(t, budgetMs);
+    return this.canvas;
+  }
+
   async exportStill(width = 1080): Promise<Blob> {
     if (!this.canvas) throw new Error("Canvas not ready");
     this.draw();

@@ -235,11 +235,13 @@ export async function makeThumb(kind: MediaKind, url: string): Promise<string | 
   return undefined;
 }
 
+export type ImportedMedia = MediaItem & { sourceFile: File };
+
 export async function importFiles(
   files: FileList | File[],
   onProgress?: (done: number, total: number) => void,
-): Promise<MediaItem[]> {
-  const out: MediaItem[] = [];
+): Promise<ImportedMedia[]> {
+  const out: ImportedMedia[] = [];
   const list = Array.from(files);
   for (let i = 0; i < list.length; i++) {
     const f = list[i];
@@ -314,7 +316,8 @@ export async function importFiles(
         item.duration = Math.max(0.5, g.count / g.fps);
       }
     }
-    out.push(item);
+    // carry the source bytes with the item so callers can never mis-pair them
+    out.push({ ...item, sourceFile: f });
     onProgress?.(i + 1, list.length);
   }
   return out;

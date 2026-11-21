@@ -167,6 +167,76 @@ All four share the same compositor, so what you preview is what ships.
 `media` (items) + `blobs` (files), `projects`, `templates`, `exports`.
 Closing the tab loses nothing; clearing site data is the only “delete all”.
 
+## Editing engine (v0.9 foundation)
+
+The goal is a reliable engine, not a hand-written video codec: decoding is done
+by the platform (browser / Android / desktop), and MayoCut owns everything
+around it.
+
+### One timeline model
+
+`src/mayocut/timeline-resolver.ts` is the single source of truth for "what is
+on screen and in the speakers at time t". It is **pure** — no DOM, no
+AudioContext, no React — so it can be tested in node against real project
+fixtures, and so preview, export and the native ports cannot drift apart.
+
+`resolveComposition(project, t)` returns:
+
+| field | meaning |
+|---|---|
+| `main` | 1 layer, or 2 while a transition runs, each with `src`, `rate`, `alpha`, `gain` |
+| `transition` | kind, 0..1 progress, and both layers |
+| `overlays` | live text / sticker / video / audio overlays with their local time |
+| `audioOverlays` | the audible subset (used by the mixer) |
+| `empty` | nothing visible or audible — an explicit black gap |
+
+`requiredMediaAt(project, t)` lists the media that must be loaded for that
+instant; the transport pre-warms it.
+
+### A playback engine that waits for frames
+
+The transport no longer advances its clock blindly:
+
+- `play()` calls `awaitFrameFor()` first, so the opening frame is decoded
+  before time starts moving (bounded at 700 ms so a bad source cannot hang it).
+- The render loop calls `visibleLayerReady()` each frame. If a visible clip has
+  no decoded frame — typically right after a cut, split or effect forced a seek
+  — the clock **holds** for up to 900 ms and keeps drawing the last good frame.
+  Past that it gives up and plays on.
+- `readinessFor()` / `shouldAdvanceClock()` encode those rules as pure
+  functions with their own tests.
+
+### An export engine on the same model
+
+Export uses the same resolver, and captures only frames it has confirmed:
+
+- `frameReadyAt(t)` seeks and waits for `seeked`/`loadeddata` before drawing.
+- `renderFrameAt(t)` is the primitive for frame-stepped encoding.
+- The GIF path now goes through `frameReadyAt` instead of racing the clock.
+
+The real-time recorder paths (WebM/MP4) still capture wall-clock frames, so a
+slow device can drop frames; moving them to full frame-stepping is the next
+stage and needs a performance budget on low-end phones.
+
+### Platform split
+
+The resolver and the Project JSON are the contract between platforms:
+
+- **web** — TypeScript, `Engine` renders to canvas, WebAudio for sound.
+- **Android / desktop (Electron)** — can run the same JSON through a native
+  renderer; they are *not* limited to what the browser exposes.
+
+A native engine is a separate stage. Anything bundled for it needs its licences
+reviewed (decoders are usually LGPL/GPL or patent-encumbered, unlike the
+current stack, which uses only the platform's own decoders).
+
+### What is NOT done yet
+
+- Proxy media / thumbnail caching for large files on weak devices.
+- Frame-stepping export for MP4/WebM (GIF only so far).
+- Real-video integration fixtures: the audit runs against synthetic Project
+  fixtures, not actual sample files.
+
 ## AI policy
 
 By design the editor has **no dependency on AI or on the network**:

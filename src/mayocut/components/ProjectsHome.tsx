@@ -32,7 +32,7 @@ import {
   validatePack,
 } from "../assist";
 import { device } from "../device";
-import { db } from "../idb";
+import { db, requestPersistentStorage } from "../idb";
 import {
   ASPECT_ORDER,
   ASPECTS,
@@ -115,12 +115,15 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
     void refresh();
     void (async () => {
       try {
+        // Ask up front, silently. Browsers may grant this automatically for a
+        // site the user has used; until it is granted the store is
+        // "best-effort" and can be evicted between sessions.
+        const granted = await requestPersistentStorage();
         const est = await navigator.storage?.estimate?.();
-        if (!est) return;
         setStorage({
-          used: est.usage ?? 0,
-          quota: est.quota ?? 0,
-          persisted: (await navigator.storage?.persisted?.()) ?? false,
+          used: est?.usage ?? 0,
+          quota: est?.quota ?? 0,
+          persisted: granted,
         });
       } catch {
         /* storage API unavailable — the meter simply hides */
@@ -138,7 +141,10 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
         return;
       }
       const items = await importFiles(accepted);
-      for (let i = 0; i < items.length; i++) await db.putMedia(items[i], accepted[i]);
+      for (const item of items) {
+        const { sourceFile, ...rec } = item;
+        await db.putMedia(rec, sourceFile);
+      }
       toast.success(`${items.length} item${items.length > 1 ? "s" : ""} added to your library`);
       await refresh();
     } catch (e) {
