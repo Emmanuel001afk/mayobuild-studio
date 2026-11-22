@@ -25,6 +25,7 @@ const MODULES = [
   "audio-fx",
   "curves",
   "stock",
+  "hsl",
 ];
 
 for (const name of MODULES) {

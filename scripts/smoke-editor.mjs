@@ -366,6 +366,22 @@ for (const tb of LIBRARY_TABS) {
     checks.push([`audio effect offered: ${name}`, hit]);
   }
 
+  // 5b: HSL panel, after selecting a main clip so the adjust panel is live.
+  const clip = [...document.querySelectorAll("[title]")].find((el) =>
+    (el.getAttribute("title") || "").startsWith("clip.mp4 · 4.00s"),
+  );
+  clip?.dispatchEvent(
+    new window.PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", clientX: 10 }),
+  );
+  window.dispatchEvent(new window.PointerEvent("pointerup", { bubbles: true, pointerType: "mouse" }));
+  await wait(200);
+  const adjustText = textOf();
+  checks.push(["HSL panel is present with all three axes", /HSL/.test(adjustText) && /Luminance/.test(adjustText)]);
+  const bandChips = [...document.querySelectorAll("button")].filter((b) =>
+    /^(Red|Orange|Yellow|Green|Cyan|Blue|Purple|Magenta)( — adjusted)?$/.test(b.getAttribute("title") || ""),
+  );
+  checks.push(["HSL offers all eight colour bands", bandChips.length === 8]);
+
   // 6: orientation buttons exist in the transport.
   const turnBtns = [...document.querySelectorAll("button")].filter((b) =>
     /turn the whole project/i.test(b.getAttribute("title") || ""),

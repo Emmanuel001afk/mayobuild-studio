@@ -1,6 +1,7 @@
 // MayoCut — core data model.
 import type { AudioFxId } from "./audio-fx";
 import type { CurveSet } from "./curves";
+import type { HslSet } from "./hsl";
 // Everything lives on the user's device (IndexedDB). No database, no backend.
 
 export type MediaKind = "video" | "image" | "audio";
@@ -304,6 +305,8 @@ export interface MainClip {
   adjust: FilterAdjust;
   /** tone / RGB curves, applied after the grade in the same pixel pass */
   curves?: CurveSet;
+  /** per-colour-range HSL (CapCut's "HSL" panel) */
+  hsl?: HslSet;
   volume: number; // 0..1
   muted: boolean;
   transitionIn: TransitionKind;
