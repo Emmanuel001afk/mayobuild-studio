@@ -34,9 +34,22 @@ if (!existsSync(DIR)) {
 const { detectVideoCodecHint } = await import("../.diag/b-utils.mjs");
 const { shouldProxyVideo, proxySize, sourceFor } = await import("../.diag/b-proxy.mjs");
 
+const REQUIRED = [
+  "h264-720p-2s.mp4",
+  "hevc-1080p-2s.mp4",
+  "h264-4k-1s.mp4",
+  "h264-vertical-2s.mp4",
+  "silent-1080p-2s.mp4",
+  "vp9-720p-2s.webm",
+  "fragmented-720p-2s.mp4",
+];
 const files = readdirSync(DIR).filter((f) => /\.(mp4|webm|mov)$/i.test(f)).sort();
-if (files.length === 0) {
-  console.error("no fixtures found — run scripts/make-fixtures.sh");
+
+// Every fixture is named explicitly below, so a missing one must fail loudly and
+// by name rather than surfacing later as a confusing `undefined.width`.
+const missing = REQUIRED.filter((f) => !files.includes(f));
+if (missing.length) {
+  console.error(`missing fixtures: ${missing.join(", ")}\nrun: bash scripts/make-fixtures.sh`);
   process.exit(1);
 }
 

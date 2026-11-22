@@ -22,11 +22,8 @@ FFMPEG="${FFMPEG:-ffmpeg}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/fixtures/video"
 
-if ! command -v "$FFMPEG" >/dev/null 2>&1; then
-  echo "ffmpeg not found — set FFMPEG=/path/to/ffmpeg" >&2
-  exit 1
-fi
-
+# --check must work anywhere: CI verifies the checked-in fixtures exist without
+# having ffmpeg installed at all. Only regenerating needs the encoder.
 if [[ "${1:-}" == "--check" ]]; then
   missing=0
   for f in h264-720p-2s.mp4 hevc-1080p-2s.mp4 h264-4k-1s.mp4 silent-1080p-2s.mp4 \
@@ -35,6 +32,11 @@ if [[ "${1:-}" == "--check" ]]; then
   done
   [[ $missing -eq 0 ]] && echo "fixtures present"
   exit $missing
+fi
+
+if ! command -v "$FFMPEG" >/dev/null 2>&1; then
+  echo "ffmpeg not found — set FFMPEG=/path/to/ffmpeg" >&2
+  exit 1
 fi
 
 mkdir -p "$OUT"
