@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { CurveEditor } from "./CurveEditor";
 import { CURVE_PRESETS, curvesActive, normalisePoints, type CurvePoint } from "../curves";
 import { searchEmoji } from "../stock";
+import { HSL_BANDS, hslActive, type HslAdjust, type HslBand } from "../hsl";
 
 type Channel = "rgb" | "r" | "g" | "b";
 import { Clock, Copy, Diamond, Scissors, SlidersHorizontal, Spline, Trash2 } from "lucide-react";
@@ -222,6 +223,94 @@ function StickerSearch({
           device, not downloaded).
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The HSL panel: eight colour ranges, hue / saturation / luminance each.
+ *
+ * Only the selected band's sliders are shown, because fourteen sliders at once
+ * is a wall. The band chips double as the live state — a band that has been
+ * moved is marked, so you can see what you have changed without opening each
+ * one.
+ */
+function HslSection({
+  main,
+  onPatchMain,
+}: {
+  main: MainClip;
+  onPatchMain: (patch: Partial<MainClip>) => void;
+}) {
+  const [band, setBand] = useState<HslBand>("red");
+  const set = main.hsl ?? {};
+  const current = set[band] ?? { h: 0, s: 0, l: 0 };
+  const patch = (next: Partial<HslAdjust>) => {
+    onPatchMain({ hsl: { ...set, [band]: { ...current, ...next } } });
+  };
+  return (
+    <div className="mt-2 border-t border-border pt-2 space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium">HSL</span>
+        {hslActive(set) && (
+          <button
+            className="text-[9px] border border-border rounded px-1.5 py-0.5 text-muted-foreground hover:border-white/40"
+            onClick={() => onPatchMain({ hsl: undefined })}
+          >
+            Reset all
+          </button>
+        )}
+      </div>
+      <div className="grid grid-cols-4 gap-1">
+        {HSL_BANDS.map((b) => {
+          const adj = set[b.id];
+          const moved = !!adj && ((adj.h ?? 0) !== 0 || (adj.s ?? 0) !== 0 || (adj.l ?? 0) !== 0);
+          return (
+            <button
+              key={b.id}
+              className={`flex items-center gap-1 rounded border px-1 py-0.5 text-[9px] ${
+                band === b.id
+                  ? "border-cyan-400 bg-cyan-400/10"
+                  : "border-border hover:border-white/40"
+              }`}
+              onClick={() => setBand(b.id)}
+              title={`${b.name}${moved ? " — adjusted" : ""}`}
+            >
+              <span className="h-2 w-2 rounded-full shrink-0" style={{ background: b.swatch }} />
+              <span className="truncate">{b.name}</span>
+              {moved && <span className="ml-auto text-cyan-300">•</span>}
+            </button>
+          );
+        })}
+      </div>
+      <Slider
+        label="Hue"
+        min={-100}
+        max={100}
+        step={1}
+        value={current.h ?? 0}
+        onChange={(v) => patch({ h: v })}
+      />
+      <Slider
+        label="Saturation"
+        min={-100}
+        max={100}
+        step={1}
+        value={current.s ?? 0}
+        onChange={(v) => patch({ s: v })}
+      />
+      <Slider
+        label="Luminance"
+        min={-100}
+        max={100}
+        step={1}
+        value={current.l ?? 0}
+        onChange={(v) => patch({ l: v })}
+      />
+      <div className="text-[9px] text-muted-foreground leading-snug">
+        Affects only {HSL_BANDS.find((b) => b.id === band)?.name.toLowerCase()} tones — everything
+        else in the frame stays as it is.
+      </div>
     </div>
   );
 }
@@ -808,6 +897,7 @@ export function Inspector(p: Props) {
               onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, splitTone: v } })}
             />
             <CurveSection main={main} onPatchMain={p.onPatchMain} />
+            <HslSection main={main} onPatchMain={p.onPatchMain} />
             <div className="flex gap-1 mt-1">
               <button
                 className="mb-btn-ghost flex-1 h-6 text-[10px]"

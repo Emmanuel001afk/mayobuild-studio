@@ -19,6 +19,7 @@ const X = await import('./b-proxy.mjs');
 const AFX = await import('./b-audio-fx.mjs');
 const CV = await import('./b-curves.mjs');
 const ST = await import('./b-stock.mjs');
+const HSL = await import('./b-hsl.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
   const tr = T.emptyTracks();
@@ -2201,6 +2202,154 @@ await t('everything in the notebook list is reachable from the UI', () => {
   assert.ok(/CurveEditor/.test(insp), '5 — curve graph');
   // 6: orientation
   assert.ok(/rotateProject/.test(ed), '6 — orientation switch');
+});
+
+
+// ================= stage 6: HSL + one audio mixer =================
+console.log('hsl.ts');
+await t('rgb↔hsl round-trips within a rounding step', () => {
+  const cases = [
+    [255, 0, 0],
+    [0, 128, 255],
+    [12, 200, 90],
+    [200, 200, 200],
+    [1, 1, 1],
+    [254, 100, 3],
+  ];
+  for (const [r, g, b] of cases) {
+    const { h, s, l } = HSL.rgbToHsl(r, g, b);
+    const back = HSL.hslToRgb(h, s, l);
+    assert.ok(Math.abs(back.r - r) < 1.5, `r ${r} -> ${back.r}`);
+    assert.ok(Math.abs(back.g - g) < 1.5, `g ${g} -> ${back.g}`);
+    assert.ok(Math.abs(back.b - b) < 1.5, `b ${b} -> ${back.b}`);
+  }
+});
+await t('an empty or zeroed HSL set changes nothing', () => {
+  assert.equal(HSL.hslActive(undefined), false);
+  assert.equal(HSL.hslActive({}), false);
+  assert.equal(HSL.hslActive({ red: { h: 0, s: 0, l: 0 } }), false);
+  const px = HSL.applyHslPixel(120, 60, 30, { red: { h: 0, s: 0, l: 0 } });
+  assert.deepEqual(px, { r: 120, g: 60, b: 30 });
+});
+await t('a red-only adjustment leaves a blue pixel untouched', () => {
+  const set = { red: { h: 40, s: 60, l: 30 } };
+  const blue = HSL.applyHslPixel(30, 60, 220, set);
+  assert.ok(Math.abs(blue.r - 30) < 1e-6 && Math.abs(blue.g - 60) < 1e-6 && Math.abs(blue.b - 220) < 1e-6);
+});
+await t('a red-only adjustment DOES move a red pixel', () => {
+  const set = { red: { l: -40 } };
+  const before = { r: 220, g: 40, b: 40 };
+  const after = HSL.applyHslPixel(before.r, before.g, before.b, set);
+  const lb = HSL.rgbToHsl(before.r, before.g, before.b).l;
+  const la = HSL.rgbToHsl(after.r, after.g, after.b).l;
+  assert.ok(la < lb, `luminance should drop: ${lb} -> ${la}`);
+  assert.ok(after.r > after.g && after.r > after.b, 'it must still be red, not a different colour');
+});
+await t('saturation -100 greys a pixel that sits in the band', () => {
+  // Pure green sits at 120°, the exact centre of the green band, so it gets the
+  // full weight of the adjustment.
+  const set = { green: { s: -100 } };
+  const after = HSL.applyHslPixel(0, 255, 0, set);
+  const sat = HSL.rgbToHsl(after.r, after.g, after.b).s;
+  assert.ok(sat < 0.02, `expected near-grey at full band weight, got ${sat}`);
+});
+await t('a pixel only PARTLY in a band is only partly adjusted', () => {
+  // (20,200,40) sits about 7° off green's centre, so it is ~78% in-band. Fully
+  // greying it out here would mean the band edges are hard, and a gradient
+  // would show a visible seam.
+  const after = HSL.applyHslPixel(20, 200, 40, { green: { s: -100 } });
+  const sat = HSL.rgbToHsl(after.r, after.g, after.b).s;
+  assert.ok(sat > 0.1 && sat < 0.3, `expected a partial desaturation, got ${sat}`);
+});
+await t('band weights blend instead of snapping at a boundary', () => {
+  // 15° is exactly between red (0°) and orange (30°)
+  assert.ok(Math.abs(HSL.bandWeight(15, 'red') - 0.5) < 1e-9);
+  assert.ok(Math.abs(HSL.bandWeight(15, 'orange') - 0.5) < 1e-9);
+  // dead centre of a band
+  assert.ok(Math.abs(HSL.bandWeight(120, 'green') - 1) < 1e-9);
+  // far away
+  assert.equal(HSL.bandWeight(180, 'red'), 0);
+  // hue wraps: 350° is close to red (0°)
+  assert.ok(HSL.bandWeight(350, 'red') > 0.6);
+});
+await t('adjustments are clamped to the range the UI allows', () => {
+  const c = HSL.clampHsl({ h: 500, s: -900, l: NaN });
+  assert.equal(c.h, 100);
+  assert.equal(c.s, -100);
+  assert.equal(c.l, 0);
+});
+await t('hue rotation moves the colour, not just its brightness', () => {
+  const set = { red: { h: 100 } };
+  const after = HSL.applyHslPixel(220, 30, 30, set);
+  const before = HSL.rgbToHsl(220, 30, 30);
+  const now = HSL.rgbToHsl(after.r, after.g, after.b);
+  assert.ok(Math.abs(now.h - before.h) > 10, `hue barely moved: ${before.h} -> ${now.h}`);
+});
+await t('each band is nudged by at most 30° of hue', () => {
+  // A band must not be able to recolour a neighbouring band's pixels entirely.
+  const set = { red: { h: 100 } };
+  const px = HSL.applyHslPixel(250, 20, 20, set);
+  const after = HSL.rgbToHsl(px.r, px.g, px.b);
+  const base = HSL.rgbToHsl(250, 20, 20);
+  let d = Math.abs(after.h - base.h);
+  if (d > 180) d = 360 - d;
+  assert.ok(d <= 30.5, `hue moved ${d}°, more than the 30° cap`);
+});
+await t('the renderer applies HSL and it triggers the pixel pass on its own', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/applyHsl\(img\.data, c\.hsl!\)/.test(src), 'HSL must run in the grade pass');
+  assert.ok(/hslActive\(c\.hsl\)/.test(src), 'HSL alone must force the pixel pass');
+  assert.ok(
+    src.indexOf('applyCurveLuts') < src.indexOf('applyHsl(img.data'),
+    'HSL must run after curves, on the graded pixels',
+  );
+});
+await t('the HSL panel is reachable from the inspector', () => {
+  const insp = readFileSync('src/mayocut/components/Inspector.tsx', 'utf8');
+  assert.ok(/HslSection/.test(insp), 'panel must exist');
+  assert.ok(/HSL_BANDS\.map/.test(insp), 'must offer every band');
+  for (const label of ['Hue', 'Saturation', 'Luminance']) {
+    assert.ok(new RegExp(`label="${label}"`).test(insp), `missing the ${label} slider`);
+  }
+});
+
+console.log('one audio mixer');
+await t('the WAV export renders through the shared scheduler', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('async exportAudioWav('));
+  const body = fn.slice(0, fn.indexOf('async exportAudioWav(') + 3000);
+  assert.ok(/await this\.scheduleOfflineAudio\(off/.test(body), 'must use the shared mixer');
+  assert.ok(!/const schedule = \(/.test(body), 'its own private scheduler must be gone');
+  assert.ok(/decodeAllAudio/.test(body), 'must use the shared decoder');
+});
+await t('the WAV export no longer has a second opinion about muting', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('async exportAudioWav('));
+  const end = fn.indexOf('\n  }\n');
+  const body = fn.slice(0, end);
+  // These were the duplicated rules; they now live only in scheduleOfflineAudio.
+  for (const dup of ['s.clip.muted) continue', 'hasSolo', 'isDipTo']) {
+    assert.ok(!body.includes(dup), `the old copy still contains "${dup}"`);
+  }
+});
+await t('ducking is applied in the offline mix, not only in preview', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('async scheduleOfflineAudio'));
+  const scope = fn.slice(0, fn.indexOf('async exportAudioWav'));
+  assert.ok(/this\.duckFactor\(start \+ dt\)/.test(scope), 'overlay music must duck in the file');
+  assert.ok(/this\.duckFactor\(s\.start \+ dt\)/.test(scope), 'main track must duck in the file');
+  assert.ok(/duckFactor\(t: number\)/.test(src), 'duckFactor must be reachable from the scheduler');
+});
+await t('every export path shares one description of the sound', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const schedulers = src.match(/scheduleOfflineAudio\(/g) ?? [];
+  assert.ok(schedulers.length >= 3, `expected MP4, WebM and WAV to use it, found ${schedulers.length}`);
+  // The preview has its own call sites (music, overlay audio, main) — that is
+  // fine. What matters is that the *offline* scheduler ducks too, so the file
+  // matches what was heard.
+  const offline = src.slice(src.indexOf('async scheduleOfflineAudio'));
+  const ducks = (offline.slice(0, offline.indexOf('async exportAudioWav')).match(/this\.duckFactor\(/g) ?? []);
+  assert.equal(ducks.length, 2, `offline mix should duck main + overlays, found ${ducks.length}`);
 });
 
 

@@ -4676,6 +4676,117 @@ function applyCurveLuts(d, luts) {
   }
 }
 
+// src/mayocut/hsl.ts
+var HSL_BANDS = [
+  { id: "red", name: "Red", center: 0, swatch: "#ef4444" },
+  { id: "orange", name: "Orange", center: 30, swatch: "#f97316" },
+  { id: "yellow", name: "Yellow", center: 60, swatch: "#eab308" },
+  { id: "green", name: "Green", center: 120, swatch: "#22c55e" },
+  { id: "cyan", name: "Cyan", center: 180, swatch: "#06b6d4" },
+  { id: "blue", name: "Blue", center: 240, swatch: "#3b82f6" },
+  { id: "purple", name: "Purple", center: 280, swatch: "#8b5cf6" },
+  { id: "magenta", name: "Magenta", center: 320, swatch: "#d946ef" }
+];
+var HSL_CENTERS = Object.fromEntries(
+  HSL_BANDS.map((b) => [b.id, b.center])
+);
+function hslActive(set) {
+  if (!set) return false;
+  return Object.values(set).some(
+    (a) => a && ((a.h ?? 0) !== 0 || (a.s ?? 0) !== 0 || (a.l ?? 0) !== 0)
+  );
+}
+function bandWeight(hueDeg, band) {
+  const h = (hueDeg % 360 + 360) % 360;
+  const centre = HSL_CENTERS[band];
+  let d = Math.abs(h - centre);
+  if (d > 180) d = 360 - d;
+  const w = 1 - d / 30;
+  return w > 0 ? w : 0;
+}
+function rgbToHsl(r, g, b) {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d < 1e-9) return { h: 0, s: 0, l };
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) * 60;
+  else if (max === gn) h = ((bn - rn) / d + 2) * 60;
+  else h = ((rn - gn) / d + 4) * 60;
+  return { h, s, l };
+}
+function hue2rgb(p, q, t) {
+  let tt = t;
+  if (tt < 0) tt += 1;
+  if (tt > 1) tt -= 1;
+  if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+  if (tt < 1 / 2) return q;
+  if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+  return p;
+}
+function hslToRgb(h, s, l) {
+  const hh = (h % 360 + 360) % 360 / 360;
+  if (s <= 0) {
+    const v = l * 255;
+    return { r: v, g: v, b: v };
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return {
+    r: hue2rgb(p, q, hh + 1 / 3) * 255,
+    g: hue2rgb(p, q, hh) * 255,
+    b: hue2rgb(p, q, hh - 1 / 3) * 255
+  };
+}
+function applyHslPixel(r, g, b, set) {
+  if (!hslActive(set)) return { r, g, b };
+  const { h, s, l } = rgbToHsl(r, g, b);
+  if (s < 0.02) return { r, g, b };
+  let dH = 0;
+  let sMul = 0;
+  let dL = 0;
+  let total = 0;
+  for (const band of HSL_BANDS) {
+    const adj = set[band.id];
+    if (!adj) continue;
+    const ah = adj.h ?? 0;
+    const as = adj.s ?? 0;
+    const al = adj.l ?? 0;
+    if (ah === 0 && as === 0 && al === 0) continue;
+    const w = bandWeight(h, band.id);
+    if (w <= 0) continue;
+    dH += ah / 100 * 30 * w;
+    sMul += as / 100 * w;
+    dL += al / 100 * 0.35 * w;
+    total += w;
+  }
+  if (total === 0) return { r, g, b };
+  const out = hslToRgb(
+    h + dH,
+    Math.max(0, Math.min(1, s * (1 + sMul))),
+    Math.max(0, Math.min(1, l + dL))
+  );
+  return {
+    r: Math.max(0, Math.min(255, out.r)),
+    g: Math.max(0, Math.min(255, out.g)),
+    b: Math.max(0, Math.min(255, out.b))
+  };
+}
+function applyHsl(d, set) {
+  if (!hslActive(set)) return;
+  for (let i = 0; i < d.length; i += 4) {
+    const out = applyHslPixel(d[i], d[i + 1], d[i + 2], set);
+    d[i] = out.r;
+    d[i + 1] = out.g;
+    d[i + 2] = out.b;
+  }
+}
+
 // src/mayocut/proxy.ts
 function sourceFor(consumer, originalUrl, proxyUrl) {
   if (consumer === "export") return originalUrl;
@@ -6097,7 +6208,14 @@ var Engine = class {
   mainTrackAudible() {
     return !this.project.tracks.some((t) => t.solo && t.clips.length > 0);
   }
-  /** Ducking: how much to pull music down while a `duck` clip is playing. */
+  /**
+   * Ducking: how much to pull music down while a `duck` clip is playing.
+   *
+   * Pure with respect to the project — it reads no live audio state — so the
+   * offline scheduler can call it directly and get the same curve the preview
+   * uses. It is deliberately *not* duplicated in the export path: music that
+   * dips under a voiceover during editing must dip in the file too.
+   */
   duckFactor(t) {
     const amount = this.project.duckAmount ?? 0.7;
     if (amount <= 0) return 1;
@@ -6589,7 +6707,7 @@ var Engine = class {
     }
     const lut = c.lut ? this.lutCache.get(c.lut) : null;
     const glitching = eff === "glitch" && this.glitchWindow(localT);
-    const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves);
+    const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves) || hslActive(c.hsl);
     if (lut || needsGrade) {
       this.drawMainGrade(ctx, el, W, H, c, lut ?? null);
     } else if (glitching || eff === "vhs") {
@@ -6936,6 +7054,7 @@ var Engine = class {
     if (lut) applyLut(lut, img.data);
     const curveLuts = buildCurveLuts(c.curves);
     if (curveLuts) applyCurveLuts(img.data, curveLuts);
+    if (hslActive(c.hsl)) applyHsl(img.data, c.hsl);
     octx.putImageData(img, 0, 0);
     ctx.drawImage(off, 0, 0, W, H);
   }
@@ -8730,7 +8849,7 @@ var Engine = class {
           s.clip.in,
           clipDur,
           s.clip.speed * audioFxRecipe(mainFx).rate,
-          (dt) => mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0),
+          (dt) => mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0) * this.duckFactor(s.start + dt),
           mainFx
         );
       }
@@ -8763,80 +8882,45 @@ var Engine = class {
             let v = vol;
             if (fadeIn > 0) v *= Math.min(1, dt / fadeIn);
             if (fadeOut > 0) v *= Math.min(1, (end - start - dt) / fadeOut);
-            return v * trackGain;
+            return v * trackGain * this.duckFactor(start + dt);
           },
           fxId
         );
       }
     }
   }
+  /**
+   * Export the project's audio as a 16-bit stereo WAV.
+   *
+   * This used to carry its OWN copy of the mix logic — a second scheduler with
+   * its own idea of fades, solos and muted clips. That copy is why audio
+   * effects, curves and ducking only ever appeared in the video exports: every
+   * fix had to be made twice, and the second time was forgotten.
+   *
+   * It now renders through `scheduleOfflineAudio`, the same function the MP4
+   * and WebM exporters use, so there is exactly one description of what the
+   * project sounds like. A change to the mix cannot land in one format only.
+   */
   async exportAudioWav(onProgress, opts = {}) {
     const sr = Math.min(48e3, Math.max(22050, opts.sampleRate ?? 44100));
-    const dur = Math.min(opts.seconds ?? this.duration(), 60 * 30);
-    if (dur <= 0.05) throw new Error("Nothing to export \u2014 add media first");
+    const from = Math.max(0, opts.from ?? 0);
+    const to = Math.min(opts.to ?? this.duration(), 60 * 30);
+    if (to - from <= 0.05) throw new Error("Nothing to export \u2014 add media first");
     const OCtor = window.OfflineAudioContext ?? window.webkitOfflineAudioContext;
     if (!OCtor) throw new Error("Offline audio rendering isn't available in this browser");
-    const frames = Math.ceil(dur * sr);
+    const frames = Math.ceil((to - from) * sr);
     const off = new OCtor(2, frames, sr);
-    const master = off.createGain();
-    master.gain.value = this.project.masterGain ?? 1;
-    master.connect(off.destination);
-    const bufs = /* @__PURE__ */ new Map();
-    const decode = async (mediaId) => {
-      if (bufs.has(mediaId)) return bufs.get(mediaId);
-      const rec = this.els.get(mediaId);
-      let buf = null;
-      try {
-        if (rec?.url) {
-          const blob = await fetch(rec.url).then((r) => r.blob());
-          buf = await off.decodeAudioData(await blob.arrayBuffer());
-        }
-      } catch {
-        buf = null;
-      }
-      bufs.set(mediaId, buf);
-      return buf;
-    };
-    const schedule = (buf, at, srcStart, length, gain, rate = 1) => {
-      const s2 = off.createBufferSource();
-      s2.buffer = buf;
-      s2.playbackRate.value = rate;
-      const g = off.createGain();
-      g.gain.value = Math.max(0, Math.min(2, gain));
-      s2.connect(g);
-      g.connect(master);
-      const start = Math.max(0, at);
-      const offset = Math.max(0, srcStart);
-      const dur2 = Math.min(length * rate, buf.duration - offset);
-      if (dur2 > 1e-3) s2.start(start, offset, dur2);
-    };
-    const spans = mainSpans(this.project);
-    const hasSolo = this.project.tracks.some((t) => t.solo);
-    let done = 0;
-    const total = spans.length + this.project.tracks.reduce((a, t) => a + t.clips.length, 0);
-    const tick = () => onProgress(Math.min(0.95, ++done / Math.max(1, total)));
-    for (const s of spans) {
-      tick();
-      if (s.clip.freeze || s.clip.reverse) continue;
-      if (hasSolo) continue;
-      if (s.clip.muted) continue;
-      const buf = await decode(s.clip.mediaId);
-      if (!buf) continue;
-      const dur2 = mainClipDuration(s.clip);
-      schedule(buf, s.start, s.clip.in, dur2, s.clip.volume, Math.max(0.05, s.clip.speed));
-    }
-    for (const tr of this.project.tracks) {
-      const trackGain = hasSolo ? tr.solo ? 1 : 0 : tr.muted ? 0 : 1;
-      for (const c of tr.clips) {
-        tick();
-        if (c.kind !== "audio" || !c.mediaId || trackGain === 0) continue;
-        const buf = await decode(c.mediaId);
-        if (!buf) continue;
-        schedule(buf, c.start, c.sourceOffset ?? 0, c.duration, (c.volume ?? 1) * trackGain);
-      }
-    }
-    onProgress(0.96);
+    onProgress(0.1);
+    const ids = /* @__PURE__ */ new Set();
+    for (const c of this.project.main) ids.add(c.mediaId);
+    for (const tr of this.project.tracks)
+      for (const c of tr.clips) if (c.mediaId) ids.add(c.mediaId);
+    const bufs = await this.decodeAllAudio(off, ids);
+    onProgress(0.4);
+    await this.scheduleOfflineAudio(off, off.destination, bufs, { from, to });
+    onProgress(0.6);
     const rendered = await off.startRendering();
+    onProgress(0.9);
     const L = rendered.getChannelData(0);
     const R = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : L;
     const n = L.length;

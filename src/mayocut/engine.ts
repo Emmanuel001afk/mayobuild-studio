@@ -36,6 +36,7 @@ import { resolveComposition } from "./timeline-resolver";
 import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-plan";
 import { audioFxRecipe, buildAudioFx, makeImpulse, type AudioFxId } from "./audio-fx";
 import { applyCurveLuts, buildCurveLuts, curvesActive } from "./curves";
+import { applyHsl, hslActive } from "./hsl";
 import { sourceFor } from "./proxy";
 import { applyLut, type LutTable } from "./luts";
 import { sampleTimeline } from "./timeline";
@@ -1702,8 +1703,15 @@ export class Engine {
     return !this.project.tracks.some((t) => t.solo && t.clips.length > 0);
   }
 
-  /** Ducking: how much to pull music down while a `duck` clip is playing. */
-  private duckFactor(t: number): number {
+  /**
+   * Ducking: how much to pull music down while a `duck` clip is playing.
+   *
+   * Pure with respect to the project — it reads no live audio state — so the
+   * offline scheduler can call it directly and get the same curve the preview
+   * uses. It is deliberately *not* duplicated in the export path: music that
+   * dips under a voiceover during editing must dip in the file too.
+   */
+  duckFactor(t: number): number {
     const amount = this.project.duckAmount ?? 0.7;
     if (amount <= 0) return 1;
     // a solo'd clip is the main event: nothing is allowed to quiet it
@@ -2308,7 +2316,7 @@ export class Engine {
     const glitching = eff === "glitch" && this.glitchWindow(localT);
     // Pixel-space grade (temperature / tint / vignette / sharpen / split-tone)
     // and LUTs need readback, so they render through the reduced offscreen pass.
-    const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves);
+    const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves) || hslActive(c.hsl);
     if (lut || needsGrade) {
       this.drawMainGrade(ctx, el, W, H, c, lut ?? null);
     } else if (glitching || eff === "vhs") {
@@ -2725,6 +2733,9 @@ export class Engine {
     // shapes the *look* rather than being flattened by it.
     const curveLuts = buildCurveLuts(c.curves);
     if (curveLuts) applyCurveLuts(img.data, curveLuts);
+    // HSL targets specific colours, so it runs last — after the overall grade
+    // has moved the pixels to where the user actually sees them.
+    if (hslActive(c.hsl)) applyHsl(img.data, c.hsl!);
     octx.putImageData(img, 0, 0);
     ctx.drawImage(off, 0, 0, W, H);
   }
@@ -4787,13 +4798,17 @@ export class Engine {
         const nextSpan = idx + 1 < spans.length ? spans[idx + 1] : null;
         const clipDur = Math.max(0.01, s.end - s.start);
         const mainFx = s.clip.audioFx ?? "none";
+        // The main track is ducked by overlay clips that ask for it, exactly
+        // as the preview ducks it.
         rampedSource(
           buf,
           Math.max(from, s.start),
           s.clip.in,
           clipDur,
           s.clip.speed * audioFxRecipe(mainFx).rate,
-          (dt) => mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0),
+          (dt) =>
+            mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0) *
+            this.duckFactor(s.start + dt),
           mainFx,
         );
       }
@@ -4833,7 +4848,8 @@ export class Engine {
             let v = vol;
             if (fadeIn > 0) v *= Math.min(1, dt / fadeIn);
             if (fadeOut > 0) v *= Math.min(1, (end - start - dt) / fadeOut);
-            return v * trackGain;
+            // Music ducks under a voiceover here too, not just on screen.
+            return v * trackGain * this.duckFactor(start + dt);
           },
           fxId,
         );
@@ -4841,95 +4857,50 @@ export class Engine {
     }
   }
 
+  /**
+   * Export the project's audio as a 16-bit stereo WAV.
+   *
+   * This used to carry its OWN copy of the mix logic — a second scheduler with
+   * its own idea of fades, solos and muted clips. That copy is why audio
+   * effects, curves and ducking only ever appeared in the video exports: every
+   * fix had to be made twice, and the second time was forgotten.
+   *
+   * It now renders through `scheduleOfflineAudio`, the same function the MP4
+   * and WebM exporters use, so there is exactly one description of what the
+   * project sounds like. A change to the mix cannot land in one format only.
+   */
   async exportAudioWav(
     onProgress: (p: number) => void,
-    opts: { sampleRate?: number; seconds?: number } = {},
+    opts: { sampleRate?: number; seconds?: number; from?: number; to?: number } = {},
   ): Promise<Blob> {
     const sr = Math.min(48000, Math.max(22050, opts.sampleRate ?? 44100));
-    const dur = Math.min(opts.seconds ?? this.duration(), 60 * 30);
-    if (dur <= 0.05) throw new Error("Nothing to export — add media first");
+    const from = Math.max(0, opts.from ?? 0);
+    const to = Math.min(opts.to ?? this.duration(), 60 * 30);
+    if (to - from <= 0.05) throw new Error("Nothing to export — add media first");
     const OCtor =
       window.OfflineAudioContext ??
       (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext })
         .webkitOfflineAudioContext;
     if (!OCtor) throw new Error("Offline audio rendering isn't available in this browser");
-    const frames = Math.ceil(dur * sr);
+
+    const frames = Math.ceil((to - from) * sr);
     const off = new OCtor(2, frames, sr);
-    const master = off.createGain();
-    master.gain.value = this.project.masterGain ?? 1;
-    master.connect(off.destination);
+    onProgress(0.1);
 
-    // Resolve every distinct media blob to a decoded buffer once.
-    const bufs = new Map<string, AudioBuffer | null>();
-    const decode = async (mediaId: string) => {
-      if (bufs.has(mediaId)) return bufs.get(mediaId)!;
-      const rec = this.els.get(mediaId);
-      let buf: AudioBuffer | null = null;
-      try {
-        if (rec?.url) {
-          const blob = await fetch(rec.url).then((r) => r.blob());
-          buf = await off.decodeAudioData(await blob.arrayBuffer());
-        }
-      } catch {
-        buf = null;
-      }
-      bufs.set(mediaId, buf);
-      return buf;
-    };
+    // Decode every distinct media the timeline references, once.
+    const ids = new Set<string>();
+    for (const c of this.project.main) ids.add(c.mediaId);
+    for (const tr of this.project.tracks)
+      for (const c of tr.clips) if (c.mediaId) ids.add(c.mediaId);
+    const bufs = await this.decodeAllAudio(off, ids);
+    onProgress(0.4);
 
-    const schedule = (
-      buf: AudioBuffer,
-      at: number,
-      srcStart: number,
-      length: number,
-      gain: number,
-      rate = 1,
-    ) => {
-      const s2 = off.createBufferSource();
-      s2.buffer = buf;
-      s2.playbackRate.value = rate;
-      const g = off.createGain();
-      g.gain.value = Math.max(0, Math.min(2, gain));
-      s2.connect(g);
-      g.connect(master);
-      const start = Math.max(0, at);
-      const offset = Math.max(0, srcStart);
-      const dur2 = Math.min(length * rate, buf.duration - offset);
-      if (dur2 > 0.001) s2.start(start, offset, dur2);
-    };
+    await this.scheduleOfflineAudio(off, off.destination, bufs, { from, to });
+    onProgress(0.6);
 
-    const spans = mainSpans(this.project);
-    const hasSolo = this.project.tracks.some((t) => t.solo);
-    let done = 0;
-    const total = spans.length + this.project.tracks.reduce((a, t) => a + t.clips.length, 0);
-    const tick = () => onProgress(Math.min(0.95, ++done / Math.max(1, total)));
-
-    for (const s of spans) {
-      tick();
-      if (s.clip.freeze || s.clip.reverse) continue;
-      if (hasSolo) continue; // solos win; main sound goes quiet
-      // A clip the user muted (e.g. after "extract audio") must contribute
-      // NOTHING to the exported mix, or the extracted copy doubles it.
-      if (s.clip.muted) continue;
-      const buf = await decode(s.clip.mediaId);
-      if (!buf) continue;
-      const dur2 = mainClipDuration(s.clip);
-      schedule(buf, s.start, s.clip.in, dur2, s.clip.volume, Math.max(0.05, s.clip.speed));
-    }
-
-    for (const tr of this.project.tracks) {
-      const trackGain = hasSolo ? (tr.solo ? 1 : 0) : tr.muted ? 0 : 1;
-      for (const c of tr.clips) {
-        tick();
-        if (c.kind !== "audio" || !c.mediaId || trackGain === 0) continue;
-        const buf = await decode(c.mediaId);
-        if (!buf) continue;
-        schedule(buf, c.start, c.sourceOffset ?? 0, c.duration, (c.volume ?? 1) * trackGain);
-      }
-    }
-
-    onProgress(0.96);
     const rendered = await off.startRendering();
+    onProgress(0.9);
+
     // interleave to stereo 16-bit PCM
     const L = rendered.getChannelData(0);
     const R = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : L;

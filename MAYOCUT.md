@@ -346,9 +346,9 @@ current stack, which uses only the platform's own decoders).
 - Real-video integration fixtures: the audit runs against synthetic Project
   fixtures, not actual sample files.
 - No native shell exists yet.
-- Audio effects are applied per clip and are **not** yet reflected in the WAV
-  export path (`exportAudioWav`), which still writes the dry mix. The MP4 and
-  WebM exports do apply them.
+- The ducking curve is sampled at 60 Hz like the rest of the mix, which is
+  finer than any audible fade but is not sample-accurate. A 250 ms ramp is
+  smooth; a 5 ms one would not be.
 - The stock set is eleven generated assets, not a provider catalogue. It is
   deliberately small because it must work with no network; a real stock
   provider would be a licence and a download, not a code change.
@@ -405,6 +405,44 @@ draggable graph whose drawn line *is* the LUT that gets applied.
 carries the framing with it: every positioned overlay is rotated across the
 diagonal (`x' = -s·y`, `y' = s·x`) rather than dumped at the centre. Rotating
 only the canvas would silently re-frame everything the user had placed.
+
+### HSL, and one audio mixer (Stage 3d)
+
+**Per-range HSL.** `src/mayocut/hsl.ts` implements CapCut's HSL panel: eight
+colour bands (red, orange, yellow, green, cyan, blue, purple, magenta), each
+with a hue, saturation and luminance offset. Bands use **triangular falloff to
+the neighbouring midpoints**, so a pixel halfway between red and orange gets
+half of each. A hard cut at the band edge would put a visible seam through any
+gradient — the audit pins this with a pixel 7° off green's centre and asserts it
+is *partly*, not fully, desaturated.
+
+Two deliberate limits: a band can rotate hue by at most **30°**, so red can
+never be turned into blue; and fully desaturated pixels are skipped, because a
+grey pixel has no meaningful hue to rotate. Hue runs before saturation and
+luminance, so the result does not depend on how saturated the input already was.
+
+**The audio mixer was duplicated, and it drifted.** `exportAudioWav` carried its
+own copy of the mix logic — its own fades, its own solo rules, its own muted-clip
+handling — while `scheduleOfflineAudio` served the MP4 and WebM exporters. Any
+fix had to be made twice, and the second time was forgotten. Concretely: audio
+effects, tone curves and **ducking** existed in the video exports and not in the
+WAV.
+
+Rather than patch the copy, the WAV export now renders through
+`scheduleOfflineAudio`. There is one description of what the project sounds
+like, and a change to the mix cannot land in one format only. Two things fell
+out of that:
+
+- Ducking is now applied offline (`this.duckFactor(...)` inside the shared
+  scheduler), so music dips under a voiceover in the file exactly as it does on
+  screen.
+- `duckFactor` became public, because the offline scheduler is the second
+  legitimate caller. It was already pure with respect to project state, so this
+  exposes nothing that was not already deterministic.
+
+A bug found by the new tests: `clampHsl` used `Math.min(100, NaN)`, which is
+`NaN`, not `100`. A non-numeric slider read would have written `NaN` into the
+project and then into every rendered frame. It now falls back to neutral.
 
 ### A note on the error messages
 
