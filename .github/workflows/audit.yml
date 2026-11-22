@@ -51,6 +51,13 @@ jobs:
       - name: Rebuild pure-logic bundles, then audit
         run: node scripts/audit-build.mjs
 
+      # Real encoded footage, not synthetic canvases. Runs in plain node: the
+      # container is parsed directly, so this needs no browser.
+      - name: Real-footage fixture bench
+        run: |
+          bash scripts/make-fixtures.sh --check
+          node scripts/fixture-bench.mjs
+
       - name: Build offline shell bundle
         run: npm run build:shell
 
