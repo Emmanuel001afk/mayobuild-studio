@@ -22,6 +22,13 @@ export interface MediaItem {
   codecHint?: string; // best-effort codec identifier read from the container header
 }
 
+export type HslBand = "red" | "yellow" | "green" | "cyan" | "blue" | "magenta";
+export interface HslAdjustment {
+  hue: number;
+  saturation: number;
+  luminance: number;
+}
+
 export interface FilterAdjust {
   brightness: number; // 100 = neutral
   contrast: number; // 100
@@ -39,6 +46,12 @@ export interface FilterAdjust {
   vignette?: number;
   /** 0..100 — split-tone teal shadows / orange highlights */
   splitTone?: number;
+  /** Per-color HSL shifts (-100..100); absent means neutral. */
+  hsl?: Partial<Record<HslBand, HslAdjustment>>;
+  /** Midtone output at input 0.5; 0.5 is an identity RGB master curve. */
+  curveMid?: number;
+  /** Optional per-channel midtone outputs; absent channels are neutral. */
+  curveChannels?: Partial<Record<"red" | "green" | "blue", number>>;
 }
 
 export const DEFAULT_ADJUST: FilterAdjust = {
@@ -698,6 +711,8 @@ export interface OverlayClip {
   sourceOffset?: number;
   // text
   text?: string;
+  /** Built-in dynamic sticker, resolved from timeline time during rendering. */
+  sticker?: "timecode";
   size?: number; // px at 1080 reference height
   color?: string;
   bg?: string; // css color or "" for none

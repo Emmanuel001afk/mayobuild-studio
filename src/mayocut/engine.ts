@@ -34,6 +34,8 @@ import {
 import { resolveComposition } from "./timeline-resolver";
 import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-plan";
 import { sourceFor } from "./proxy";
+import { advancedGradeActive, applyAdvancedGrade } from "./color-grade";
+import { stickerText } from "./stickers";
 import { applyLut, type LutTable } from "./luts";
 import { sampleTimeline } from "./timeline";
 import { makeImpulse, probeGif } from "./utils";
@@ -600,9 +602,8 @@ export class Engine {
   /**
    * Point the element at the right source for a consumer.
    *
-   * Preview gets the proxy when one exists, export always gets the original.
-   * Everything that chooses between the two goes through sourceFor(), so proxy
-   * quality cannot leak into a delivered file.
+   * Source selection goes through sourceFor(). Currently it always selects
+   * the original because legacy proxies cannot guarantee audio and timing.
    */
   private applySource(
     rec: ElRecord,
@@ -676,7 +677,7 @@ export class Engine {
     }
   }
 
-  /** Re-point every element back at preview sources (proxies). */
+  /** Restore the preview source policy after export. */
   private usePreviewSources() {
     for (const [id, rec] of this.els) {
       const media = this.media.get(id);
@@ -2514,6 +2515,7 @@ export class Engine {
   /** Does this adjust need a pixel pass (anything CSS filters can't do)? */
   private gradeActive(a: FilterAdjust): boolean {
     return (
+      advancedGradeActive(a) ||
       (a.temperature ?? 0) !== 0 ||
       (a.tint ?? 0) !== 0 ||
       (a.vignette ?? 0) > 0 ||
@@ -2558,6 +2560,7 @@ export class Engine {
     this.paintFit(octx, el, W2, H2, c.fit);
     const img = octx.getImageData(0, 0, W2, H2);
     this.gradePixels(img.data, W2, H2, c.adjust);
+    applyAdvancedGrade(img.data, c.adjust);
     if (lut) applyLut(lut, img.data);
     octx.putImageData(img, 0, 0);
     ctx.drawImage(off, 0, 0, W, H);
@@ -2768,7 +2771,7 @@ export class Engine {
     dur: number,
     anim: AnimValues,
   ) {
-    const rawText = c.text ?? "";
+    const rawText = stickerText(c, localT);
     if (!rawText) return;
     const text = c.upper ? rawText.toUpperCase() : rawText;
     const px = Math.max(4, (c.size ?? 64) * (H / 1080) * anim.scale);

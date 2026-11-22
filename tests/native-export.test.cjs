@@ -46,6 +46,15 @@ test("native project validation rejects edits it cannot render", () => {
     (p) => {
       p.main[0].adjust.brightness = 50;
     },
+    (p) => {
+      p.main[0].adjust.hsl = { red: { hue: 30, saturation: 0, luminance: 0 } };
+    },
+    (p) => {
+      p.main[0].adjust.curveMid = 0.7;
+    },
+    (p) => {
+      p.main[0].adjust.curveChannels = { red: 0.7 };
+    },
   ]) {
     // Each test must have its own adjustment object.
     const p = JSON.parse(JSON.stringify(project()));

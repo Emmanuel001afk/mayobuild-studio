@@ -33,8 +33,9 @@ function proxyBytes(durationSec, bitrateKbps) {
   return Math.round(durationSec * Math.max(0, bitrateKbps) * 1e3 / 8);
 }
 function sourceFor(consumer, originalUrl, proxyUrl) {
-  if (consumer === "export") return originalUrl;
-  return proxyUrl || originalUrl;
+  void consumer;
+  void proxyUrl;
+  return originalUrl;
 }
 export {
   proxyBytes,

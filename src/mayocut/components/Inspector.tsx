@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { HSL_BANDS } from "../color-grade";
 import { Clock, Copy, Diamond, Scissors, SlidersHorizontal, Spline, Trash2 } from "lucide-react";
 import type {
   AnimValues,
@@ -13,6 +14,7 @@ import type {
   TextAnim,
   TextPos,
   SpeedPoint,
+  HslBand,
   TextWord,
   TransitionKind,
 } from "../types";
@@ -144,6 +146,8 @@ const POSITIONS: TextPos[] = ["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "b
 
 export function Inspector(p: Props) {
   const [replaceOpen, setReplaceOpen] = useState(false);
+  const [hslBand, setHslBand] = useState<HslBand>("red");
+  const [curveChannel, setCurveChannel] = useState<"master" | "red" | "green" | "blue">("master");
   if (!p.selection || !p.clip) {
     return (
       <div className="p-4 space-y-4">
@@ -689,6 +693,121 @@ export function Inspector(p: Props) {
             </div>
           </Section>
 
+          <Section label="HSL color ranges" anchor="adjust">
+            <div className="flex gap-1 flex-wrap" role="group" aria-label="HSL color range">
+              {HSL_BANDS.map((band) => (
+                <button
+                  key={band.id}
+                  aria-pressed={hslBand === band.id}
+                  className={`rounded border px-2 py-1 text-[10px] ${hslBand === band.id ? "border-cyan-400 text-cyan-300" : "border-border"}`}
+                  onClick={() => setHslBand(band.id)}
+                >
+                  {band.label}
+                </button>
+              ))}
+            </div>
+            {(
+              [
+                ["hue", "Hue shift"],
+                ["saturation", "Saturation shift"],
+                ["luminance", "Luminance shift"],
+              ] as const
+            ).map(([key, label]) => (
+              <Slider
+                key={key}
+                label={label}
+                min={-100}
+                max={100}
+                value={main.adjust.hsl?.[hslBand]?.[key] ?? 0}
+                onChange={(value) =>
+                  p.onPatchMain({
+                    adjust: {
+                      ...main.adjust,
+                      hsl: {
+                        ...main.adjust.hsl,
+                        [hslBand]: {
+                          hue: 0,
+                          saturation: 0,
+                          luminance: 0,
+                          ...main.adjust.hsl?.[hslBand],
+                          [key]: value,
+                        },
+                      },
+                    },
+                  })
+                }
+              />
+            ))}
+            <button
+              className="mb-btn-ghost h-7 px-2 text-[10px]"
+              onClick={() => p.onPatchMain({ adjust: { ...main.adjust, hsl: undefined } })}
+            >
+              Reset HSL
+            </button>
+          </Section>
+          <Section label="RGB curves" anchor="adjust">
+            <div role="group" aria-label="Curve channel" className="flex gap-1 flex-wrap mb-2">
+              {(["master", "red", "green", "blue"] as const).map((channel) => (
+                <button
+                  key={channel}
+                  aria-pressed={curveChannel === channel}
+                  className={`rounded border px-2 py-1 text-[10px] ${curveChannel === channel ? "border-cyan-400 text-cyan-300" : "border-border"}`}
+                  onClick={() => setCurveChannel(channel)}
+                >
+                  {channel === "master" ? "RGB" : channel}
+                </button>
+              ))}
+            </div>
+            <svg
+              viewBox="0 0 100 100"
+              className="w-full h-24 rounded bg-slate-950 border border-border"
+              role="img"
+              aria-label={`RGB ${curveChannel} curve preview`}
+            >
+              <path d="M0 100 L100 0" stroke="#475569" strokeWidth="1" fill="none" />
+              <polyline
+                points={`0,100 50,${100 - (curveChannel === "master" ? (main.adjust.curveMid ?? 0.5) : (main.adjust.curveChannels?.[curveChannel] ?? 0.5)) * 100} 100,0`}
+                stroke={curveChannel === "master" ? "#67e8f9" : curveChannel}
+                strokeWidth="2"
+                fill="none"
+              />
+            </svg>
+            <Slider
+              label="Midtone"
+              min={5}
+              max={95}
+              value={Math.round(
+                (curveChannel === "master"
+                  ? (main.adjust.curveMid ?? 0.5)
+                  : (main.adjust.curveChannels?.[curveChannel] ?? 0.5)) * 100,
+              )}
+              onChange={(value) =>
+                p.onPatchMain({
+                  adjust:
+                    curveChannel === "master"
+                      ? { ...main.adjust, curveMid: value / 100 }
+                      : {
+                          ...main.adjust,
+                          curveChannels: {
+                            ...main.adjust.curveChannels,
+                            [curveChannel]: value / 100,
+                          },
+                        },
+                })
+              }
+            />
+            <button
+              className="mb-btn-ghost h-7 px-2 text-[10px]"
+              onClick={() =>
+                p.onPatchMain({
+                  adjust: { ...main.adjust, curveMid: undefined, curveChannels: undefined },
+                })
+              }
+            >
+              Reset curves
+            </button>
+          </Section>
+
           <Section label="Transition in" anchor="anim">
             <div className="grid grid-cols-2 gap-1">
               {TRANSITIONS.map((tr) => (
@@ -849,12 +968,20 @@ export function Inspector(p: Props) {
       {over?.kind === "text" && (
         <>
           <Section label="Text" anchor="video">
+            {over.sticker === "timecode" && (
+              <p className="text-[10px] text-muted-foreground">
+                This sticker shows project time. Editing its text converts it to a regular text
+                layer.
+              </p>
+            )}
             <textarea
               className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs min-h-24 resize-y leading-snug"
               value={over.text ?? ""}
               placeholder="Type your text — Enter starts a new line"
               spellCheck
-              onChange={(e) => p.onPatchOverlay(trackId, { text: e.target.value })}
+              onChange={(e) =>
+                p.onPatchOverlay(trackId, { text: e.target.value, sticker: undefined })
+              }
             />
             <div className="text-[10px] text-muted-foreground">
               {(over.text ?? "").length} characters · {(over.text ?? "").split("\n").length} line
@@ -1917,6 +2044,7 @@ function Slider({
       </div>
       <input
         type="range"
+        aria-label={label}
         min={min}
         max={max}
         step={step}

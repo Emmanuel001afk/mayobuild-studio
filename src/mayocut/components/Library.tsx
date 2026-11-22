@@ -10,7 +10,11 @@
 // Cards intentionally show a *real* miniature of the effect (a CSS filter for a
 // look, an animated thumbnail for a movement, a gradient swatch for a
 // transition) instead of a uniform placeholder square.
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { encodeWavMono } from "../denoise";
+import { BACKGROUNDS, type BackgroundId } from "../visual-library";
+import { FEATURED_STICKERS } from "../stickers";
+import { SOUND_LIBRARY, synthesizeSound, type SoundId } from "../sound-library";
 import {
   Aperture,
   Captions,
@@ -130,6 +134,173 @@ export const SHAPE_STICKERS: { id: string; label: string; patch: Partial<Overlay
   { id: "flag", label: "⚑", patch: { size: 170, color: "#f97316", anim: "pop" } },
 ];
 
+export function BackgroundShelf({
+  onAdd,
+}: {
+  onAdd: (id: BackgroundId, placement: "main" | "overlay") => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs font-medium">Offline backgrounds</div>
+      <p className="text-[10px] text-muted-foreground">
+        Add a solid-color image as a main clip or an overlay.
+      </p>
+      {BACKGROUNDS.map((item) => (
+        <div key={item.id} className="flex items-center gap-1.5 border border-border rounded p-1.5">
+          <span
+            aria-hidden="true"
+            className="h-6 w-6 shrink-0 rounded border border-border"
+            style={{ backgroundColor: item.color }}
+          />
+          <span className="min-w-0 flex-1 text-[10px]">{item.name}</span>
+          <button
+            className="mb-btn-ghost h-8 px-1.5 text-[10px]"
+            aria-label={`Add ${item.name} as main clip`}
+            onClick={() => onAdd(item.id, "main")}
+          >
+            Main
+          </button>
+          <button
+            className="mb-btn-ghost h-8 px-1.5 text-[10px]"
+            aria-label={`Add ${item.name} as overlay`}
+            onClick={() => onAdd(item.id, "overlay")}
+          >
+            Overlay
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function FeaturedStickers({
+  onAdd,
+}: {
+  onAdd: (label: string, patch: Partial<OverlayClip>) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs font-medium">Animated stickers</div>
+      {FEATURED_STICKERS.map((sticker) => (
+        <button
+          key={sticker.id}
+          className="w-full flex items-center gap-2 rounded border border-border p-2 text-left hover:border-cyan-400"
+          aria-label={`Add ${sticker.name} sticker`}
+          onClick={() => onAdd(sticker.label, sticker.patch)}
+        >
+          <span className="min-w-10 text-center text-base">{sticker.label}</span>
+          <span>
+            <span className="block text-xs">{sticker.name}</span>
+            <span className="block text-[10px] text-muted-foreground">{sticker.description}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function SoundEffectsShelf({ onAddSound }: { onAddSound: (id: SoundId) => void }) {
+  const soundPreview = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
+  const [previewError, setPreviewError] = useState("");
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("All");
+  const visibleSounds = SOUND_LIBRARY.filter(
+    (sound) =>
+      (category === "All" || sound.category === category) &&
+      `${sound.name} ${sound.description} ${sound.category}`
+        .toLowerCase()
+        .includes(query.trim().toLowerCase()),
+  );
+  const stopSoundPreview = () => {
+    const current = soundPreview.current;
+    if (!current) return;
+    current.audio.pause();
+    current.audio.removeAttribute("src");
+    URL.revokeObjectURL(current.url);
+    soundPreview.current = null;
+  };
+  useEffect(() => () => stopSoundPreview(), []);
+  const previewSound = (id: SoundId) => {
+    stopSoundPreview();
+    setPreviewError("");
+    const url = URL.createObjectURL(encodeWavMono(synthesizeSound(id), 44100));
+    const audio = new Audio(url);
+    soundPreview.current = { audio, url };
+    audio.onended = () => {
+      if (soundPreview.current?.audio === audio) stopSoundPreview();
+    };
+    void audio.play().catch(() => {
+      if (soundPreview.current?.audio === audio) stopSoundPreview();
+      setPreviewError("Could not play this sound on this device.");
+    });
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs font-medium">Built-in sound effects</div>
+      <p className="text-[10px] text-muted-foreground">
+        Original sounds generated offline. Preview or add at the playhead.
+      </p>
+      <input
+        aria-label="Search sound effects"
+        className="w-full rounded border border-border bg-background px-2 py-1 text-xs"
+        placeholder="Search sounds"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+      <div className="flex gap-1 overflow-x-auto" aria-label="Sound categories">
+        {["All", "Transitions", "Digital", "Impacts", "Everyday"].map((name) => (
+          <button
+            key={name}
+            aria-pressed={category === name}
+            onClick={() => setCategory(name)}
+            className={`shrink-0 rounded border px-2 py-1 text-[10px] ${category === name ? "border-cyan-400 text-cyan-300" : "border-border"}`}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      {previewError && (
+        <p className="text-[10px] text-amber-300" role="alert">
+          {previewError}
+        </p>
+      )}
+      <div className="space-y-1">
+        {visibleSounds.length === 0 && (
+          <p className="text-[10px] text-muted-foreground">No matching sounds.</p>
+        )}
+        {visibleSounds.map((sound) => (
+          <div key={sound.id} className="flex items-center gap-2 rounded border border-border p-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-medium">{sound.name}</div>
+              <div className="text-[10px] text-muted-foreground">
+                {sound.description} · {sound.duration}s
+              </div>
+            </div>
+            <button
+              className="mb-btn-ghost px-2 h-8 text-[11px]"
+              onClick={() => previewSound(sound.id)}
+              aria-label={`Preview ${sound.name}`}
+            >
+              Play
+            </button>
+            <button
+              className="mb-btn px-2 h-8 text-[11px]"
+              onClick={() => {
+                stopSoundPreview();
+                onAddSound(sound.id);
+              }}
+              aria-label={`Add ${sound.name} to timeline`}
+            >
+              Add
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   project: Project;
   media: MediaItem[];
@@ -139,6 +310,10 @@ interface Props {
   onImport: () => void;
   onAddMedia: (m: MediaItem) => void;
   onDeleteMedia: (m: MediaItem) => void;
+  storedProxies: Record<string, boolean>;
+  onRemoveProxy: (m: MediaItem) => void;
+  onAddSound: (id: SoundId) => void;
+  onAddBackground: (id: BackgroundId, placement: "main" | "overlay") => void;
   onAddText: () => void;
   onAddSticker: (label: string, patch?: Partial<OverlayClip>) => void;
   onApplyTextPreset: (patch: Partial<OverlayClip>) => void;
@@ -163,6 +338,10 @@ export function Library({
   onImport,
   onAddMedia,
   onDeleteMedia,
+  storedProxies,
+  onRemoveProxy,
+  onAddSound,
+  onAddBackground,
   onAddText,
   onAddSticker,
   onApplyTextPreset,
@@ -301,6 +480,18 @@ export function Library({
         </div>
         <div className="px-1 py-0.5 text-[10px] truncate">{m.name}</div>
       </button>
+      {m.kind === "video" && storedProxies[m.id] && (
+        <div className="px-1 pb-1 text-[10px] text-amber-200">
+          Stored proxy inactive ·{" "}
+          <button
+            className="underline"
+            onClick={() => onRemoveProxy(m)}
+            aria-label={`Remove stored proxy for ${m.name}`}
+          >
+            Remove
+          </button>
+        </div>
+      )}
       {m.unplayable && (
         <div
           className="absolute top-1 left-1 text-[9px] leading-tight text-amber-300 bg-black/75 border border-amber-400/30 rounded px-1 max-w-[70%] truncate"
@@ -363,6 +554,10 @@ export function Library({
         {/* ---------------------------------------------------------- MEDIA */}
         {tab === "media" && (
           <>
+            <p className="text-[10px] text-muted-foreground leading-snug" role="status">
+              Preview proxies are temporarily disabled to protect audio and timing. Editing and
+              exports use original media.
+            </p>
             <div className="flex gap-1">
               <button className="mb-btn flex-1 h-8 text-[11px]" onClick={onImport}>
                 <Upload className="h-3.5 w-3.5" /> Import
@@ -378,6 +573,8 @@ export function Library({
             <button className="mb-btn-ghost w-full h-7 text-[11px]" onClick={onAddAtPlayhead}>
               + Add selected at playhead
             </button>
+            <BackgroundShelf onAdd={onAddBackground} />
+            <Label>Your media</Label>
             <Grid>
               {visualMedia.map(mediaCard)}
               {visualMedia.length === 0 && (
@@ -406,6 +603,8 @@ export function Library({
                 <Music className="h-3.5 w-3.5" />
               </button>
             </div>
+            <SoundEffectsShelf onAddSound={onAddSound} />
+            <Label>Your audio</Label>
             <Grid>
               {audioMedia.map(mediaCard)}
               {audioMedia.length === 0 && (
@@ -501,6 +700,7 @@ export function Library({
         {/* ------------------------------------------------------- STICKERS */}
         {tab === "stickers" && (
           <>
+            <FeaturedStickers onAdd={onAddSticker} />
             <Label>Emoji</Label>
             <div className="grid grid-cols-8 gap-0.5">
               {STICKERS.map((em) => (

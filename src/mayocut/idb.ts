@@ -130,6 +130,7 @@ export const db = {
           const t = db.transaction(["media", "blobs"], "readwrite");
           t.objectStore("media").delete(id);
           t.objectStore("blobs").delete(id);
+          t.objectStore("blobs").delete(`proxy_${id}`);
           t.oncomplete = () => resolve(undefined);
           t.onerror = () => reject(t.error);
           t.onabort = () => reject(t.error ?? new Error("Local storage transaction aborted"));

@@ -8,6 +8,7 @@ files:
   - main.cjs
   - preload.cjs
   - native-export.cjs
+  - legacy-storage.cjs
   - media-tool-paths.cjs
   - package.json
 # The web bundle is a REAL folder next to app.asar (not inside it): main.cjs

@@ -11,6 +11,7 @@ const path = require("path");
 const fs = require("fs");
 const http = require("http");
 const nativeExport = require("./native-export.cjs");
+const { findLegacyOrigins } = require("./legacy-storage.cjs");
 const { mediaToolPaths } = require("./media-tool-paths.cjs");
 const mediaTools = mediaToolPaths({
   platform: process.platform,
@@ -54,7 +55,10 @@ const MIME = {
   ".bin": "application/octet-stream",
 };
 
-/** Tiny static file server for the shell bundle. 127.0.0.1 only, random port. */
+// IndexedDB is scoped to the full origin, including port. This port is part of
+// the on-device data contract: never choose a random fallback if it is busy.
+const LOCAL_PORT = 38491;
+/** Tiny static file server for the shell bundle on a stable loopback origin. */
 function startServer() {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -102,8 +106,7 @@ function startServer() {
       }
     });
     server.on("error", reject);
-    // port 0 = OS-assigned free port (no collisions, no hard-coded ports)
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(LOCAL_PORT, "127.0.0.1", () => {
       resolve({ server, port: server.address().port });
     });
   });
@@ -176,6 +179,13 @@ function trustedNativeSender(event) {
     return false;
   }
 }
+ipcMain.handle("mayocut:legacy-storage-status", async (event) => {
+  if (!trustedNativeSender(event)) throw new Error("Untrusted storage request");
+  const ports = await findLegacyOrigins(app.getPath("userData"), LOCAL_PORT);
+  // These are possible older origins, not proof they contain MayoCut data.
+  return { possibleOrigins: ports.length };
+});
+
 let nativeBusy = false;
 ipcMain.handle("mayocut:native-status", async (event) => {
   if (!trustedNativeSender(event)) throw new Error("Untrusted native export request");
@@ -237,7 +247,17 @@ if (process.env.MAYOBUILD_CDP) {
   app.commandLine.appendSwitch("remote-debugging-port", process.env.MAYOBUILD_CDP);
 }
 
-app.whenReady().then(async () => {
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) app.quit();
+app.on("second-instance", () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
+if (hasInstanceLock) app.whenReady().then(async () => {
   try {
     const started = await startServer();
     localServer = started.server;
@@ -249,6 +269,10 @@ app.whenReady().then(async () => {
     await fs.promises.access(indexPath, fs.constants.R_OK);
   } catch (e) {
     console.error("Could not start local server:", e);
+    dialog.showErrorBox(
+      "Mayobuild Studio could not start",
+      `The app could not open its local storage address (port ${LOCAL_PORT}). Close any conflicting application and try again. Your saved data has not been deleted.`,
+    );
     app.quit();
     return;
   }

@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("mayocut", {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
   },
+  legacyStorageStatus: () => ipcRenderer.invoke("mayocut:legacy-storage-status"),
   nativeStatus: () => ipcRenderer.invoke("mayocut:native-status"),
   nativeCheckProject: (project) => ipcRenderer.invoke("mayocut:native-check", project),
   nativeExport: (payload) => ipcRenderer.invoke("mayocut:native-export", payload),

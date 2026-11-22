@@ -80,7 +80,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $env:MAYOCUT_TEST_FFPROBE -version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node --test tests/native-export.test.cjs tests/media-tool-paths.test.cjs
+          node --test tests/native-export.test.cjs tests/media-tool-paths.test.cjs tests/native-proxy.test.cjs tests/legacy-storage.test.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Launch + CDP render check
         shell: pwsh
@@ -93,6 +93,20 @@ jobs:
           Write-Host "launching $($exe.FullName)"
           Start-Process -FilePath $exe.FullName -WorkingDirectory $exe.DirectoryName
           node "$PWD\..\scripts\verify-electron.mjs"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify projects and media survive a desktop restart
+        shell: pwsh
+        working-directory: desktop
+        env:
+          MAYOBUILD_CDP: "9222"
+        run: |
+          node "$PWD\..\scripts\verify-desktop-persistence.mjs" write
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $running = @(Get-Process mayobuild* -ErrorAction SilentlyContinue)
+          if ($running.Count -gt 0) { $running | Stop-Process -Force -PassThru | Wait-Process -Timeout 30 }
+          $exe = Get-ChildItem "$PWD\release\win-unpacked" -Filter "*.exe" | Select-Object -First 1
+          Start-Process -FilePath $exe.FullName -WorkingDirectory $exe.DirectoryName
+          node "$PWD\..\scripts\verify-desktop-persistence.mjs" read
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Kill electron
         shell: pwsh

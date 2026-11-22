@@ -66,6 +66,9 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
   const fileRef = useRef<HTMLInputElement>(null);
   const packFileRef = useRef<HTMLInputElement>(null);
   const [loaded, setLoaded] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const [possibleLegacyOrigins, setPossibleLegacyOrigins] = useState(0);
+  const [legacyScanError, setLegacyScanError] = useState(false);
   const dev = device(); // device capability profile (memoized)
   const [installing, setInstalling] = useState<string | null>(null);
   const [enhanceFor, setEnhanceFor] = useState<UserTemplate | null>(null);
@@ -112,7 +115,34 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
   }
 
   useEffect(() => {
-    void refresh();
+    let active = true;
+    const bridge = (
+      window as unknown as {
+        mayocut?: { legacyStorageStatus?: () => Promise<{ possibleOrigins: number }> };
+      }
+    ).mayocut;
+    if (bridge?.legacyStorageStatus) {
+      void bridge
+        .legacyStorageStatus()
+        .then((result) => {
+          if (active) setPossibleLegacyOrigins(result.possibleOrigins);
+        })
+        .catch(() => {
+          if (active) setLegacyScanError(true);
+        });
+    }
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    void refresh().catch((error) => {
+      console.error("Could not load MayoCut storage", error);
+      setStorageError(
+        "Could not open projects and media on this device. Check storage permissions and restart the app; do not clear app data.",
+      );
+    });
     void (async () => {
       try {
         // Ask up front, silently. Browsers may grant this automatically for a
@@ -161,9 +191,14 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
   async function createProject(aspect: AspectId, name: string) {
     const p = newProject(name, aspect);
     p.updatedAt = Date.now();
-    await db.saveProject(p);
-    setNewOpen(false);
-    nav.onOpenProject(p.id);
+    try {
+      await db.saveProject(p);
+      setNewOpen(false);
+      nav.onOpenProject(p.id);
+    } catch (error) {
+      console.error("Could not create project", error);
+      toast.error("Could not save the new project — check device storage and try again");
+    }
   }
 
   // ------------------------------------------------------------- packs
@@ -303,6 +338,13 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
     setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
 
+  if (storageError) {
+    return (
+      <div role="alert" className="p-6 text-sm text-amber-200">
+        {storageError}
+      </div>
+    );
+  }
   if (!loaded) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center text-muted-foreground">
@@ -313,6 +355,22 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
 
   return (
     <div className={`${desktop ? "" : "min-h-screen"} bg-background text-foreground`}>
+      {possibleLegacyOrigins > 0 && (
+        <div
+          role="status"
+          className="border-b border-amber-500/40 bg-amber-950/50 px-4 py-3 text-xs text-amber-100"
+        >
+          This desktop has {possibleLegacyOrigins} possible older local{" "}
+          {possibleLegacyOrigins === 1 ? "library address" : "library addresses"}. They have not
+          been opened or recovered yet, and may not contain MayoCut projects. Do not clear app data;
+          recovery is still being developed.
+        </div>
+      )}
+      {legacyScanError && (
+        <div role="status" className="px-4 py-2 text-xs text-amber-200">
+          Could not check for older local libraries. Existing data was not changed.
+        </div>
+      )}
       <header className="border-b border-border sticky top-0 z-20 bg-background/80 backdrop-blur">
         <div className="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex items-center gap-2 sm:gap-3">
           <Scissors className="h-6 w-6 text-primary shrink-0" />

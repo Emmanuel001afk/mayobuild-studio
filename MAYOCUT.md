@@ -50,11 +50,17 @@ right, full-width timeline along the bottom.
 - **Reverse** — frame-stepped playback (audio muted, as CapCut does)
 
 **Look**
+- The offline media library can generate white, black, green-screen and blue-screen
+  backgrounds as local PNG media, added as main clips or overlays. The preview
+  includes a project-format selector for portrait, landscape and other ratios.
 - **Filters** — **40 presets** grouped into Clean / Film / Warm-cool / Neon / Mono
   (Kodachrome, Portra 400, Bleach Bypass, Cyanotype, Cyberpunk, Mono High, …)
 - **Adjust** — Brightness, Contrast, Saturation, Hue, **Temperature, Tint, Fade,
   Sharpen, Vignette and Split-tone** (the last five are a real pixel pass, so they
   also work on phones without CSS `filter` support for those effects)
+- **HSL and curve** — six adjustable hue ranges and a three-point RGB master
+  curve plus red, green and blue channel curves, each with a midtone control.
+  This is not yet a multi-point curve or scopes suite; the current pixel pass is limited to a 1280px long side.
 - **LUTs** — 5 analytic built-in looks + `.cube` import
 - **Framing** — cover / contain (letterbox) / blur-fill per clip, with a project
   background colour behind letterboxing
@@ -76,6 +82,10 @@ zoom-in, rise, wipe-in, pop, drop-in, swing, blur-in, tracking-in, flip,
 skew-in, per-letter wave) and **20 one-tap text looks** (TikTok white, Yellow
 bar, Pink sticker, Mint chip, Headline split, News lower third, …).
 
+**Stickers** — a timeline-time display and animated cat emoji, plus existing
+emoji and shape stickers. They are editable overlay layers; appearance depends
+on the device's emoji font.
+
 **Motion** — **28 effects** in four families (Camera / Motion / Impact / Retro):
 zoom pulse, heartbeat, shake, spin, glitch, flash-in, blur-in, VHS, zoom-out,
 pan, tilt up/down, Ken Burns, colour pulse, sway, roll, float, breathe, jitter,
@@ -83,6 +93,9 @@ whip pan ←→, dolly in/out, tilt-shift, earthquake, orbit — plus **keyframe
 x/y/scale/rotation/opacity for every clip**.
 
 **Audio**
+- Ten offline synthesized sound effects can be searched, previewed and added at
+  the playhead; added clips are saved as local WAV media. A music
+  catalogue is not included yet; see `docs/mayocut-creative-roadmap.md`.
 - Layered music/SFX/voiceover with volume, fade in/out, per-clip mute
 - **Reverb, echo and pitch** FX; named voice presets
 - **Voice shaping** — bass / mid / treble EQ per clip + a one-tap "voice enhance"
@@ -264,27 +277,20 @@ not a laptop. Rather than guess, the export dialog measures:
 The point is that "fast enough" is a claim about a specific device, so the app
 makes the measurement instead of the README making the claim.
 
-### Proxy media (Stage 3)
+### Proxy media (temporarily disabled)
 
-A 4K phone clip costs a full decode per seek. Proxies fix the scrubbing without
-touching the output:
+The earlier browser proxy builder cannot guarantee audio preservation or timing:
+its canvas recorder captures seeked frames while audio capture is optional. To
+avoid silent or out-of-sync preview, automatic generation is disabled and both
+preview and export use the original. Existing proxies are retained but inactive;
+the media library allows them to be removed without touching the originals.
+Deleting a media item also deletes its stored proxy.
 
-- `proxy.ts` (pure policy) decides *whether* a proxy is worth building: source
-  taller than 720p, or — when the height is unknown — a file over 80 MB.
-  `proxySize()` computes an even-dimension 720p-class size for the same aspect.
-- `proxy-build.ts` builds it using only the platform: a detached `<video>`
-  decodes, a canvas downscales, `MediaRecorder` re-encodes to VP9/VP8 WebM.
-  No library, no bundled codec. Any failure returns `null` and the original is
-  used unchanged.
-- Proxies are stored beside the original (`proxy_<mediaId>` in the existing
-  `blobs` store — no schema migration) and built **after** import finishes, so
-  they never delay the moment footage appears.
-- **The one rule:** `sourceFor("export", …)` always returns the original.
-  `exportMP4Stepped`, `exportMP4` and `exportMedia` each call
-  `useOriginalSources()` before capturing and `usePreviewSources()` in their
-  `finally`, so a low-resolution proxy cannot reach a delivered file. A proxy
-  that fails to decode on preview falls back to the original rather than
-  declaring the media unplayable.
+An isolated desktop FFmpeg prototype exists in `desktop/native-proxy.cjs`; it
+is not connected to the editor. Synthetic integration tests check cuts, delayed
+audio, silent video and basic metadata. A replacement must prove audio, frame
+timing and synchronization on real media and devices before proxies are enabled again. Large files may therefore scrub
+more slowly in the meantime.
 
 ### Platform split
 
@@ -304,8 +310,7 @@ current stack, which uses only the platform's own decoders).
   uses it, but no hardware run has been recorded — so no "fast enough" claim is
   made anywhere in this document.
 - Frame-stepping for WebM. Only the MP4 path is frame-accurate.
-- Proxy generation is best-effort and single-file; it does not yet run in a
-  worker, so a large import queue can still warm the device.
+- Proxy generation is disabled until audio and timing can be preserved reliably.
 - Real-video integration fixtures: the audit runs against synthetic Project
   fixtures, not actual sample files.
 - No native shell exists yet.
@@ -387,3 +392,16 @@ release; the `/downloads` page links follow that version.
    WebView). ffmpeg.wasm fallback for older browsers is the remaining piece.
 7. ✅ Speed curves — drawable multi-point curve with closed-form timing
 8. 🔜 Motion tracking / auto-reframe — needs an on-device model; large
+
+### Desktop storage origin and older data
+
+Desktop now uses a fixed loopback origin (`http://127.0.0.1:38491`) instead
+of a random port, so new IndexedDB data can be found after restarting. If the
+port is occupied, the app reports the problem rather than silently opening an
+empty library at a different origin. Earlier versions may have stored projects
+under many different random-port origins; this change does **not** migrate or
+recover those databases. A read-only desktop scan can flag possible older
+loopback storage folders, but does not prove they contain MayoCut data or recover
+them. Avoid clearing app data: a safe recovery mechanism still needs to be
+designed and tested. Android uses its own WebView origin;
+its restart and operating-system storage behavior still require device tests.

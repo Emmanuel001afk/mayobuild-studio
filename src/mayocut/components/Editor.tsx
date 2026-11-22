@@ -27,14 +27,16 @@ import { downloadJson, startMicRecording, templateToPackFile } from "../assist";
 import { analyzeMono, denoiseAudio, encodeWavChannels, encodeWavMono } from "../denoise";
 import { analyzeAudioBlob, detectBeats } from "../assist";
 import { tts } from "../tts";
+import { BACKGROUNDS, createBackground, type BackgroundId } from "../visual-library";
+import { SOUND_LIBRARY, synthesizeSound, type SoundId } from "../sound-library";
 import { can, device } from "../device";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { importLut, loadAllLuts } from "../luts";
 import { db, requestPersistentStorage } from "../idb";
-import { buildProxy, canBuildProxy } from "../proxy-build";
 import { Engine, FILTER_PRESETS, exportBlocker, mp4Supported, pickMime } from "../engine";
 import {
   ASPECTS,
+  ASPECT_ORDER,
   DEFAULT_ADJUST,
   EFFECTS,
   TEXT_PRESETS,
@@ -58,7 +60,15 @@ import { findSharedSourceConflicts, makeRenderPlan } from "../timeline";
 import { Timeline } from "./Timeline";
 import { Inspector } from "./Inspector";
 import { Assist } from "./Assist";
-import { EffectPreview, FilterPreview, Library, TransitionPreview } from "./Library";
+import {
+  BackgroundShelf,
+  EffectPreview,
+  FeaturedStickers,
+  FilterPreview,
+  Library,
+  SoundEffectsShelf,
+  TransitionPreview,
+} from "./Library";
 
 const MEDIA_ACCEPT =
   "video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.3gp,.3g2,.flv,.ts,.mts,.m2ts,.mpg,.mpeg,.wmv,.vob,.ogv,image/*,.bmp,.heic,.heif,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac";
@@ -119,44 +129,6 @@ const EMPTY_PROJECT: Project = {
  *  (or off-screen), leaving only the editing area visible. Short viewports
  *  always get the mobile layout, with a compact timeline/tab bar in landscape.
  */
-/**
- * Build preview proxies for freshly imported footage, one at a time, off the
- * interactive path.
- *
- * Photograph-quality phone footage (4K, high bitrate) is the main cause of a
- * laggy scrub, so it is worth a background re-encode — but never at the cost of
- * the import itself. Each proxy is stored beside its original and only ever
- * used for preview; exports re-point at the original first.
- */
-function queueProxyBuilds(
-  items: {
-    id: string;
-    kind: string;
-    width?: number;
-    height?: number;
-    duration?: number;
-    size?: number;
-  }[],
-  onBuilt?: (mediaId: string, proxy: Blob) => void,
-) {
-  if (!canBuildProxy() || !items.length) return;
-  void (async () => {
-    for (const item of items) {
-      try {
-        if (await db.getProxy(item.id)) continue; // already built
-        const blob = await db.getBlob(item.id);
-        if (!blob) continue;
-        const built = await buildProxy(blob, item);
-        if (!built) continue;
-        await db.putProxy(item.id, built.blob);
-        onBuilt?.(item.id, built.blob);
-      } catch {
-        /* a proxy is an optimisation; never surface its failure */
-      }
-    }
-  })();
-}
-
 function useIsMobile() {
   const [m, setM] = useState(() =>
     typeof window !== "undefined"
@@ -335,6 +307,37 @@ export function Editor({
     };
   }, [showExport, project]);
 
+  // Legacy proxies are retained for explicit removal, but never used for
+  // playback until generation preserves both timing and sound reliably.
+  const [storedProxies, setStoredProxies] = useState<Record<string, boolean>>({});
+  const videoIds = JSON.stringify(
+    media.filter((item) => item.kind === "video").map((item) => item.id),
+  );
+  useEffect(() => {
+    let alive = true;
+    const ids = JSON.parse(videoIds) as string[];
+    void Promise.all(ids.map(async (id) => [id, !!(await db.getProxy(id))] as const))
+      .then((entries) => {
+        if (alive) setStoredProxies(Object.fromEntries(entries));
+      })
+      .catch(() => {
+        if (alive) toast.error("Could not check stored proxies");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [videoIds]);
+
+  async function removeStoredProxy(item: MediaItem) {
+    try {
+      await db.deleteProxy(item.id);
+      setStoredProxies((previous) => ({ ...previous, [item.id]: false }));
+      toast.success("Stored proxy removed; original media is unchanged");
+    } catch {
+      toast.error("Could not remove the stored proxy");
+    }
+  }
+
   // ------------------------------------------------------------- engine
 
   useEffect(() => {
@@ -367,9 +370,6 @@ export function Editor({
         if (!alive) return;
         if (!blob) continue;
         eng.attachUrl(id, URL.createObjectURL(blob));
-        const proxy = await db.getProxy(id);
-        if (!alive) return;
-        if (proxy) eng.attachProxy(id, URL.createObjectURL(proxy));
       }
       if (!alive) return;
       setEngineReady(true);
@@ -426,6 +426,55 @@ export function Editor({
       }
     }, 1200);
   }, []);
+
+  // Mobile OSes can suspend the WebView without unmounting React. Start a
+  // save as soon as the page is hidden, rather than waiting for the debounce.
+  useEffect(() => {
+    const flush = () => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = null;
+      const snapshot = JSON.parse(JSON.stringify(eng.project)) as Project;
+      snapshot.updatedAt = Date.now();
+      void db.saveProject(snapshot).catch((error) => {
+        console.error("MayoCut background save failed", error);
+        toast.error("Could not save project — check device storage");
+      });
+    };
+    const hidden = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    document.addEventListener("visibilitychange", hidden);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", hidden);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, []);
+
+  const [closingProject, setClosingProject] = useState(false);
+  const closingProjectRef = useRef(false);
+  async function saveAndClose() {
+    const eng = engineRef.current;
+    if (!eng || closingProjectRef.current) return;
+    closingProjectRef.current = true;
+    setClosingProject(true);
+    try {
+      if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = null;
+      const snapshot = JSON.parse(JSON.stringify(eng.project)) as Project;
+      snapshot.updatedAt = Date.now();
+      await db.saveProject(snapshot);
+      if (onExit) onExit();
+      else window.location.assign("/mayocut");
+    } catch (error) {
+      console.error("Could not save project before closing", error);
+      toast.error("Project not saved. Check device storage and try again before leaving.");
+      closingProjectRef.current = false;
+      setClosingProject(false);
+    }
+  }
 
   // keyboard shortcuts
   useEffect(() => {
@@ -968,6 +1017,96 @@ export function Editor({
     }
   }
 
+  // Save built-in sounds like imported media, so reopening works offline.
+  const soundAddingRef = useRef(false);
+  async function addBuiltInSound(id: SoundId) {
+    const eng = engineRef.current;
+    const sound = SOUND_LIBRARY.find((entry) => entry.id === id);
+    if (!eng || !sound || soundAddingRef.current) return;
+    soundAddingRef.current = true;
+    try {
+      const samples = synthesizeSound(id);
+      const wav = encodeWavMono(samples, 44100);
+      const mediaId = uid("med");
+      const item: MediaItem = {
+        id: mediaId,
+        name: `${sound.name}.wav`,
+        kind: "audio",
+        size: wav.size,
+        createdAt: Date.now(),
+        duration: samples.length / 44100,
+        ...analyzeMono(samples),
+      };
+      await db.putMedia(item, wav);
+      if (engineRef.current !== eng) return;
+      const all = await db.listMedia();
+      if (engineRef.current !== eng) return;
+      setMedia(all);
+      eng.setMedia(all);
+      eng.attachUrl(mediaId, URL.createObjectURL(wav));
+      const clip = mutateRet((e) => {
+        const added = e.addAudioClip("t_audio", item, Math.max(0, e.t));
+        // Short effects must not lose their attack to the music default fade.
+        added.fadeIn = 0;
+        added.fadeOut = 0;
+        return added;
+      });
+      if (clip) setSelection({ lane: "overlay", trackId: "t_audio", id: clip.id });
+      toast.success(`${sound.name} added to the audio track`);
+    } catch (error) {
+      toast.error(
+        `Could not save sound: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      soundAddingRef.current = false;
+    }
+  }
+
+  const backgroundAddingRef = useRef(false);
+  async function addBuiltInBackground(id: BackgroundId, placement: "main" | "overlay") {
+    const eng = engineRef.current;
+    const background = BACKGROUNDS.find((entry) => entry.id === id);
+    if (!eng || !background || backgroundAddingRef.current) return;
+    backgroundAddingRef.current = true;
+    try {
+      const { blob, thumb } = await createBackground(id);
+      const item: MediaItem = {
+        id: uid("med"),
+        name: `${background.name}.png`,
+        kind: "image",
+        size: blob.size,
+        createdAt: Date.now(),
+        width: 256,
+        height: 256,
+        duration: 3,
+        thumb,
+      };
+      await db.putMedia(item, blob);
+      if (engineRef.current !== eng) return;
+      const all = await db.listMedia();
+      if (engineRef.current !== eng) return;
+      setMedia(all);
+      eng.setMedia(all);
+      eng.attachUrl(item.id, URL.createObjectURL(blob));
+      if (placement === "overlay") {
+        const clip = mutateRet((e) => e.addImageOverlay("t_overlay", item, Math.max(0, e.t)));
+        if (clip) setSelection({ lane: "overlay", trackId: "t_overlay", id: clip.id });
+      } else {
+        const clip = mutateRet((e) => e.addMainClip(item));
+        if (clip) setSelection({ lane: "main", id: clip.id });
+      }
+      toast.success(
+        `${background.name} added to ${placement === "main" ? "main track" : "overlays"}`,
+      );
+    } catch (error) {
+      toast.error(
+        `Could not save background: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      backgroundAddingRef.current = false;
+    }
+  }
+
   // ------------------------------------------------------------- Extract audio (CapCut-style)
   // Pulls a video clip's sound out into an independent clip on the Audio
   // track, then mutes the video clip — same workflow as CapCut's
@@ -1076,13 +1215,6 @@ export function Editor({
         const blob = await db.getBlob(item.id);
         if (blob) engineRef.current?.attachUrl(item.id, URL.createObjectURL(blob));
       }
-      // Proxy building waits until the import has visibly finished, so a 4K
-      // clip never delays the moment the user sees their footage. It is
-      // best-effort: a phone with no spare CPU simply keeps the original.
-      queueProxyBuilds(
-        items.filter((item) => item.kind === "video" && !item.unplayable),
-        (mediaId, proxy) => engineRef.current?.attachProxy(mediaId, URL.createObjectURL(proxy)),
-      );
       const badVideos = items.filter((item) => item.kind === "video" && item.unplayable);
       const badImages = items.filter((item) => item.kind === "image" && item.unplayable);
       toast.success(`Added ${items.length} media item${items.length === 1 ? "" : "s"}`);
@@ -1910,7 +2042,8 @@ export function Editor({
     <div className="h-12 border-b border-border flex items-center gap-2 px-3 shrink-0">
       <button
         className="mb-btn-ghost h-8 px-2"
-        onClick={onExit ?? (() => window.location.assign("/mayocut"))}
+        onClick={() => void saveAndClose()}
+        disabled={closingProject}
         title="Save & close"
       >
         <ArrowLeft className="h-4 w-4" />
@@ -1968,7 +2101,8 @@ export function Editor({
     >
       <button
         className="mb-btn-ghost h-8 w-8 p-0"
-        onClick={onExit ?? (() => window.location.assign("/mayocut"))}
+        onClick={() => void saveAndClose()}
+        disabled={closingProject}
         title="Save & close"
       >
         <ArrowLeft className="h-4 w-4" />
@@ -2030,6 +2164,18 @@ export function Editor({
         </div>
         <div className="px-1 py-0.5 text-[10px] truncate">{m.name}</div>
       </button>
+      {m.kind === "video" && storedProxies[m.id] && (
+        <div className="px-1 pb-1 text-[10px] text-amber-200">
+          Stored proxy inactive ·{" "}
+          <button
+            className="underline"
+            onClick={() => void removeStoredProxy(m)}
+            aria-label={`Remove stored proxy for ${m.name}`}
+          >
+            Remove
+          </button>
+        </div>
+      )}
       {m.unplayable && (
         <div
           className="absolute top-1 left-1 text-[9px] leading-tight text-amber-300 bg-black/75 border border-amber-400/30 rounded px-1 max-w-[70%] truncate"
@@ -2134,6 +2280,10 @@ export function Editor({
                   e.target.value = "";
                 }}
               />
+              <p className="text-[10px] text-muted-foreground" role="status">
+                Preview proxies are temporarily disabled to protect audio and timing. Original media
+                is used.
+              </p>
               <div className="text-[9px] leading-snug text-muted-foreground">
                 Best compatibility: MP4 with H.264 video and AAC audio. Some HEVC/H.265 clips need
                 conversion.
@@ -2156,6 +2306,11 @@ export function Editor({
             <div
               className={`flex-1 min-h-0 overflow-y-auto p-2 grid gap-2 content-start ${isMobile ? "grid-cols-3" : "grid-cols-2"}`}
             >
+              <div className="col-span-full">
+                <BackgroundShelf
+                  onAdd={(id, placement) => void addBuiltInBackground(id, placement)}
+                />
+              </div>
               {media.filter((item) => item.kind !== "audio").map(mediaCard)}
               {media.every((item) => item.kind === "audio") && (
                 <div className="col-span-2 text-[10px] text-muted-foreground text-center py-6">
@@ -2207,13 +2362,16 @@ export function Editor({
                 and audio effects.
               </p>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-2 grid grid-cols-2 gap-2 content-start">
-              {media.filter((item) => item.kind === "audio").map(mediaCard)}
-              {!media.some((item) => item.kind === "audio") && (
-                <div className="col-span-2 text-[10px] text-muted-foreground text-center py-6">
-                  No audio imported yet
-                </div>
-              )}
+            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
+              <SoundEffectsShelf onAddSound={(id) => void addBuiltInSound(id)} />
+              <div className="grid grid-cols-2 gap-2 content-start">
+                {media.filter((item) => item.kind === "audio").map(mediaCard)}
+                {!media.some((item) => item.kind === "audio") && (
+                  <div className="col-span-2 text-[10px] text-muted-foreground text-center py-6">
+                    No audio imported yet
+                  </div>
+                )}
+              </div>
             </div>
           </>
         )}
@@ -2261,6 +2419,9 @@ export function Editor({
         {workspaceTab === "stickers" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2">
             <p className="text-[10px] text-muted-foreground mb-2">Sticker library</p>
+            <div className="mb-2">
+              <FeaturedStickers onAdd={(label, patch) => addEmoji(label, patch)} />
+            </div>
             <div className="flex gap-1 flex-wrap mb-2" role="group" aria-label="Sticker categories">
               {stickerGroups.map((group) => (
                 <button
@@ -2464,6 +2625,22 @@ export function Editor({
       >
         {stageMax ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
       </button>
+      <label className="absolute top-2 left-2 z-10 flex items-center gap-1 rounded bg-black/75 px-1.5 py-1 text-[10px] text-white">
+        Format
+        <select
+          aria-label="Project format"
+          className="bg-slate-900 text-white rounded border border-white/30 px-1 py-0.5"
+          value={project.aspect}
+          onChange={(event) => setAspect(event.target.value as AspectId)}
+          title="Change project canvas format; clips stay editable"
+        >
+          {ASPECT_ORDER.map((aspect) => (
+            <option key={aspect} value={aspect}>
+              {aspect}
+            </option>
+          ))}
+        </select>
+      </label>
       <div
         ref={canvasWrapRef}
         className="relative max-h-full max-w-full"
@@ -2912,6 +3089,10 @@ export function Editor({
       onImport={() => fileRef.current?.click()}
       onAddMedia={addMediaToTimeline}
       onDeleteMedia={(m) => void deleteMediaItem(m)}
+      storedProxies={storedProxies}
+      onRemoveProxy={(m) => void removeStoredProxy(m)}
+      onAddSound={(id) => void addBuiltInSound(id)}
+      onAddBackground={(id, placement) => void addBuiltInBackground(id, placement)}
       onAddText={addText}
       onAddSticker={(label, patch) =>
         addEmoji(label, { size: 150, pos: "mc", bg: "", anim: "bounce", ...patch })
@@ -3027,6 +3208,14 @@ export function Editor({
     // h-screen is the safe base (100dvh is ignored on older WebViews); modern
     // browsers upgrade to dynamic viewport height so the tab bar stays visible.
     <div className="h-screen supports-[height:100dvh]:h-dvh flex flex-col bg-background text-foreground overflow-hidden">
+      {closingProject && (
+        <div
+          role="status"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 text-white"
+        >
+          Saving project…
+        </div>
+      )}
       {isMobile ? topbarMobile : topbarDesktop}
       {isMobile ? (
         <>

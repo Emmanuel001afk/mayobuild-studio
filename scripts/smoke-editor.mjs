@@ -58,7 +58,7 @@ const noop = () => undefined;
 const fakeCtx = {
   canvas: null, save: noop, restore: noop, fillRect: noop, clearRect: noop,
   drawImage: noop, translate: noop, rotate: noop, scale: noop, beginPath: noop,
-  rect: noop, clip: noop, arc: noop, fill: noop, stroke: noop, moveTo: noop,
+  rect: noop, clip: noop, arc: noop, arcTo: noop, fill: noop, stroke: noop, moveTo: noop,
   lineTo: noop, closePath: noop, fillText: noop, strokeText: noop,
   measureText: () => ({ width: 40 }), getImageData: (_x, _y, w, h) => ({ data: new Uint8ClampedArray(Math.max(4, w * h * 4)) }),
   putImageData: noop, createPattern: () => null, createLinearGradient: () => ({ addColorStop: noop }),
@@ -70,7 +70,7 @@ const fakeCtx = {
 };
 window.HTMLCanvasElement.prototype.getContext = () => fakeCtx;
 window.HTMLCanvasElement.prototype.toDataURL = () => "data:image/png;base64,";
-window.HTMLCanvasElement.prototype.toBlob = (cb) => cb(new window.Blob(["x"], { type: "image/png" }));
+window.HTMLCanvasElement.prototype.toBlob = (cb) => cb(new globalThis.Blob(["x"], { type: "image/png" }));
 
 // --- seed a project that uses every clip type ---------------------------------
 const STORES = ["media", "blobs", "projects", "templates", "exports", "luts", "fonts"];
@@ -295,6 +295,73 @@ for (const tb of LIBRARY_TABS) {
   checks.push([`library tab adds no console error: ${tb.label}`, errors.length === 0]);
 }
 
+// Adding an offline effect must persist both the media and a timeline reference.
+{
+  const audioTab = [...document.querySelectorAll("button")].find((b) => b.title === "Audio");
+  audioTab?.click();
+  await wait(200);
+  const add = document.querySelector('button[aria-label="Add Air whoosh to timeline"]');
+  add?.click();
+  await wait(1600);
+  const saved = await new Promise((resolve, reject) => {
+    const req = db.transaction("projects", "readonly").objectStore("projects").get("prj_smoke");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const effect = saved?.tracks.flatMap((track) => track.clips).find((clip) => clip.kind === "audio" && clip.fadeIn === 0 && clip.fadeOut === 0);
+  const blob = effect && await new Promise((resolve, reject) => {
+    const req = db.transaction("blobs", "readonly").objectStore("blobs").get(effect.mediaId);
+    req.onsuccess = () => resolve(req.result?.blob);
+    req.onerror = () => reject(req.error);
+  });
+  checks.push(["built-in sound adds a persisted audio clip", !!add && !!effect && blob?.size > 1000]);
+}
+
+// Exercise the shared project format selector and locally generated image.
+{
+  const format = document.querySelector('select[aria-label="Project format"]');
+  if (format) { format.value = "16:9"; format.dispatchEvent(new window.Event("change", { bubbles: true })); }
+  const mediaTab = [...document.querySelectorAll("button")].find((b) => b.title === "Media");
+  mediaTab?.click();
+  await wait(200);
+  const add = document.querySelector('button[aria-label="Add White background as overlay"]');
+  add?.click();
+  await wait(1600);
+  const saved = await new Promise((resolve, reject) => {
+    const req = db.transaction("projects", "readonly").objectStore("projects").get("prj_smoke");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const image = saved?.tracks.flatMap((track) => track.clips).find((clip) => clip.kind === "image" && clip.mediaId !== "med_i1");
+  const blob = image && await new Promise((resolve, reject) => {
+    const req = db.transaction("blobs", "readonly").objectStore("blobs").get(image.mediaId);
+    req.onsuccess = () => resolve(req.result?.blob);
+    req.onerror = () => reject(req.error);
+  });
+  checks.push(["format selection persists", !!format && saved?.aspect === "16:9"]);
+  checks.push(["built-in background adds persisted overlay", !!add && !!image && blob?.type === "image/png"]);
+}
+
+// Both sticker presets add editable text layers and persist their settings.
+{
+  const tab = [...document.querySelectorAll("button")].find((b) => b.title === "Stickers");
+  tab?.click();
+  await wait(150);
+  const timer = document.querySelector('button[aria-label="Add Video time sticker"]');
+  const cat = document.querySelector('button[aria-label="Add Waving cat sticker"]');
+  timer?.click();
+  await wait(100);
+  cat?.click();
+  await wait(1600);
+  const saved = await new Promise((resolve, reject) => {
+    const req = db.transaction("projects", "readonly").objectStore("projects").get("prj_smoke");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const clips = saved?.tracks.flatMap((track) => track.clips) ?? [];
+  checks.push(["time and cat stickers persist", !!timer && !!cat && clips.some((c) => c.sticker === "timecode") && clips.some((c) => c.text === "🐱" && c.anim === "wave")]);
+}
+
 // --- the catalogue sizes must actually be visible in the UI -----------------
 {
   const filtersBtn = [...document.querySelectorAll("button")].find(
@@ -333,15 +400,34 @@ for (const tb of LIBRARY_TABS) {
   mainClip?.dispatchEvent(new window.PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", clientX: 10 }));
   window.dispatchEvent(new window.PointerEvent("pointerup", { bubbles: true, pointerType: "mouse", clientX: 10 }));
   await wait(100);
+  checks.push(["HSL and master curve controls are available", !!document.querySelector('input[aria-label="Hue shift"]') && !!document.querySelector('svg[aria-label="RGB master curve preview"]')]);
   const filter = [...document.querySelectorAll("button")].find((el) => el.title === "Noir");
   filter?.click();
-  await wait(1600);
+  await wait(40);
+  window.dispatchEvent(new window.Event("pagehide"));
+  await wait(350);
   const saved = await new Promise((resolve, reject) => {
     const req = db.transaction("projects", "readonly").objectStore("projects").get("prj_smoke");
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
-  checks.push(["selected filter persists in project storage", !!mainClip && !!filter && saved?.main[0]?.filter === "noir"]);
+  checks.push(["page hide flushes the selected filter to project storage", !!mainClip && !!filter && saved?.main[0]?.filter === "noir"]);
+}
+
+// Explicit close should save a just-changed format before navigating away.
+{
+  const format = document.querySelector('select[aria-label="Project format"]');
+  if (format) { format.value = "4:3"; format.dispatchEvent(new window.Event("change", { bubbles: true })); }
+  await wait(40);
+  const close = document.querySelector('button[title="Save & close"]');
+  close?.click();
+  await wait(400);
+  const saved = await new Promise((resolve, reject) => {
+    const req = db.transaction("projects", "readonly").objectStore("projects").get("prj_smoke");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  checks.push(["save and close persists immediate changes", !!close && saved?.aspect === "4:3"]);
 }
 
 failed = 0;

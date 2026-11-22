@@ -1,21 +1,9 @@
 // MayoCut — proxy media.
 //
-// A 4K phone clip decodes slowly. Scrubbing costs a full decode per seek, and a
-// frame-stepped export pays that cost on every frame. A proxy is a smaller copy
-// of the same footage used for PREVIEW only, so editing stays responsive while
-// the original is still what gets exported.
-//
-// Rules that keep this honest:
-//
-//  1. The proxy never touches the export path. Exports always read the original
-//     blob, so proxy quality can never leak into a delivered file.
-//  2. The proxy is derived, and marked as such. If it is missing or fails to
-//     build, preview falls back to the original and nothing else changes.
-//  3. Proxy work happens off the interactive path (idle/queued), never blocking
-//     an import.
-//
-// The pure policy lives here; the actual re-encode is done by the host (where a
-// video encoder exists) so this file stays testable in node.
+// A proxy is a smaller preview copy intended to improve scrubbing. The
+// existing browser builder does not reliably preserve audio or timing, so
+// both preview and export currently select the original, including when an
+// older proxy exists. The policy helpers remain for a future tested encoder.
 
 /** Why a source does or does not want a proxy. */
 export interface ProxyDecision {
@@ -85,15 +73,18 @@ export function proxyBytes(durationSec: number, bitrateKbps: number): number {
 /**
  * Choose the media URL a given consumer should use.
  *
- * Preview gets the proxy when one exists; export ALWAYS gets the original. This
- * single function is the guarantee that proxy quality cannot reach a delivered
- * file — there is no other place that picks between them.
+ * Both consumers use the original until the proxy encoder can preserve audio
+ * and timing reliably. Old stored proxies must not silently replace the source.
  */
 export function sourceFor(
   consumer: "preview" | "export",
   originalUrl: string,
   proxyUrl?: string,
 ): string {
-  if (consumer === "export") return originalUrl;
-  return proxyUrl || originalUrl;
+  // Existing browser-generated proxies do not reliably preserve audio or
+  // timing. Until those properties are verified, neither preview nor export
+  // may use them, including proxies saved by earlier versions.
+  void consumer;
+  void proxyUrl;
+  return originalUrl;
 }

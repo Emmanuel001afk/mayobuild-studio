@@ -1821,8 +1821,8 @@ await t('EXPORT ALWAYS GETS THE ORIGINAL', () => {
   assert.equal(X.sourceFor('export', 'blob:original', undefined), 'blob:original');
   assert.equal(X.sourceFor('export', 'blob:original', 'blob:proxy'), 'blob:original');
 });
-await t('preview prefers the proxy but survives without one', () => {
-  assert.equal(X.sourceFor('preview', 'blob:original', 'blob:proxy'), 'blob:proxy');
+await t('preview uses the original while legacy proxies are unsafe', () => {
+  assert.equal(X.sourceFor('preview', 'blob:original', 'blob:proxy'), 'blob:original');
   assert.equal(X.sourceFor('preview', 'blob:original', undefined), 'blob:original');
 });
 await t('every export path re-points at originals and restores after', () => {
@@ -1836,11 +1836,11 @@ await t('every export path re-points at originals and restores after', () => {
   const rt = src.slice(src.indexOf('async exportMedia'));
   assert.ok(/this\.useOriginalSources\(\)/.test(rt.slice(0, 1500)), 'real-time export must switch');
 });
-await t('the UI loads a stored proxy and builds one after import', () => {
+await t('the UI allows removal of inactive legacy proxies', () => {
   const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
-  assert.ok(/db\.getProxy\(/.test(ed), 'must reuse an existing proxy on open');
-  assert.ok(/queueProxyBuilds\(/.test(ed), 'must build proxies after import');
-  assert.ok(/db\.putProxy\(/.test(ed), 'must store what it builds');
+  assert.ok(/db\.getProxy\(/.test(ed), 'must detect existing proxies');
+  assert.ok(/db\.deleteProxy\(/.test(ed), 'must allow removal of proxies');
+  assert.ok(!/queueProxyBuilds\(/.test(ed), 'must not generate unsafe proxies');
 });
 await t('proxy generation bundles no new dependency', () => {
   const src = readFileSync('src/mayocut/proxy-build.ts', 'utf8');
