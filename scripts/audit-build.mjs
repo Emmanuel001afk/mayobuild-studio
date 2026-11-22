@@ -26,6 +26,8 @@ const MODULES = [
   "curves",
   "stock",
   "hsl",
+  "sticker-kinds",
+  "stickers",
 ];
 
 for (const name of MODULES) {

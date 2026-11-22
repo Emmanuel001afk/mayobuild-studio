@@ -2,6 +2,7 @@
 import type { AudioFxId } from "./audio-fx";
 import type { CurveSet } from "./curves";
 import type { HslSet } from "./hsl";
+import type { StickerKind } from "./sticker-kinds";
 // Everything lives on the user's device (IndexedDB). No database, no backend.
 
 export type MediaKind = "video" | "image" | "audio";
@@ -731,6 +732,13 @@ export interface OverlayClip {
   font?: string; // FONTS id
   pos?: TextPos;
   anim?: TextAnim;
+  /**
+   * Which flavour of "sticker" this text overlay is, when it came from the
+   * sticker panel. A Unicode emoji and a drawn shape like "★" are both
+   * Extended_Pictographic, so a regex cannot tell them apart — the picker
+   * records the answer instead of guessing later. Absent = plain text.
+   */
+  sticker?: StickerKind;
   words?: TextWord[]; // per-word timing (karaoke)
   // image / video overlay
   scale?: number; // fraction of canvas width (0.05..1.2)
