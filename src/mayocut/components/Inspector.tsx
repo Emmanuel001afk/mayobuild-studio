@@ -1,4 +1,9 @@
 import { useRef, useState } from "react";
+import { CurveEditor } from "./CurveEditor";
+import { CURVE_PRESETS, curvesActive, normalisePoints, type CurvePoint } from "../curves";
+import { searchEmoji } from "../stock";
+
+type Channel = "rgb" | "r" | "g" | "b";
 import { Clock, Copy, Diamond, Scissors, SlidersHorizontal, Spline, Trash2 } from "lucide-react";
 import type {
   AnimValues,
@@ -68,6 +73,12 @@ interface Props {
   onSplitAtBeats?: () => void;
   onMatchColor?: (clipId: string) => void;
   onImportFont?: (f: File) => void;
+  /**
+   * Search stock assets by free text ("snow", "arrow", "light"). Returns
+   * generated-on-device assets, so the answer is the same offline.
+   */
+  onSearchStock?: (query: string) => { id: string; name: string; hint: string; kind: string }[];
+  onAddStock?: (assetId: string) => void;
   projectFonts?: { id: string; family: string; name: string }[];
   onTrackFlag?: (
     trackId: string,
@@ -95,6 +106,12 @@ function DenoiseRow({
   onSplitAtBeats?: () => void;
   onMatchColor?: (clipId: string) => void;
   onImportFont?: (f: File) => void;
+  /**
+   * Search stock assets by free text ("snow", "arrow", "light"). Returns
+   * generated-on-device assets, so the answer is the same offline.
+   */
+  onSearchStock?: (query: string) => { id: string; name: string; hint: string; kind: string }[];
+  onAddStock?: (assetId: string) => void;
   projectFonts?: { id: string; family: string; name: string }[];
   onTrackFlag?: (
     trackId: string,
@@ -137,6 +154,139 @@ function DenoiseRow({
     >
       🎙️ Denoise (RNNoise, local){!denoiseGate.ok && " — off on this device"}
     </button>
+  );
+}
+
+/**
+ * Sticker search.
+ *
+ * CapCut's sticker panel is a searchable library — you type "snow" and get a
+ * snow overlay. Ours has emoji and shapes already; this adds a row that
+ * searches the generated-on-device stock set (light leaks, bokeh, dust,
+ * countdown) plus the emoji set, so a video sticker is two taps away instead
+ * of a hidden capability.
+ */
+function StickerSearch({
+  onSelectEmoji,
+  onSearchStock,
+  onAddStock,
+}: {
+  onSelectEmoji: (emoji: string) => void;
+  onSearchStock?: (q: string) => { id: string; name: string; hint: string; kind: string }[];
+  onAddStock?: (id: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const results = (onSearchStock?.(q) ?? []).slice(0, 6);
+  const emojiHit = searchEmoji(q).slice(0, 12);
+  if (!q.trim()) {
+    return (
+      <div className="text-[10px] text-muted-foreground leading-snug">
+        Type to search stickers and footage — try “light”, “snow”, “arrow”, “heart”.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      {emojiHit.length > 0 && (
+        <div className="flex flex-wrap gap-0.5">
+          {emojiHit.map((e) => (
+            <button
+              key={e}
+              className="h-7 w-7 rounded hover:bg-slate-700 text-base leading-none"
+              onClick={() => onSelectEmoji(e)}
+              title={`Add ${e}`}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-1">
+        {results.map((r) => (
+          <button
+            key={r.id}
+            className="text-left border border-border rounded px-1.5 py-1 hover:border-white/40"
+            onClick={() => onAddStock?.(r.id)}
+            title={r.hint}
+          >
+            <div className="text-[10px] truncate">{r.name}</div>
+            <div className="text-[8px] text-muted-foreground">
+              {r.kind === "video" ? "video sticker" : "image"}
+            </div>
+          </button>
+        ))}
+      </div>
+      {emojiHit.length === 0 && results.length === 0 && (
+        <div className="text-[10px] text-muted-foreground">
+          Nothing matches “{q}” — the built-in set is small on purpose (it is generated on your
+          device, not downloaded).
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The tone-curve block: channel tabs, presets and the draggable graph. */
+function CurveSection({
+  main,
+  onPatchMain,
+}: {
+  main: MainClip;
+  onPatchMain: (patch: Partial<MainClip>) => void;
+}) {
+  const [channel, setChannel] = useState<Channel>("rgb");
+  const curves = main.curves ?? {};
+  const points = curves[channel] ?? [
+    { x: 0, y: 0 },
+    { x: 1, y: 1 },
+  ];
+  const setPoints = (pts: CurvePoint[]) => {
+    onPatchMain({ curves: { ...curves, [channel]: normalisePoints(pts) } });
+  };
+  const active = curvesActive(curves);
+  return (
+    <div className="mt-2 border-t border-border pt-2 space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium">Curves</span>
+        <div className="flex gap-0.5">
+          {(["rgb", "r", "g", "b"] as Channel[]).map((ch) => (
+            <button
+              key={ch}
+              className={`text-[10px] border rounded w-6 h-5 uppercase ${
+                channel === ch ? "border-cyan-400 bg-cyan-400/10" : "border-border"
+              }`}
+              onClick={() => setChannel(ch)}
+              title={ch === "rgb" ? "Master curve" : `${ch.toUpperCase()} channel`}
+            >
+              {ch}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex justify-center">
+        <CurveEditor points={points} onChange={setPoints} channel={channel} size={168} />
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {CURVE_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            className="text-[9px] border border-border rounded px-1.5 py-0.5 hover:border-white/40"
+            onClick={() => setPoints(preset.points)}
+          >
+            {preset.name}
+          </button>
+        ))}
+        {active && (
+          <button
+            className="text-[9px] border border-border rounded px-1.5 py-0.5 hover:border-white/40 text-muted-foreground"
+            onClick={() => onPatchMain({ curves: undefined })}
+            title="Remove every curve on this clip"
+          >
+            Clear all
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -657,6 +807,7 @@ export function Inspector(p: Props) {
               value={main.adjust.splitTone ?? 0}
               onChange={(v) => p.onPatchMain({ adjust: { ...main.adjust, splitTone: v } })}
             />
+            <CurveSection main={main} onPatchMain={p.onPatchMain} />
             <div className="flex gap-1 mt-1">
               <button
                 className="mb-btn-ghost flex-1 h-6 text-[10px]"
@@ -1232,6 +1383,18 @@ export function Inspector(p: Props) {
                 </label>
               </>
             )}
+          </Section>
+          <Section label="Replace sticker" anchor="media">
+            <StickerSearch
+              onSelectEmoji={(emoji) =>
+                p.onPatchOverlay(
+                  p.selection && p.selection.lane === "overlay" ? p.selection.trackId : "",
+                  { text: emoji, kind: "text", size: 220 },
+                )
+              }
+              onSearchStock={p.onSearchStock}
+              onAddStock={p.onAddStock}
+            />
           </Section>
           <Section label="Sticker filter" anchor="adjust">
             <div className="grid grid-cols-2 gap-1">

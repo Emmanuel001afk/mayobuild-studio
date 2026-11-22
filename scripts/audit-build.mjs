@@ -22,6 +22,9 @@ const MODULES = [
   "export-plan",
   "proxy",
   "proxy-build",
+  "audio-fx",
+  "curves",
+  "stock",
 ];
 
 for (const name of MODULES) {

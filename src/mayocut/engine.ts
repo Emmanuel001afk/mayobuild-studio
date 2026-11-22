@@ -34,10 +34,12 @@ import {
 } from "./types";
 import { resolveComposition } from "./timeline-resolver";
 import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-plan";
+import { audioFxRecipe, buildAudioFx, makeImpulse, type AudioFxId } from "./audio-fx";
+import { applyCurveLuts, buildCurveLuts, curvesActive } from "./curves";
 import { sourceFor } from "./proxy";
 import { applyLut, type LutTable } from "./luts";
 import { sampleTimeline } from "./timeline";
-import { makeImpulse, probeGif } from "./utils";
+import { probeGif } from "./utils";
 import { GifReader, GifWriter } from "omggif";
 
 /** Decode every frame of a GIF into canvases (capped; null if too big). */
@@ -319,6 +321,17 @@ interface FxChain {
   low: BiquadFilterNode;
   mid: BiquadFilterNode;
   high: BiquadFilterNode;
+  /**
+   * The one-tap audio effect (telephone, chipmunk, cave…), rebuilt whenever the
+   * active clip changes effect. Sits between the voice EQ and the output, and
+   * is bypassed by setting its gain to 1 with no filters — never by leaving a
+   * stale half-built chain connected.
+   */
+  fxIn?: GainNode;
+  fxOut?: GainNode;
+  fxNodes: AudioNode[];
+  /** which effect the chain currently holds, so we rebuild only on change */
+  fxId?: string;
 }
 
 interface ElRecord {
@@ -882,7 +895,7 @@ export class Engine {
     const feedback = ctx.createGain();
     feedback.gain.value = 0;
     const conv = ctx.createConvolver();
-    if (!this.impulse) this.impulse = makeImpulse(ctx);
+    if (!this.impulse) this.impulse = makeImpulse(ctx, 1.8);
     conv.buffer = this.impulse;
     const convWet = ctx.createGain();
     convWet.gain.value = 0;
@@ -903,7 +916,14 @@ export class Engine {
     inNode.connect(low);
     low.connect(mid);
     mid.connect(high);
-    high.connect(out); // dry
+    // One-tap effects live in a swappable stage after the voice EQ, so
+    // preview and export share one graph and a clip's effect can change
+    // without tearing down the delay/reverb sends.
+    const fxIn = ctx.createGain();
+    const fxOut = ctx.createGain();
+    high.connect(fxIn);
+    fxIn.connect(fxOut);
+    fxOut.connect(out); // dry
     inNode.connect(delay);
     delay.connect(delayWet);
     delayWet.connect(out);
@@ -924,6 +944,9 @@ export class Engine {
       low,
       mid,
       high,
+      fxIn,
+      fxOut,
+      fxNodes: [],
     };
     if (rec) {
       if (rec.sourceNode) {
@@ -1008,7 +1031,14 @@ export class Engine {
     const t = this.t;
     const active = new Map<
       string,
-      { reverb: number; echo: number; low?: number; mid?: number; high?: number }
+      {
+        reverb: number;
+        echo: number;
+        low?: number;
+        mid?: number;
+        high?: number;
+        fx: AudioFxId;
+      }
     >();
     for (const tr of this.project.tracks)
       for (const c of tr.clips) {
@@ -1017,6 +1047,7 @@ export class Engine {
           active.set(c.mediaId, {
             reverb: clamp01(c.fx?.reverb ?? 0),
             echo: clamp01(c.fx?.echo ?? 0),
+            fx: c.audioFx ?? "none",
           });
         }
       }
@@ -1024,7 +1055,7 @@ export class Engine {
     for (const s2 of mainSpans(this.project)) {
       if (!s2.clip.voice) continue;
       if (t >= s2.start && t < s2.end) {
-        const cur = active.get(s2.clip.mediaId) ?? { reverb: 0, echo: 0 };
+        const cur = active.get(s2.clip.mediaId) ?? { reverb: 0, echo: 0, fx: "none" as AudioFxId };
         active.set(s2.clip.mediaId, {
           ...cur,
           low: s2.clip.voice.low,
@@ -1051,7 +1082,62 @@ export class Engine {
       fx.high.gain.value = (a?.high ?? 0) * 12;
       // pull dry down slightly when wet is hot to avoid clipping
       fx.in.gain.value = 1 - 0.35 * Math.max(reverb, echo);
+      // One-tap effect: swapped only when it changes, and cleared for media
+      // that is not currently under an effected clip.
+      this.setAudioFx(rec, a?.fx ?? "none");
     }
+  }
+
+  /**
+   * Put a one-tap audio effect on a media's chain, or clear it.
+   *
+   * Rebuilds only when the effect actually changes: a rebuild disconnects and
+   * reconnects nodes, which would click if it happened on every frame.
+   */
+  private setAudioFx(rec: ElRecord, id: AudioFxId) {
+    const ctx = this.audioCtx;
+    const fx = rec.fx;
+    if (!ctx || !fx || !fx.fxIn || !fx.fxOut) return;
+    if (fx.fxId === id) return;
+    // tear down the previous effect
+    for (const n of fx.fxNodes) {
+      try {
+        n.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      const maybe = n as AudioNode & { stop?: (when?: number) => void };
+      if (typeof maybe.stop === "function") {
+        try {
+          maybe.stop();
+        } catch {
+          /* an oscillator can only be stopped once */
+        }
+      }
+    }
+    fx.fxNodes = [];
+    try {
+      fx.fxIn.disconnect();
+    } catch {
+      /* nothing connected yet */
+    }
+    if (id === "none") {
+      fx.fxIn.connect(fx.fxOut);
+      fx.fxId = id;
+      return;
+    }
+    const chain = buildAudioFx(ctx, id, {
+      impulse: (sec) => {
+        if (!this.impulse || Math.abs(this.impulse.duration - sec) > 0.05) {
+          this.impulse = makeImpulse(ctx, sec);
+        }
+        return this.impulse;
+      },
+    });
+    fx.fxIn.connect(chain.input);
+    chain.output.connect(fx.fxOut);
+    fx.fxNodes = [chain.input, chain.output, ...chain.nodes];
+    fx.fxId = id;
   }
 
   /** Pitch-shifted playback of a short overlay audio clip via buffer source. */
@@ -1697,6 +1783,40 @@ export class Engine {
     }
   }
 
+  /**
+   * Rotate the whole project between landscape and portrait.
+   *
+   * CapCut's version of this asks which direction to turn and then *flips the
+   * picture*, not just the canvas: every main clip and every positioned overlay
+   * gets mirrored across the diagonal, so a clip that was framed top-left in
+   * landscape is still top-left after the turn. Rotating the canvas alone would
+   * silently re-frame everything the user had placed.
+   */
+  rotateOrientation(dir: "cw" | "ccw" = "cw") {
+    const a = ASPECTS[this.project.aspect];
+    const landscape = a.w > a.h;
+    const target: Project["aspect"] = landscape ? "9:16" : "16:9";
+    const s = dir === "cw" ? 1 : -1;
+    // x' = -s·y, y' = s·x — a quarter turn, mirrored correctly per direction
+    const turn = (o: OverlayClip) => {
+      const x = o.x ?? 0;
+      const y = o.y ?? 0;
+      o.x = -s * y;
+      o.y = s * x;
+      if (o.rot !== undefined) o.rot = (o.rot + 90 * s) % 360;
+    };
+    for (const tr of this.project.tracks) for (const c of tr.clips) if (c.kind !== "text") turn(c);
+    this.project.aspect = target;
+    this.bump();
+    if (this.canvas) {
+      const b = ASPECTS[target];
+      this.canvas.width = b.w;
+      this.canvas.height = b.h;
+      this.draw();
+    }
+    return target;
+  }
+
   /** Base animation values for a clip (used when a param has no keyframes). */
   animBase(clip: MainClip | OverlayClip): AnimValues {
     if ("kind" in clip && (clip.kind === "image" || clip.kind === "video")) {
@@ -2188,7 +2308,7 @@ export class Engine {
     const glitching = eff === "glitch" && this.glitchWindow(localT);
     // Pixel-space grade (temperature / tint / vignette / sharpen / split-tone)
     // and LUTs need readback, so they render through the reduced offscreen pass.
-    const needsGrade = this.gradeActive(c.adjust);
+    const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves);
     if (lut || needsGrade) {
       this.drawMainGrade(ctx, el, W, H, c, lut ?? null);
     } else if (glitching || eff === "vhs") {
@@ -2601,6 +2721,10 @@ export class Engine {
     const img = octx.getImageData(0, 0, W2, H2);
     this.gradePixels(img.data, W2, H2, c.adjust);
     if (lut) applyLut(lut, img.data);
+    // Tone / RGB curves run last, in the same pass — after the LUT so a curve
+    // shapes the *look* rather than being flattened by it.
+    const curveLuts = buildCurveLuts(c.curves);
+    if (curveLuts) applyCurveLuts(img.data, curveLuts);
     octx.putImageData(img, 0, 0);
     ctx.drawImage(off, 0, 0, W, H);
   }
@@ -3295,6 +3419,11 @@ export class Engine {
 
   addImageOverlay(trackId: string, media: MediaItem, start: number): OverlayClip {
     const track = this.project.tracks.find((t) => t.id === trackId) ?? this.project.tracks[1];
+    // A generated sticker (light leak, dust, bokeh) is meant to cover the
+    // frame; a normal overlay image is a picture-in-picture. Sizing both the
+    // same meant a light leak arrived as a small postage stamp you had to
+    // pinch to full screen.
+    const isStickerVideo = media.kind === "video" && (media.duration ?? 0) <= 6;
     const clip: OverlayClip = {
       id: uid("ic"),
       kind: media.kind === "video" ? "video" : "image",
@@ -3302,11 +3431,12 @@ export class Engine {
       start: Math.max(0, start),
       // full source length: silently cutting to 6s truncated real footage
       duration: media.kind === "video" ? Math.max(0.5, media.duration ?? 6) : 3,
-      scale: 0.5,
+      scale: isStickerVideo ? 1 : 0.5,
       x: 0,
-      y: -0.4,
+      y: isStickerVideo ? 0 : -0.4,
       rot: 0,
       chroma: false,
+      ...(isStickerVideo ? { blend: "screen" as const, loop: true } : {}),
     };
     track.clips.push(clip);
     this.bump();
@@ -4611,13 +4741,27 @@ export class Engine {
       length: number,
       rate: number,
       gainAt: (localSec: number) => number,
+      fxId: AudioFxId = "none",
     ) => {
       const src = off.createBufferSource();
       src.buffer = buf;
       src.playbackRate.value = Math.max(0.05, rate);
       const g = off.createGain();
       src.connect(g);
-      g.connect(master);
+      // One-tap audio effects are built from the SAME recipe the preview uses,
+      // on the offline context, so the exported file cannot sound different.
+      const fx =
+        fxId !== "none"
+          ? buildAudioFx(off, fxId, {
+              impulse: (sec) => makeImpulse(off, sec),
+            })
+          : null;
+      if (fx) {
+        g.connect(fx.input);
+        fx.output.connect(master);
+      } else {
+        g.connect(master);
+      }
       // piecewise-constant gain, smoothed with linear ramps
       let last = Math.max(0, Math.min(2, gainAt(0)));
       g.gain.setValueAtTime(last, startAt);
@@ -4642,8 +4786,15 @@ export class Engine {
         const idx = spans.indexOf(s);
         const nextSpan = idx + 1 < spans.length ? spans[idx + 1] : null;
         const clipDur = Math.max(0.01, s.end - s.start);
-        rampedSource(buf, Math.max(from, s.start), s.clip.in, clipDur, s.clip.speed, (dt) =>
-          mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0),
+        const mainFx = s.clip.audioFx ?? "none";
+        rampedSource(
+          buf,
+          Math.max(from, s.start),
+          s.clip.in,
+          clipDur,
+          s.clip.speed * audioFxRecipe(mainFx).rate,
+          (dt) => mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0),
+          mainFx,
         );
       }
     }
@@ -4667,12 +4818,25 @@ export class Engine {
         const vol = Math.max(0, Math.min(1, c.volume ?? 1));
         const fadeIn = Math.max(0, c.fadeIn ?? 0.15);
         const fadeOut = Math.max(0, c.fadeOut ?? 0.15);
-        rampedSource(buf, Math.max(from, start), 0, end - start, 1, (dt) => {
-          let v = vol;
-          if (fadeIn > 0) v *= Math.min(1, dt / fadeIn);
-          if (fadeOut > 0) v *= Math.min(1, (end - start - dt) / fadeOut);
-          return v * trackGain;
-        });
+        // A pitch effect changes the source rate, so the same clip covers a
+        // different amount of source audio. Without this the file would run
+        // out of sound (or overrun) compared with the preview.
+        const fxId = c.audioFx ?? "none";
+        const fxRate = audioFxRecipe(fxId).rate;
+        rampedSource(
+          buf,
+          Math.max(from, start),
+          0,
+          end - start,
+          fxRate,
+          (dt) => {
+            let v = vol;
+            if (fadeIn > 0) v *= Math.min(1, dt / fadeIn);
+            if (fadeOut > 0) v *= Math.min(1, (end - start - dt) / fadeOut);
+            return v * trackGain;
+          },
+          fxId,
+        );
       }
     }
   }

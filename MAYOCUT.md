@@ -346,6 +346,65 @@ current stack, which uses only the platform's own decoders).
 - Real-video integration fixtures: the audit runs against synthetic Project
   fixtures, not actual sample files.
 - No native shell exists yet.
+- Audio effects are applied per clip and are **not** yet reflected in the WAV
+  export path (`exportAudioWav`), which still writes the dry mix. The MP4 and
+  WebM exports do apply them.
+- The stock set is eleven generated assets, not a provider catalogue. It is
+  deliberately small because it must work with no network; a real stock
+  provider would be a licence and a download, not a code change.
+
+### The notebook list (Stage 3c)
+
+Six requests, six features, no new dependency. All of them are built from what
+the platform already ships.
+
+**1 + 2 — Audio effects, with proxies when absent.** `src/mayocut/audio-fx.ts`
+holds sixteen one-tap effects (echo, reverb, room, stadium, cave, chipmunk,
+deep, telephone, radio, lo-fi, robot, underwater, megaphone, whisper, vinyl) as
+*pure recipes* — a rate, a gain, a list of biquads, an optional delay, an
+optional convolver length, an optional ring-mod frequency. A recipe can be
+asserted on in node, which a hand-wired node graph cannot: "telephone" really is
+band-limited, and "none" really is dry.
+
+- `buildAudioFx(ctx, id)` wires a recipe into any `BaseAudioContext`, including
+  an `OfflineAudioContext`. That is the whole point: **preview and export call
+  the same function**, so an effect cannot sound different in the file.
+- Reverb impulses are generated, not bundled: seeded deterministic noise, so an
+  export matches the preview *and* two exports of the same project match each
+  other. (The old `makeImpulse` used `Math.random()`; it now delegates to this
+  one.)
+- Preview swaps effects only when the id actually changes — rebuilding every
+  frame would click.
+- Pitch effects change clip length, so `audioFxDurationScale()` exposes the
+  factor and the offline scheduler uses the same rate for the source.
+
+**3 — A library of stock pictures *and* video.** `src/mayocut/stock.ts`
+generates eleven assets on the device: green screen, blue screen, white and
+black blanks, soft-blur and studio backdrops, paper texture, plus *video*
+assets (light leak, bokeh drift, dust, countdown leader). Every one is a `draw`
+function — pure maths over a canvas — so there is nothing to download and
+nothing to license. A generated asset is stored in IndexedDB and enters the
+timeline through the same pipeline as an imported file.
+
+**4 — Stickers, including video stickers.** The emoji set now has tags, so
+"fire" finds 🔥 and "money" finds 💰. Searching also reaches the stock assets,
+so a *video* sticker (a light leak, a dust drift) is one search away instead of a
+hidden capability. A generated clip is placed full-frame with a Screen blend,
+because a light leak sized like a photo is useless.
+
+**5 — Adjustment graphs and curves.** `src/mayocut/curves.ts` implements RGB and
+per-channel tone curves with **monotone** cubic interpolation
+(Fritsch–Carlson), baked into a 256-entry LUT. The interpolation is not a
+detail: a plain Catmull-Rom overshoots between close control points, and that
+overshoot is the bright halo people use a curve to remove. The audit pins this
+down with a control-point shape (`0, 0, 0, 0.1, 0.9`) where an unclamped spline
+dips below black and the monotone one does not. `CurveEditor.tsx` is a real
+draggable graph whose drawn line *is* the LUT that gets applied.
+
+**6 — Landscape ↔ portrait.** `rotateOrientation(dir)` turns the canvas *and*
+carries the framing with it: every positioned overlay is rotated across the
+diagonal (`x' = -s·y`, `y' = s·x`) rather than dumped at the centre. Rotating
+only the canvas would silently re-frame everything the user had placed.
 
 ### A note on the error messages
 
