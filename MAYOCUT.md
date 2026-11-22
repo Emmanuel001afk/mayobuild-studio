@@ -392,6 +392,9 @@ so a *video* sticker (a light leak, a dust drift) is one search away instead of 
 hidden capability. A generated clip is placed full-frame with a Screen blend,
 because a light leak sized like a photo is useless.
 
+That was only half the job, and Stage 3e finishes it: see *Emoji are not
+stickers* below.
+
 **5 — Adjustment graphs and curves.** `src/mayocut/curves.ts` implements RGB and
 per-channel tone curves with **monotone** cubic interpolation
 (Fritsch–Carlson), baked into a 256-entry LUT. The interpolation is not a
@@ -444,6 +447,45 @@ A bug found by the new tests: `clampHsl` used `Math.min(100, NaN)`, which is
 `NaN`, not `100`. A non-numeric slider read would have written `NaN` into the
 project and then into every rendered frame. It now falls back to neutral.
 
+### Emoji are not stickers (Stage 3e)
+
+The sticker panel used to insert everything as a text overlay: emoji, shapes and
+word stickers alike, all arriving with the same 150 px size and the same
+`bounce` entrance. That looked fine in a screenshot and was wrong in three ways
+at once. An emoji is a **Unicode character** — text, not art; it renders from the
+device's emoji font, so it is razor-sharp at any size and carries no animation or
+transparency of its own. A **sticker** is a drawn asset with its own entrance and
+alpha. An **animated sticker** (CapCut's animated stickers, Telegram's WEBM
+stickers) is a real clip with a duration and a loop. CapCut keeps all three apart
+and so does `src/mayocut/sticker-kinds.ts`.
+
+| kind | what it is | default entrance | default size |
+| --- | --- | --- | --- |
+| `emoji` | one Unicode character | `none` — characters do not wobble | 170 |
+| `graphic` | drawn symbol / shape | `pop` — a sticker with no entrance looks like a bug | 200 |
+| `video` | generated clip | `none` — its movement *is* the footage | 260 |
+
+The panel now shows the five category chips CapCut exposes (Emoji, Graphics,
+Shapes, Text, Animated) with a one-line explanation of each, and every category
+has assets — a chip that opens an empty grid is a lie.
+
+The subtle part is naming. `isEmojiOverlay` decides "is this an emoji?" with
+`\p{Extended_Pictographic}`, but it first strips the *decorators* — ZWJ, the
+variation selectors, skin-tone modifiers, regional indicators, enclosing keycap
+— because `👍🏽` and `👨‍👩‍👧` are clusters, not single pictographs, and a bare
+regex would reject them. Flags are checked before stripping, since the two
+regional indicators that make `🇳🇬` are exactly what stripping removes.
+
+Then comes the honest admission: **`⬅`, `✔`, `✳` and `〰` are
+Extended_Pictographic.** A shape glyph and an emoji of the same code point are
+indistinguishable from the character alone, so the inspector cannot guess what
+the user meant. It does not guess: `OverlayClip.sticker` records the kind at the
+moment of insertion, and `overlayLabel` reads it. A picked shape is named
+"Sticker", a picked emoji "Emoji", and only text with no recorded kind falls back
+to the glyph heuristic. The audit pins both sides of that — `patchFor` must stamp
+the kind, and a `⬅` shape must label as "Sticker" even though the regex calls it
+a pictograph.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert
@@ -470,7 +512,7 @@ Green builds are not proof the app works, so the editor is verified three ways
 ```bash
 npx tsc --noEmit -p tsconfig.json     # types
 npx eslint src/mayocut                # lint (0 errors)
-node .diag/audit.mjs                  # 114 pure-logic assertions
+node .diag/audit.mjs                  # 272 pure-logic assertions
 
 npm run build:shell
 node scripts/smoke-shell.mjs /        # bundle boots + renders the landing page
@@ -478,7 +520,16 @@ node scripts/smoke-shell.mjs /mayocut # …and the MayoCut home
 node scripts/smoke-editor.mjs         # the EDITOR mounts with a seeded project
 ```
 
-`audit.mjs` covers the maths that is easy to get quietly wrong: speed-ramp and
+`audit.mjs` covers the maths that is easy to get quietly wrong — and, since
+Stage 3e, the naming that is easy to get quietly wrong too: emoji clusters
+(ZWJ, skin tone, flags, keycaps) must be recognised as emoji while words are
+not, a picked shape must be stamped with its kind so the inspector can call it a
+Sticker, and every sticker category must contain at least one asset. Each of
+those cases was mutation-tested by breaking the code and watching it fail: an
+emoji made to animate, a removed flag branch, a dropped `sticker` field and a
+relabelled shape category each turn at least one case red.
+
+Beyond the maths: speed-ramp and
 speed-curve integration (closed form vs brute-force numeric integration), its
 inverse, freeze-frame semantics, split/keyframe rebasing, transition windows,
 keyframe interpolation, colour-grade CSS composition, aspect ratios, template

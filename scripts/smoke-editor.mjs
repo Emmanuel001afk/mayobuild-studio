@@ -227,7 +227,14 @@ const checks = [
       ),
     ),
   ],
-  ["sticker categories visible", /Sticker library/i.test(text) && /Reactions/.test(text) && /Creator/.test(text) && /Lifestyle/.test(text)],
+  [
+    "sticker categories visible",
+    /Sticker library/i.test(text) &&
+      /Emoji/.test(text) &&
+      /Graphics/.test(text) &&
+      /Shapes/.test(text) &&
+      /Animated/.test(text),
+  ],
   ["no fatal render error", !/cannot read|is not a function|Minified React error/i.test(text)],
 ];
 
@@ -258,16 +265,63 @@ if (stickersTool) {
   stickersTool.click();
   await wait(250);
 }
-const lifestyleTab = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Lifestyle");
+const lifestyleTab = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Shapes");
 if (lifestyleTab) {
   lifestyleTab.click();
   await wait(250);
   const selected = lifestyleTab.getAttribute("aria-pressed") === "true";
-  const lifestyleEmojiVisible = /🌊|🌙|☀️|🍕|🏖️|🎮|🛹/.test(textOf());
+  const lifestyleEmojiVisible = /★|➜|✔|◆/.test(textOf());
   console.log(selected && lifestyleEmojiVisible ? "  PASS sticker category switches" : "  FAIL sticker category switches");
   if (!selected || !lifestyleEmojiVisible) failed++;
 } else {
   console.log("  FAIL sticker category button missing");
+  failed++;
+}
+
+// --- emoji and graphic stickers are different objects, in the UI too ---------
+// CapCut keeps them apart; the rail must show the five category chips, and the
+// inspector must name what was dropped on the canvas. A graphic arrives with an
+// entrance animation, an emoji arrives still — that difference is the feature.
+if (stickersTool) {
+  stickersTool.click();
+  await wait(250);
+}
+const chipGroup = document.querySelector('[aria-label="Sticker categories"]');
+const chipNames = chipGroup ? [...chipGroup.querySelectorAll("button")].map((b) => b.textContent?.trim()) : [];
+const chipsOk =
+  chipNames.length === 5 &&
+  ["Emoji", "Graphics", "Shapes", "Text", "Animated"].every((n) => chipNames.includes(n));
+console.log(chipsOk ? "  PASS five sticker categories in the rail" : `  FAIL five sticker categories in the rail (${chipNames.join("/")})`);
+if (!chipsOk) failed++;
+
+// Tile titles read "<glyph> — <category id>", so match the id, not the chip label.
+const pickSticker = async (chipLabel, categoryId) => {
+  const chip = chipGroup ? [...chipGroup.querySelectorAll("button")].find((b) => b.textContent?.trim() === chipLabel) : null;
+  if (!chip) return { missing: `chip ${chipLabel}` };
+  chip.click();
+  await wait(200);
+  const tile = [...document.querySelectorAll("button")].find((b) => (b.getAttribute("title") || "").includes(`— ${categoryId}`));
+  if (!tile) return { missing: `tile in ${categoryId}` };
+  tile.click();
+  await wait(500);
+  // The inspector header is the first h3 in the right-hand panel.
+  const header = [...document.querySelectorAll("h3")].map((h) => h.textContent?.trim()).find(Boolean);
+  return { header };
+};
+
+const emojiPick = await pickSticker("Emoji", "emoji");
+const emojiNamed = emojiPick.header === "Emoji";
+console.log(emojiNamed ? "  PASS an emoji is named an Emoji, not Text" : "  FAIL an emoji is named an Emoji, not Text");
+if (!emojiNamed) {
+  console.log("    inspector header:", emojiPick.header, emojiPick.missing ?? "");
+  failed++;
+}
+
+const graphicPick = await pickSticker("Graphics", "graphic");
+const graphicNamed = graphicPick.header === "Sticker";
+console.log(graphicNamed ? "  PASS a graphic sticker is named a Sticker" : "  FAIL a graphic sticker is named a Sticker");
+if (!graphicNamed) {
+  console.log("    inspector header:", graphicPick.header, graphicPick.missing ?? "");
   failed++;
 }
 
@@ -411,7 +465,9 @@ for (const tb of LIBRARY_TABS) {
   checks.push(["selected filter persists in project storage", !!mainClip && !!filter && saved?.main[0]?.filter === "noir"]);
 }
 
-failed = 0;
+// NOTE: do not reset `failed` here. Earlier interaction checks already counted
+// their own failures, and resetting made the run print PASS while a check had
+// failed — exactly the kind of false green this harness exists to prevent.
 for (const [name, ok] of checks) {
   console.log(ok ? "  PASS" : "  FAIL", name);
   if (!ok) failed++;

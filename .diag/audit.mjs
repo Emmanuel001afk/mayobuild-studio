@@ -20,6 +20,8 @@ const AFX = await import('./b-audio-fx.mjs');
 const CV = await import('./b-curves.mjs');
 const ST = await import('./b-stock.mjs');
 const HSL = await import('./b-hsl.mjs');
+const SK = await import('./b-sticker-kinds.mjs');
+const SB = await import('./b-stickers.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
   const tr = T.emptyTracks();
@@ -2352,6 +2354,114 @@ await t('every export path shares one description of the sound', () => {
   assert.equal(ducks.length, 2, `offline mix should duck main + overlays, found ${ducks.length}`);
 });
 
+
+
+// ================= stage 7: emoji vs graphic vs video sticker =================
+console.log('sticker-kinds.ts + stickers.ts');
+await t('the three sticker kinds have distinct kinds, not aliases', () => {
+  assert.deepEqual(
+    ['emoji', 'graphic', 'video'].map((k) => SK.defaultAnimFor(k)),
+    ['none', 'pop', 'none'],
+  );
+  assert.deepEqual(
+    ['emoji', 'graphic', 'video'].map((k) => SK.defaultSizeFor(k)),
+    [170, 200, 260],
+  );
+});
+await t('an emoji is still, so it carries no entrance animation', () => {
+  const emoji = SB.EMOJI_ASSETS[0];
+  assert.equal(emoji.kind, 'emoji');
+  assert.equal(emoji.anim, 'none', 'an emoji must not arrive wobbling');
+  assert.equal(emoji.size, 170);
+});
+await t('a graphic pops in and keeps its own colour', () => {
+  const g = SB.GRAPHIC_ASSETS[0];
+  assert.equal(g.kind, 'graphic');
+  assert.equal(g.anim, 'pop');
+  assert.ok(g.color && /^#[0-9a-f]{6}$/i.test(g.color), 'graphic needs a colour');
+});
+await t('isEmojiOverlay accepts ZWJ / modifier / VS16 clusters', () => {
+  const mk = (text) => ({ kind: 'text', text });
+  for (const cluster of ['🔥', '❤️', '👨‍👩‍👧', '👍🏽', '🇳🇬', '🔟', '👩🏾‍🚀']) {
+    assert.equal(SK.isEmojiOverlay(mk(cluster)), true, `expected emoji: ${cluster}`);
+  }
+});
+await t('isEmojiOverlay rejects words, sentences and media-backed overlays', () => {
+  const mk = (text) => ({ kind: 'text', text });
+  for (const word of ['NEW', 'Sold out', '★', '➜', 'a', '']) {
+    assert.equal(SK.isEmojiOverlay(mk(word)), false, `expected not-emoji: ${word}`);
+  }
+  assert.equal(SK.isEmojiOverlay({ kind: 'text', text: '🔥', mediaId: 'm1' }), false);
+  assert.equal(SK.isEmojiOverlay({ kind: 'image', text: '🔥' }), false);
+});
+await t('isEmojiOverlay rejects a long sentence that starts with an emoji', () => {
+  assert.equal(SK.isEmojiOverlay({ kind: 'text', text: '🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥' }), false);
+});
+await t('overlayLabel names each object the way the panel will', () => {
+  assert.equal(SK.overlayLabel({ kind: 'text', text: '🔥' }), 'Emoji');
+  assert.equal(SK.overlayLabel({ kind: 'text', text: '🔥', sticker: 'emoji' }), 'Emoji');
+  assert.equal(SK.overlayLabel({ kind: 'text', text: 'SALE', sticker: 'graphic' }), 'Sticker');
+  assert.equal(SK.overlayLabel({ kind: 'text', text: 'Fire', sticker: 'emoji' }), 'Emoji');
+  assert.equal(SK.overlayLabel({ kind: 'text', text: 'NEW' }), 'Text');
+  assert.equal(SK.overlayLabel({ kind: 'video' }), 'Video sticker');
+  assert.equal(SK.overlayLabel({ kind: 'image' }), 'Image');
+  assert.equal(SK.overlayLabel({ kind: 'audio' }), 'Audio');
+});
+await t('patchFor lands a sticker centred, background-free, at its own size', () => {
+  const p = SK.patchFor({ id: 'x', kind: 'graphic', glyph: '★', tags: [], category: 'shape', anim: 'pop', color: '#fbbf24', size: 200 });
+  assert.equal(p.text, '★');
+  assert.equal(p.size, 200);
+  assert.equal(p.anim, 'pop');
+  assert.equal(p.bg, '');
+  assert.equal(p.pos, 'mc');
+  assert.equal(p.color, '#fbbf24');
+  const e = SK.patchFor({ id: 'y', kind: 'emoji', glyph: '🔥', tags: [], category: 'emoji', anim: 'none', size: 170 });
+  assert.equal(e.color, undefined, 'an emoji must not inherit a sticker colour');
+});
+await t('every category chip has at least one asset (no dead chips)', () => {
+  for (const c of SK.STICKER_CATEGORIES) {
+    if (c.id === 'video') continue; // animated ones live in stock.ts
+    const n = SB.stickersIn(c.id).length;
+    assert.ok(n > 0, `category ${c.id} is empty`);
+  }
+  assert.equal(SK.STICKER_CATEGORIES.length, 5);
+});
+await t('shape assets are graphics with the graphic entrance, not emoji', () => {
+  const shapes = SB.stickersIn('shape');
+  assert.ok(shapes.length >= 10);
+  for (const s of shapes) {
+    assert.equal(s.kind, 'graphic');
+    assert.equal(s.anim, 'pop');
+    // Some shape glyphs (⬅ ✔ ✳ 〰) ARE Extended_Pictographic, so the regex
+    // alone would call them emoji. The recorded kind is what disambiguates.
+    assert.equal(SK.patchFor(s).sticker, 'graphic', `${s.glyph} must record its kind`);
+    assert.equal(SK.overlayLabel({ kind: 'text', text: s.glyph, sticker: 'graphic' }), 'Sticker');
+  }
+  // This is exactly why the kind is recorded rather than guessed: typed by
+  // hand, "⬅" is indistinguishable from the emoji of the same code point.
+  assert.equal(SK.isEmojiOverlay({ kind: 'text', text: '⬅' }), true);
+  assert.equal(SK.overlayLabel({ kind: 'text', text: '⬅', sticker: 'graphic' }), 'Sticker');
+});
+await t('searchStickers matches tags, glyphs and category names', () => {
+  assert.ok(SB.searchStickers('fire').some((s) => s.glyph === '🔥'));
+  assert.ok(SB.searchStickers('trophy').some((s) => s.glyph === '🏆'));
+  assert.ok(SB.searchStickers('arrow').every((s) => s.category === 'shape' || s.tags.includes('arrow')));
+  assert.ok(SB.searchStickers('shape').some((s) => s.category === 'shape'));
+  assert.equal(SB.searchStickers('').length, SB.STATIC_STICKERS.length);
+  assert.equal(SB.searchStickers('zzzzznomatch').length, 0);
+});
+await t('static catalogue ids are unique and every asset is tagged', () => {
+  const ids = new Set(SB.STATIC_STICKERS.map((s) => s.id));
+  assert.equal(ids.size, SB.STATIC_STICKERS.length, 'duplicate sticker id');
+  for (const s of SB.STATIC_STICKERS) assert.ok(s.tags.length > 0, `${s.id} has no tags`);
+});
+await t('catalogue is emoji+graphic+shape+word, counts unchanged elsewhere', () => {
+  assert.equal(SB.EMOJI_ASSETS.length + SB.GRAPHIC_ASSETS.length + SB.SHAPE_ASSETS.length + SB.WORD_ASSETS.length, SB.STATIC_STICKERS.length);
+  assert.ok(SB.EMOJI_ASSETS.length >= 50);
+  assert.equal(SB.GRAPHIC_ASSETS.length, 24);
+  assert.equal(SB.SHAPE_ASSETS.length, 12);
+  assert.equal(SB.WORD_ASSETS.length, 14);
+});
 
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

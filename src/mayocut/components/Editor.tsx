@@ -42,6 +42,13 @@ import {
   stockVideoBlob,
 } from "../stock";
 import { AUDIO_FX, type AudioFxId } from "../audio-fx";
+import {
+  patchFor,
+  STICKER_CATEGORIES,
+  type StickerAsset,
+  type StickerCategory,
+} from "../sticker-kinds";
+import { ANIMATED_STICKER_IDS, searchStickers, stickersIn } from "../stickers";
 import { Engine, FILTER_PRESETS, exportBlocker, mp4Supported, pickMime } from "../engine";
 import {
   ASPECTS,
@@ -1478,6 +1485,20 @@ export function Editor({
   }
 
   /** Add a text-layer sticker (emoji or shape glyph) at the playhead. */
+  /**
+   * Insert a catalogue asset with the defaults its KIND calls for.
+   *
+   * An emoji stays still (it is a character), a graphic pops in (a sticker with
+   * no entrance reads as a mistake), and a video sticker carries no text
+   * animation at all because its movement is its own footage.
+   */
+  function addStickerAsset(asset: StickerAsset) {
+    // patchFor() is the single place that decides how a sticker lands: its own
+    // size and entrance, no background, centred. Kind-specific defaults come
+    // from sticker-kinds.ts so an emoji never arrives wobbling.
+    addEmoji(asset.glyph ?? "", patchFor(asset));
+  }
+
   function addEmoji(emoji: string, patch: Partial<OverlayClip> = {}) {
     const clip = mutateRet((e) =>
       e.addTextClip("t_text", Math.max(0, e.t), {
@@ -1545,93 +1566,14 @@ export function Editor({
     }
   }
 
-  const EMOJI_STICKERS = useMemo(
-    () => [
-      "🔥",
-      "❤️",
-      "😂",
-      "😮",
-      "👀",
-      "👏",
-      "💯",
-      "✨",
-      "⚡",
-      "🎉",
-      "🚀",
-      "💰",
-      "📈",
-      "🏆",
-      "🎯",
-      "🍿",
-      "🥶",
-      "😍",
-      "🤯",
-      "👉",
-      "👆",
-      "✅",
-      "❌",
-      "⭐",
-      "🌊",
-      "🌙",
-      "☀️",
-      "🎵",
-      "🎬",
-      "📱",
-      "💬",
-      "🙌",
-      "💪",
-      "🧠",
-      "👑",
-      "🍕",
-      "🏖️",
-      "🎮",
-      "🛹",
-      "📸",
-    ],
-    [],
-  );
-  const [stickerCategory, setStickerCategory] = useState("All");
+  // CapCut keeps Emoji and Stickers apart, and so do we — see sticker-kinds.ts
+  // for why the distinction is real rather than cosmetic.
+  const [stickerCategory, setStickerCategory] = useState<StickerCategory>("emoji");
   const [stickerQuery, setStickerQuery] = useState("");
-  const stickerGroups = useMemo(
-    () => [
-      { name: "All", items: EMOJI_STICKERS },
-      {
-        name: "Reactions",
-        items: ["🔥", "❤️", "😂", "😮", "👀", "👏", "💯", "🥶", "😍", "🤯", "🙌", "💪"],
-      },
-      {
-        name: "Creator",
-        items: [
-          "✨",
-          "⚡",
-          "🎉",
-          "🚀",
-          "💰",
-          "📈",
-          "🏆",
-          "🎯",
-          "🍿",
-          "✅",
-          "❌",
-          "⭐",
-          "🎵",
-          "🎬",
-          "📱",
-          "💬",
-          "🧠",
-          "👑",
-          "📸",
-        ],
-      },
-      {
-        name: "Lifestyle",
-        items: ["👉", "👆", "🌊", "🌙", "☀️", "🍕", "🏖️", "🎮", "🛹"],
-      },
-    ],
-    [EMOJI_STICKERS],
-  );
-  const visibleStickers =
-    stickerGroups.find((group) => group.name === stickerCategory)?.items ?? EMOJI_STICKERS;
+  const stickerItems = useMemo(() => {
+    if (stickerQuery.trim()) return searchStickers(stickerQuery).slice(0, 60);
+    return stickersIn(stickerCategory);
+  }, [stickerCategory, stickerQuery]);
 
   // ------------------------------------------------------------- export
 
@@ -2530,29 +2472,88 @@ export function Editor({
               </div>
             ) : null}
             <div className="flex gap-1 flex-wrap mb-2" role="group" aria-label="Sticker categories">
-              {stickerGroups.map((group) => (
+              {STICKER_CATEGORIES.map((cat) => (
                 <button
-                  key={group.name}
-                  className={`px-1.5 py-1 rounded text-[10px] ${stickerCategory === group.name ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-slate-700"}`}
-                  aria-pressed={stickerCategory === group.name}
-                  onClick={() => setStickerCategory(group.name)}
+                  key={cat.id}
+                  className={`px-1.5 py-1 rounded text-[10px] ${
+                    stickerCategory === cat.id && !stickerQuery.trim()
+                      ? "bg-primary/20 text-primary"
+                      : "text-muted-foreground hover:bg-slate-700"
+                  }`}
+                  aria-pressed={stickerCategory === cat.id && !stickerQuery.trim()}
+                  title={cat.hint}
+                  onClick={() => {
+                    setStickerCategory(cat.id);
+                    setStickerQuery("");
+                  }}
                 >
-                  {group.name}
+                  {cat.name}
                 </button>
               ))}
             </div>
-            <div className="grid grid-cols-5 gap-1">
-              {visibleStickers.map((emoji) => (
-                <button
-                  key={emoji}
-                  className="h-8 rounded hover:bg-slate-700 text-lg"
-                  title={`Add ${emoji}`}
-                  onClick={() => addEmoji(emoji)}
-                >
-                  {emoji}
-                </button>
-              ))}
+            <div className="text-[9px] text-muted-foreground mb-1 leading-snug">
+              {STICKER_CATEGORIES.find((c) => c.id === stickerCategory)?.hint}
             </div>
+            {stickerCategory === "video" && !stickerQuery.trim() ? (
+              <div className="grid grid-cols-2 gap-1">
+                {ANIMATED_STICKER_IDS.map((id) => {
+                  const asset = stockById(id);
+                  if (!asset) return null;
+                  return (
+                    <button
+                      key={id}
+                      className="flex items-center gap-1.5 rounded border border-border hover:border-primary px-1.5 py-1 text-left"
+                      title={asset.hint}
+                      onClick={() => addStockAsset(id)}
+                    >
+                      {stockThumbData(id) ? (
+                        <img
+                          src={stockThumbData(id)}
+                          alt=""
+                          className="h-7 w-7 rounded object-cover"
+                        />
+                      ) : null}
+                      <span className="text-[10px] flex-1 truncate">{asset.name}</span>
+                    </button>
+                  );
+                })}
+                <div className="col-span-2 text-[9px] text-muted-foreground leading-snug">
+                  Animated stickers are generated on this device — they move because the clip moves,
+                  not because a text animation is applied to them.
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-5 gap-1">
+                  {stickerItems.map((asset) => (
+                    <button
+                      key={asset.id}
+                      className="h-9 rounded hover:bg-slate-700 flex items-center justify-center overflow-hidden"
+                      title={`${asset.glyph ?? ""} — ${asset.category}${asset.kind === "graphic" ? ", animated in" : ""}`}
+                      style={{
+                        color: asset.color,
+                        fontSize: asset.category === "text" ? 9 : 19,
+                        fontWeight: asset.category === "text" ? 700 : undefined,
+                        lineHeight: 1,
+                      }}
+                      onClick={() => addStickerAsset(asset)}
+                    >
+                      {asset.glyph}
+                    </button>
+                  ))}
+                </div>
+                {stickerItems.length === 0 && (
+                  <p className="text-[10px] text-muted-foreground">
+                    Nothing matches “{stickerQuery}”. The catalogue is generated on your device, so
+                    it is small — but it works offline.
+                  </p>
+                )}
+                <div className="text-[9px] text-muted-foreground leading-snug mt-1">
+                  Emoji stay editable as text. Graphics arrive with their own entrance animation.
+                  Both are infinitely sharp because they are drawn, not bitmaps.
+                </div>
+              </>
+            )}
           </div>
         )}
         {workspaceTab === "effects" && (

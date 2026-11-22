@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { CurveEditor } from "./CurveEditor";
 import { CURVE_PRESETS, curvesActive, normalisePoints, type CurvePoint } from "../curves";
 import { searchEmoji } from "../stock";
+import { defaultAnimFor, defaultSizeFor, isEmojiOverlay, overlayLabel } from "../sticker-kinds";
 import { HSL_BANDS, hslActive, type HslAdjust, type HslBand } from "../hsl";
 
 type Channel = "rgb" | "r" | "g" | "b";
@@ -538,15 +539,7 @@ export function Inspector(p: Props) {
     <div className="p-3 space-y-4">
       <div className="flex items-center gap-2">
         <h3 className="font-semibold text-sm">
-          {main
-            ? "Clip"
-            : over?.kind === "text"
-              ? "Text"
-              : over?.kind === "image"
-                ? "Image overlay"
-                : over?.kind === "video"
-                  ? "Video overlay"
-                  : "Audio"}
+          {main ? "Clip" : over ? overlayLabel(over) : "Audio"}
         </h3>
         {main?.reverse && (
           <span className="text-[10px] text-fuchsia-300 border border-fuchsia-400/40 rounded px-1">
@@ -1474,12 +1467,27 @@ export function Inspector(p: Props) {
               </>
             )}
           </Section>
-          <Section label="Replace sticker" anchor="media">
+          <Section
+            label={isEmojiOverlay(over) ? "Replace emoji" : "Replace sticker"}
+            anchor="media"
+          >
+            {/* Replacing keeps the object's kind honest: a swapped emoji stays a
+                still character, and a swapped graphic keeps its entrance. */}
             <StickerSearch
               onSelectEmoji={(emoji) =>
                 p.onPatchOverlay(
-                  p.selection && p.selection.lane === "overlay" ? p.selection.trackId : "",
-                  { text: emoji, kind: "text", size: 220 },
+                  trackId,
+                  // An emoji replaced by an emoji keeps whatever the user set;
+                  // anything else becomes a plain, still emoji.
+                  isEmojiOverlay(over)
+                    ? { text: emoji, kind: "text" }
+                    : {
+                        text: emoji,
+                        kind: "text",
+                        size: defaultSizeFor("emoji"),
+                        anim: defaultAnimFor("emoji"),
+                        sticker: "emoji",
+                      },
                 )
               }
               onSearchStock={p.onSearchStock}
