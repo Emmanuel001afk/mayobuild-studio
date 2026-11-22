@@ -1791,6 +1791,18 @@ await t('small footage does not get a proxy', () => {
   const d = X.shouldProxyVideo({ width: 1280, height: 720, size: 20e6, kind: 'video' });
   assert.equal(d.wanted, false, '720p decodes fine already');
 });
+await t('the proxy threshold is exclusive: 720p and 721p are not proxied, 722p is', () => {
+  // This boundary is where an off-by-one would hide, so state the rule plainly:
+  // a source must be MORE than one line taller than the target to be worth a
+  // proxy. 721p → 720p is a re-encode that saves a single line, which is not
+  // worth any CPU at all. `minSource` is therefore target+1 and the test is
+  // `h <= minSource`, both deliberate.
+  assert.equal(X.shouldProxyVideo({ width: 1280, height: 720, kind: 'video' }).wanted, false);
+  assert.equal(X.shouldProxyVideo({ width: 1281, height: 721, kind: 'video' }).wanted, false);
+  assert.equal(X.shouldProxyVideo({ width: 1282, height: 722, kind: 'video' }).wanted, true);
+  // and the target height is configurable: at maxHeight 480, 720p DOES want one
+  assert.equal(X.shouldProxyVideo({ width: 1280, height: 720, kind: 'video' }, { maxHeight: 480 }).wanted, true);
+});
 await t('4K footage does get a proxy at 720p', () => {
   const d = X.shouldProxyVideo({ width: 3840, height: 2160, size: 200e6, kind: 'video' });
   assert.equal(d.wanted, true);
