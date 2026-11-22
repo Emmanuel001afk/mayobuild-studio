@@ -1,5 +1,6 @@
 // MayoCut client helpers: media import, thumbnails, formatting.
 
+import { makeImpulse as generateImpulse } from "./audio-fx";
 import { GifReader } from "omggif";
 import type { MediaItem, MediaKind } from "./types";
 import { uid } from "./types";
@@ -372,16 +373,16 @@ export function decodeAudioToMono16(blob: Blob): Promise<Float32Array | null> {
   });
 }
 
-/** Generate a decaying-noise impulse response (offline reverb). */
+/**
+ * Generate a decaying-noise impulse response (offline reverb).
+ *
+ * Kept as a thin alias of the audio-fx version. That one is seeded, so the
+ * same reverb is produced on every render — with `Math.random()` here the
+ * exported file's tail differed from the preview's, and two exports of the
+ * same project never matched each other either.
+ */
 export function makeImpulse(ctx: BaseAudioContext, seconds = 1.8, decay = 3): AudioBuffer {
-  const rate = ctx.sampleRate;
-  const len = Math.max(1, Math.round(seconds * rate));
-  const buf = ctx.createBuffer(2, len, rate);
-  for (let ch = 0; ch < 2; ch++) {
-    const d = buf.getChannelData(ch);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-  }
-  return buf;
+  return generateImpulse(ctx, seconds, decay);
 }
 
 // ---------------------------------------------------------------------------

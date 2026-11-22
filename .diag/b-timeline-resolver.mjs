@@ -131,8 +131,6 @@ function mainClipGain(clip, span, next, t, hasPrevious = true) {
     if (t >= winStart) {
       v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
     }
-  } else if (span.end - t < 0.3 && clip.transitionIn === "none") {
-    v *= Math.max(0, Math.min(1, (span.end - t) / 0.3));
   }
   return Math.max(0, Math.min(1, v));
 }

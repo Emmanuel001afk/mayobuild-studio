@@ -71,8 +71,9 @@ function tx(store, mode, fn) {
     (db2) => new Promise((resolve, reject) => {
       const t = db2.transaction(store, mode);
       const req = fn(t.objectStore(store));
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      t.oncomplete = () => resolve(req.result);
+      t.onabort = () => reject(t.error ?? req.error ?? new Error("Local storage transaction aborted"));
+      t.onerror = () => reject(t.error ?? req.error ?? new Error("Local storage transaction failed"));
     })
   );
 }
@@ -94,6 +95,7 @@ var init_idb = __esm({
           t.objectStore("blobs").put({ id: item.id, blob });
           t.oncomplete = () => resolve(void 0);
           t.onerror = () => reject(t.error);
+          t.onabort = () => reject(t.error ?? new Error("Local storage transaction aborted"));
         })
       ),
       getBlob: (id) => tx("blobs", "readonly", (s) => s.get(id)).then(
@@ -116,6 +118,7 @@ var init_idb = __esm({
           t.objectStore("blobs").delete(id);
           t.oncomplete = () => resolve(void 0);
           t.onerror = () => reject(t.error);
+          t.onabort = () => reject(t.error ?? new Error("Local storage transaction aborted"));
         })
       ),
       // --- projects ---
@@ -144,6 +147,7 @@ var init_idb = __esm({
           t.objectStore("blobs").put({ id: `exp_${item.id}`, blob });
           t.oncomplete = () => resolve(void 0);
           t.onerror = () => reject(t.error);
+          t.onabort = () => reject(t.error ?? new Error("Local storage transaction aborted"));
         })
       ),
       getExportBlob: (id) => tx("blobs", "readonly", (s) => s.get(`exp_${id}`)).then(
@@ -156,6 +160,7 @@ var init_idb = __esm({
           t.objectStore("blobs").delete(`exp_${id}`);
           t.oncomplete = () => resolve(void 0);
           t.onerror = () => reject(t.error);
+          t.onabort = () => reject(t.error ?? new Error("Local storage transaction aborted"));
         })
       )
     };

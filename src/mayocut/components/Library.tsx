@@ -45,6 +45,8 @@ import {
   TRANSITION_FAMILY,
 } from "../types";
 import { FILTER_PRESETS } from "../engine";
+import { AUDIO_FX, AUDIO_FX_MAP, type AudioFxId } from "../audio-fx";
+import { STOCK_ASSETS, stockThumb } from "../stock";
 
 /** Every asset category CapCut's desktop library ships with. */
 export type LibraryTab =
@@ -130,6 +132,24 @@ export const SHAPE_STICKERS: { id: string; label: string; patch: Partial<Overlay
   { id: "flag", label: "⚑", patch: { size: 170, color: "#f97316", anim: "pop" } },
 ];
 
+/**
+ * Stock thumbnails are drawn once and kept in a module-level cache.
+ *
+ * They used to be generated on every render of the library, which meant a few
+ * dozen `toDataURL()` calls per keystroke elsewhere in the editor. Generating
+ * them lazily and keeping them is the difference between a smooth panel and a
+ * stuttering one on a phone.
+ */
+const stockThumbCache = new Map<string, string>();
+function stockThumbCached(id: string): string {
+  const hit = stockThumbCache.get(id);
+  if (hit !== undefined) return hit;
+  const asset = STOCK_ASSETS.find((a) => a.id === id);
+  const url = asset ? stockThumb(asset, 96) : "";
+  stockThumbCache.set(id, url);
+  return url;
+}
+
 interface Props {
   project: Project;
   media: MediaItem[];
@@ -147,6 +167,12 @@ interface Props {
   onSetTransition: (kind: TransitionKind) => void;
   onApplyTransitionAll: (kind: TransitionKind) => void;
   onApplyFilter: (id: string) => void;
+  /** apply a one-tap audio effect to the selected clip (audio overlay or main) */
+  onApplyAudioFx: (id: AudioFxId) => void;
+  /** add a generated stock asset (green screen, light leak…) to the library */
+  onAddStock: (assetId: string) => void;
+  /** id of the stock asset currently being generated, for progress */
+  stockBusy?: string | null;
   onSwitchToAdjust: () => void;
   onOpenCaptions: () => void;
   onRecord: () => void;
@@ -171,6 +197,9 @@ export function Library({
   onSetTransition,
   onApplyTransitionAll,
   onApplyFilter,
+  onApplyAudioFx,
+  onAddStock,
+  stockBusy,
   onSwitchToAdjust,
   onOpenCaptions,
   onRecord,
@@ -388,6 +417,47 @@ export function Library({
                 </Empty>
               )}
             </Grid>
+            <Label>Built-in stock</Label>
+            <div className="text-[10px] text-muted-foreground leading-snug -mt-1">
+              Generated on this device — a green screen to key, a backdrop for text, a light leak to
+              overlay. Nothing is downloaded.
+            </div>
+            <Grid cols={3}>
+              {STOCK_ASSETS.map((a) => {
+                const busy = stockBusy === a.id;
+                const thumb = stockThumbCached(a.id);
+                return (
+                  <Tile
+                    key={a.id}
+                    title={`${a.hint}${a.kind === "video" ? " (renders a short clip)" : ""}`}
+                    onClick={() => {
+                      if (!busy) onAddStock(a.id);
+                    }}
+                  >
+                    <div className="h-full flex flex-col items-center gap-1">
+                      <div className="relative w-full aspect-square rounded overflow-hidden bg-black/40">
+                        {thumb ? (
+                          <img src={thumb} alt="" className="w-full h-full object-cover" />
+                        ) : null}
+                        {a.kind === "video" && (
+                          <span className="absolute bottom-0.5 right-0.5 text-[8px] bg-black/70 rounded px-1">
+                            clip
+                          </span>
+                        )}
+                        {busy && (
+                          <span className="absolute inset-0 flex items-center justify-center text-[9px] bg-black/70">
+                            rendering…
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[9px] leading-tight text-center truncate w-full">
+                        {a.name}
+                      </span>
+                    </div>
+                  </Tile>
+                );
+              })}
+            </Grid>
           </>
         )}
 
@@ -421,6 +491,36 @@ export function Library({
                 <Captions className="h-3.5 w-3.5" /> Beat-sync & captions →
               </button>
             </div>
+            <Label>Audio effects</Label>
+            <div className="text-[10px] text-muted-foreground leading-snug -mt-1">
+              Applied to the selected clip and rendered into the export, not just the preview.
+            </div>
+            <Grid cols={3}>
+              {AUDIO_FX.map((f) => {
+                const active = selectedOverlay?.audioFx === f.id || mainClip?.audioFx === f.id;
+                const isAudioTarget = selectedOverlay?.kind === "audio" || !!mainClip;
+                return (
+                  <Tile
+                    key={f.id}
+                    title={isAudioTarget ? f.hint : "Select an audio or video clip first"}
+                    onClick={() => onApplyAudioFx(f.id)}
+                  >
+                    <div
+                      className={`h-full rounded px-1 py-1.5 flex flex-col items-center justify-center gap-1 border ${
+                        active ? "border-cyan-400 bg-cyan-400/10" : "border-transparent"
+                      } ${isAudioTarget ? "" : "opacity-40"}`}
+                    >
+                      <span className="text-[10px] font-medium leading-none text-center">
+                        {f.name}
+                      </span>
+                      <span className="text-[8px] text-muted-foreground leading-none text-center">
+                        {AUDIO_FX_MAP[f.id].id === "none" ? "dry" : f.hint.split(" ")[0]}
+                      </span>
+                    </div>
+                  </Tile>
+                );
+              })}
+            </Grid>
           </>
         )}
 

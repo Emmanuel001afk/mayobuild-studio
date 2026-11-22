@@ -590,6 +590,56 @@ var require_omggif = __commonJS({
   }
 });
 
+// src/mayocut/audio-fx.ts
+var AUDIO_FX = [
+  { id: "none", name: "None", hint: "Dry signal" },
+  { id: "echo", name: "Echo", hint: "Single slap-back delay" },
+  { id: "reverb", name: "Reverb", hint: "Small room, generated impulse" },
+  { id: "room", name: "Room", hint: "Short tight ambience" },
+  { id: "stadium", name: "Stadium", hint: "Long wide tail" },
+  { id: "cave", name: "Cave", hint: "Very long dark tail" },
+  { id: "chipmunk", name: "Chipmunk", hint: "Higher and faster" },
+  { id: "deep", name: "Deep voice", hint: "Lower and slower" },
+  { id: "telephone", name: "Telephone", hint: "Narrow band, thin" },
+  { id: "radio", name: "Radio", hint: "AM-style band limit + grit" },
+  { id: "lofi", name: "Lo-fi", hint: "Muffled, warm, slightly crushed" },
+  { id: "robot", name: "Robot", hint: "Ring modulation buzz" },
+  { id: "underwater", name: "Underwater", hint: "Dark and wobbly" },
+  { id: "megaphone", name: "Megaphone", hint: "Horn-like mid boost" },
+  { id: "whisper", name: "Whisper", hint: "Thin, airy, quiet" },
+  { id: "vinyl", name: "Vinyl", hint: "Warm band limit and hiss" }
+];
+var AUDIO_FX_MAP = Object.fromEntries(
+  AUDIO_FX.map((f) => [f.id, f])
+);
+function seededNoise(seed) {
+  let s = seed >>> 0 || 1;
+  return () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s >>>= 0;
+    return s / 4294967295 * 2 - 1;
+  };
+}
+function makeImpulse(ctx, seconds, decay = 2.6) {
+  const rate = ctx.sampleRate;
+  const len = Math.max(1, Math.round(seconds * rate));
+  const buf = ctx.createBuffer(2, len, rate);
+  const rnd = seededNoise(Math.round(seconds * 1e3) + 7);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buf.getChannelData(ch);
+    const offset = ch * 13;
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const env = Math.pow(1 - t, decay);
+      const early = i < rate * 0.02 ? 0.4 : 1;
+      data[i] = rnd() * env * early * (i === offset ? 1 : 1);
+    }
+  }
+  return buf;
+}
+
 // src/mayocut/utils.ts
 var import_omggif = __toESM(require_omggif(), 1);
 
@@ -899,15 +949,8 @@ function decodeAudioToMono16(blob) {
     }).catch(() => resolve(null)).finally(() => void ctx.close());
   });
 }
-function makeImpulse(ctx, seconds = 1.8, decay = 3) {
-  const rate = ctx.sampleRate;
-  const len = Math.max(1, Math.round(seconds * rate));
-  const buf = ctx.createBuffer(2, len, rate);
-  for (let ch = 0; ch < 2; ch++) {
-    const d = buf.getChannelData(ch);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-  }
-  return buf;
+function makeImpulse2(ctx, seconds = 1.8, decay = 3) {
+  return makeImpulse(ctx, seconds, decay);
 }
 var GIF_MAX_FRAMES = 48;
 var GIF_MAX_SIDE = 400;
@@ -977,7 +1020,7 @@ export {
   importFiles,
   isGifFile,
   kindFromMime,
-  makeImpulse,
+  makeImpulse2 as makeImpulse,
   makeThumb,
   probeGif
 };

@@ -63,6 +63,10 @@ const fakeCtx = {
   measureText: () => ({ width: 40 }), getImageData: (_x, _y, w, h) => ({ data: new Uint8ClampedArray(Math.max(4, w * h * 4)) }),
   putImageData: noop, createPattern: () => null, createLinearGradient: () => ({ addColorStop: noop }),
   setTransform: noop, set filter(_v) {}, get filter() { return "none"; },
+  createRadialGradient: () => ({ addColorStop: noop }),
+  createConicGradient: () => ({ addColorStop: noop }),
+  quadraticCurveTo: noop, bezierCurveTo: noop, ellipse: noop, roundRect: noop,
+  strokeRect: noop, resetTransform: noop, createImageData: (_w, _h) => ({ data: new Uint8ClampedArray(4) }),
   globalAlpha: 1, globalCompositeOperation: "source-over", imageSmoothingEnabled: true,
   textAlign: "center", textBaseline: "middle", font: "16px sans-serif", lineWidth: 1,
   lineJoin: "round", miterLimit: 2, shadowColor: "", shadowBlur: 0, shadowOffsetY: 0,
@@ -185,6 +189,12 @@ if (stickersTool) {
 }
 const text = textOf();
 const html = document.body.innerHTML;
+
+/** Find a button inside the desktop tool rail (two strips share the same labels). */
+const railTab = (label) =>
+  [
+    ...(document.querySelector('[aria-label="Editing tools"]')?.querySelectorAll("button") ?? []),
+  ].find((b) => (b.getAttribute("title") || "") === label);
 
 const checks = [
   ["editor chrome rendered", text.length > 400],
@@ -325,6 +335,44 @@ for (const tb of LIBRARY_TABS) {
   checks.push(["filter cards render preview artwork", previews.length >= 8]);
 }
 
+// --- the notebook list: effects, stock, orientation -------------------------
+{
+  // 3 + 4: the built-in stock set is generated on device, so its names must be
+  // real rendered UI text, not just constants in a module.
+  // The desktop rail opens on Media, and this smoke project is desktop-width.
+  // Clicking anyway is harmless and keeps the check honest if the default changes.
+  const mediaBtn = railTab("Media");
+  mediaBtn?.click();
+  await wait(250);
+  const mediaText = textOf();
+  const mBtn = [...document.querySelectorAll("button")].find((b) => (b.getAttribute("title") || "") === "Media");
+  checks.push(["stock library lists generated assets", /green screen/i.test(mediaText)]);
+  checks.push(["stock library includes a video asset", /light leak/i.test(mediaText)]);
+  const stockTiles = [...document.querySelectorAll("button")].filter((b) =>
+    /chroma green|white — flash|drifts/i.test(b.getAttribute("title") || ""),
+  );
+  checks.push(["stock tiles are clickable cards", stockTiles.length >= 2]);
+
+  // 1 + 2: audio effects live in the Audio tab.
+  const audioBtn = railTab("Audio");
+  audioBtn?.click();
+  await wait(250);
+  const audioText = textOf();
+  checks.push(["audio effects panel is present", /audio effects/i.test(audioText)]);
+  for (const name of ["Echo", "Reverb", "Chipmunk", "Telephone"]) {
+    const hit = [...document.querySelectorAll("button")].some((b) =>
+      new RegExp(name, "i").test(b.textContent || ""),
+    );
+    checks.push([`audio effect offered: ${name}`, hit]);
+  }
+
+  // 6: orientation buttons exist in the transport.
+  const turnBtns = [...document.querySelectorAll("button")].filter((b) =>
+    /turn the whole project/i.test(b.getAttribute("title") || ""),
+  );
+  checks.push(["orientation can be turned both ways", turnBtns.length === 2]);
+}
+
 // Exercise a real filter click and wait for the debounced IndexedDB autosave.
 {
   const mainClip = [...document.querySelectorAll("[title]")].find((el) =>
@@ -333,7 +381,10 @@ for (const tb of LIBRARY_TABS) {
   mainClip?.dispatchEvent(new window.PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", clientX: 10 }));
   window.dispatchEvent(new window.PointerEvent("pointerup", { bubbles: true, pointerType: "mouse", clientX: 10 }));
   await wait(100);
+  railTab("Filters")?.click();
+  await wait(200);
   const filter = [...document.querySelectorAll("button")].find((el) => el.title === "Noir");
+  const titles = [...document.querySelectorAll("button")].map((b) => b.getAttribute("title")).filter(Boolean);
   filter?.click();
   await wait(1600);
   const saved = await new Promise((resolve, reject) => {

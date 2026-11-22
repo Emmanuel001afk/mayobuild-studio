@@ -32,6 +32,16 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/u
 import { importLut, loadAllLuts } from "../luts";
 import { db, requestPersistentStorage } from "../idb";
 import { buildProxy, canBuildProxy } from "../proxy-build";
+import {
+  searchEmoji,
+  searchStock,
+  STOCK_ASSETS,
+  stockById,
+  stockImageBlob,
+  stockThumb,
+  stockVideoBlob,
+} from "../stock";
+import { AUDIO_FX, type AudioFxId } from "../audio-fx";
 import { Engine, FILTER_PRESETS, exportBlocker, mp4Supported, pickMime } from "../engine";
 import {
   ASPECTS,
@@ -119,6 +129,22 @@ const EMPTY_PROJECT: Project = {
  *  (or off-screen), leaving only the editing area visible. Short viewports
  *  always get the mobile layout, with a compact timeline/tab bar in landscape.
  */
+/**
+ * Stock thumbnails, cached.
+ *
+ * Each one is a real canvas render of the asset, so recomputing it on every
+ * render of the media panel would burn a phone's battery for nothing.
+ */
+const stockThumbMemo = new Map<string, string>();
+function stockThumbData(id: string): string {
+  const hit = stockThumbMemo.get(id);
+  if (hit !== undefined) return hit;
+  const asset = STOCK_ASSETS.find((a) => a.id === id);
+  const url = asset ? stockThumb(asset, 112) : "";
+  stockThumbMemo.set(id, url);
+  return url;
+}
+
 /**
  * Build preview proxies for freshly imported footage, one at a time, off the
  * interactive path.
@@ -223,6 +249,8 @@ export function Editor({
   // honest time estimate before a long render starts.
   const [exportPlan, setExportPlan] = useState<ReturnType<Engine["planExport"]> | null>(null);
   const [planning, setPlanning] = useState(false);
+  // which built-in stock asset is being generated right now (null = idle)
+  const [stockBusy, setStockBusy] = useState<string | null>(null);
   const [previewQuality, setPreviewQuality] = useState<"auto" | "540" | "720" | "1080">("auto");
   const devProfile = device(); // memoized; drives export/feature gating
   const [addMode, setAddMode] = useState<"main" | "overlay">("main");
@@ -764,6 +792,112 @@ export function Editor({
     if (ok) toast.success("Frozen frame inserted (3 s)");
     else toast.info("Place the playhead inside a normal-speed video clip to freeze a frame.");
   }, [mutateVoid]);
+
+  /**
+   * Flip the project between landscape and portrait, carrying the framing with
+   * it. The clip positions are rotated rather than dropped, so nothing the user
+   * placed ends up off-canvas.
+   */
+  const rotateProject = useCallback(
+    (dir: "cw" | "ccw") => {
+      mutateVoid((eng) => {
+        const to = eng.rotateOrientation(dir);
+        toast.success(`Turned ${dir === "cw" ? "right" : "left"} — now ${to}`);
+      });
+    },
+    [mutateVoid],
+  );
+
+  /**
+   * Generate a built-in stock asset and drop it on the overlay track.
+   *
+   * Shared by the library grid and the sticker search so the two can never
+   * behave differently — the project is saved, the media is stored, and the
+   * engine is told about it in exactly one place.
+   */
+  const addStockAsset = useCallback(
+    (assetId: string) => {
+      const asset = stockById(assetId);
+      if (!asset) return;
+      setStockBusy(assetId);
+      void (async () => {
+        try {
+          const blob =
+            asset.kind === "video" ? await stockVideoBlob(asset) : await stockImageBlob(asset);
+          if (!blob) {
+            toast.error(
+              asset.kind === "video"
+                ? "This device can't record a generated clip — the still assets still work."
+                : "Could not generate that asset on this device.",
+            );
+            return;
+          }
+          const file = new File([blob], `${asset.id}.${asset.kind === "video" ? "webm" : "png"}`, {
+            type: blob.type || (asset.kind === "video" ? "video/webm" : "image/png"),
+          });
+          const [item] = await importFiles([file]);
+          if (!item) return;
+          await db.putMedia(item, file);
+          const all = await db.listMedia();
+          setMedia(all);
+          engineRef.current?.setMedia(all);
+          const stored = await db.getBlob(item.id);
+          if (stored) engineRef.current?.attachUrl(item.id, URL.createObjectURL(stored));
+          const fresh = all.find((m) => m.id === item.id) ?? item;
+          mutateRet((e) => e.addImageOverlay("t_overlay", fresh, Math.max(0, e.t)));
+          toast.success(`${asset.name} added to the overlay track`);
+        } catch (e) {
+          console.error(e);
+          toast.error("Could not generate that asset on this device.");
+        } finally {
+          setStockBusy(null);
+        }
+      })();
+    },
+    [mutateRet],
+  );
+
+  /**
+   * Apply a one-tap audio effect to whichever clip is selected.
+   *
+   * Shared by the desktop rail and the inspector's library so the two can
+   * never diverge, and so the "select something first" message is written in
+   * one place instead of two.
+   */
+  const applyAudioFx = useCallback(
+    (id: AudioFxId) => {
+      // Works on an audio overlay, a video overlay with sound, or the main
+      // clip — whichever is selected. Saying so beats silently doing nothing.
+      if (!selection) {
+        toast.info("Select a clip on the timeline first");
+        return;
+      }
+      if (selection.lane === "overlay") {
+        const clip = project?.tracks
+          .find((t) => t.id === selection.trackId)
+          ?.clips.find((c) => c.id === selection.id);
+        if (clip && clip.kind !== "text") {
+          mutateVoid((eng) => eng.patchClip(selection.id, { audioFx: id }));
+          toast.success(id === "none" ? "Audio effect removed" : "Audio effect applied");
+          return;
+        }
+        toast.info("That clip is text — audio effects need sound");
+        return;
+      }
+      if (selection.lane === "main") {
+        mutateVoid((eng) => eng.patchClip(selection.id, { audioFx: id }));
+        toast.success(id === "none" ? "Audio effect removed" : "Audio effect applied");
+        return;
+      }
+      const anyAudio = project?.tracks.some((tr) => tr.clips.some((c) => c.kind === "audio"));
+      toast.info(
+        anyAudio
+          ? "Select an audio clip on the timeline, then pick an effect"
+          : "Add audio or a video clip first — effects need something to process",
+      );
+    },
+    [selection, project, mutateVoid],
+  );
 
   /** Aspect change keeps a single undo step and refreshes the canvas. */
   const setAspect = useCallback(
@@ -1457,6 +1591,7 @@ export function Editor({
     [],
   );
   const [stickerCategory, setStickerCategory] = useState("All");
+  const [stickerQuery, setStickerQuery] = useState("");
   const stickerGroups = useMemo(
     () => [
       { name: "All", items: EMOJI_STICKERS },
@@ -2148,8 +2283,8 @@ export function Editor({
                 }}
               />
               <div className="text-[9px] leading-snug text-muted-foreground">
-                Best compatibility: MP4 with H.264 video and AAC audio. Some HEVC/H.265 clips need
-                conversion.
+                Clips this device cannot decode still keep their audio, captions and export — only
+                the picture needs a decoder it doesn't have.
               </div>
               <div className="flex gap-1">
                 <button
@@ -2171,10 +2306,42 @@ export function Editor({
             >
               {media.filter((item) => item.kind !== "audio").map(mediaCard)}
               {media.every((item) => item.kind === "audio") && (
-                <div className="col-span-2 text-[10px] text-muted-foreground text-center py-6">
+                <div className="col-span-3 text-[10px] text-muted-foreground text-center py-2">
                   Import videos or images to start editing
                 </div>
               )}
+              {STOCK_ASSETS.map((a) => (
+                <button
+                  key={a.id}
+                  className="relative group rounded overflow-hidden border border-border hover:border-primary text-left"
+                  title={`${a.hint}${a.kind === "video" ? " (renders a short clip)" : ""}`}
+                  onClick={() => addStockAsset(a.id)}
+                  disabled={stockBusy !== null}
+                >
+                  <div className="relative aspect-square bg-slate-900 flex items-center justify-center">
+                    {stockThumbData(a.id) ? (
+                      <img
+                        src={stockThumbData(a.id)}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    {a.kind === "video" && (
+                      <span className="absolute bottom-0.5 right-0.5 text-[8px] bg-black/70 rounded px-1">
+                        clip
+                      </span>
+                    )}
+                    {stockBusy === a.id && (
+                      <span className="absolute inset-0 flex items-center justify-center text-[9px] bg-black/70">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      </span>
+                    )}
+                  </div>
+                  <div className="px-1 py-0.5 text-[9px] truncate">{a.name}</div>
+                </button>
+              ))}
             </div>
           </>
         )}
@@ -2228,6 +2395,36 @@ export function Editor({
                 </div>
               )}
             </div>
+            <div className="shrink-0 border-t border-border p-2 space-y-1.5 max-h-56 overflow-y-auto">
+              <div className="text-[10px] font-semibold">Audio effects</div>
+              <div className="text-[9px] text-muted-foreground leading-snug">
+                Applied to the selected clip and rendered into the export, not just the preview.
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                {AUDIO_FX.map((f) => {
+                  const active =
+                    selectedMainClip?.audioFx === f.id ||
+                    (selection?.lane === "overlay"
+                      ? project.tracks.flatMap((t) => t.clips).find((c) => c.id === selection.id)
+                          ?.audioFx === f.id
+                      : false);
+                  return (
+                    <button
+                      key={f.id}
+                      className={`text-[9px] rounded border px-1 py-1 leading-none ${
+                        active
+                          ? "border-cyan-400 bg-cyan-400/10"
+                          : "border-border hover:border-white/40"
+                      }`}
+                      title={f.hint}
+                      onClick={() => applyAudioFx(f.id)}
+                    >
+                      {f.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </>
         )}
         {workspaceTab === "text" && (
@@ -2274,6 +2471,64 @@ export function Editor({
         {workspaceTab === "stickers" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2">
             <p className="text-[10px] text-muted-foreground mb-2">Sticker library</p>
+            <input
+              className="w-full mb-2 bg-transparent border border-border rounded px-2 py-1 text-[11px] placeholder:text-muted-foreground"
+              placeholder="Search stickers — try “light”, “fire”, “arrow”"
+              value={stickerQuery}
+              onChange={(e) => setStickerQuery(e.target.value)}
+            />
+            {stickerQuery.trim() ? (
+              <div className="space-y-2">
+                {(() => {
+                  const emojiHits = searchEmoji(stickerQuery).slice(0, 20);
+                  const stockHits = searchStock(stickerQuery).slice(0, 6);
+                  return (
+                    <>
+                      {emojiHits.length > 0 && (
+                        <div className="grid grid-cols-5 gap-1">
+                          {emojiHits.map((emoji) => (
+                            <button
+                              key={emoji}
+                              className="h-8 rounded hover:bg-slate-700 text-lg"
+                              title={`Add ${emoji}`}
+                              onClick={() => addEmoji(emoji)}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {stockHits.map((a) => (
+                        <button
+                          key={a.id}
+                          className="w-full flex items-center gap-2 rounded border border-border hover:border-primary px-1.5 py-1 text-left"
+                          title={a.hint}
+                          onClick={() => addStockAsset(a.id)}
+                        >
+                          {stockThumbData(a.id) ? (
+                            <img
+                              src={stockThumbData(a.id)}
+                              alt=""
+                              className="h-7 w-7 rounded object-cover"
+                            />
+                          ) : null}
+                          <span className="text-[10px] flex-1 truncate">{a.name}</span>
+                          <span className="text-[8px] text-muted-foreground">
+                            {a.kind === "video" ? "clip" : "still"}
+                          </span>
+                        </button>
+                      ))}
+                      {emojiHits.length === 0 && stockHits.length === 0 && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Nothing matches “{stickerQuery}”. The built-in set is generated on your
+                          device, so it is small — but it works offline.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            ) : null}
             <div className="flex gap-1 flex-wrap mb-2" role="group" aria-label="Sticker categories">
               {stickerGroups.map((group) => (
                 <button
@@ -2572,6 +2827,20 @@ export function Editor({
       >
         ❄
       </button>
+      <button
+        className="mb-btn-ghost h-7 px-2 text-[10px]"
+        onClick={() => rotateProject("ccw")}
+        title="Turn the whole project left (landscape ↔ portrait)"
+      >
+        ⟲
+      </button>
+      <button
+        className="mb-btn-ghost h-7 px-2 text-[10px]"
+        onClick={() => rotateProject("cw")}
+        title="Turn the whole project right (landscape ↔ portrait)"
+      >
+        ⟳
+      </button>
       <span className="font-mono tabular-nums">
         {fmtTime(t)} <span className="text-muted-foreground">/ {fmtTime(dur)}</span>
       </span>
@@ -2798,6 +3067,10 @@ export function Editor({
       }}
       onImportFont={(f) => void importFont(f)}
       projectFonts={project.fonts}
+      onSearchStock={(q) =>
+        searchStock(q).map((a) => ({ id: a.id, name: a.name, hint: a.hint, kind: a.kind }))
+      }
+      onAddStock={(id) => void addStockAsset(id)}
     />
   );
   /**
@@ -2971,6 +3244,9 @@ export function Editor({
           eng.setTransitionAll(kind, 0.4);
         })
       }
+      stockBusy={stockBusy}
+      onAddStock={addStockAsset}
+      onApplyAudioFx={applyAudioFx}
       onApplyFilter={(id) => {
         if (selection?.lane !== "main") {
           toast.info("Select a video clip to give it a look");

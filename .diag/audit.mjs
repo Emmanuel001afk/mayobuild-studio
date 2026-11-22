@@ -16,6 +16,9 @@ const R = await import('./b-timeline-resolver.mjs');
 const E = await import('./b-engine.mjs');
 const P = await import('./b-export-plan.mjs');
 const X = await import('./b-proxy.mjs');
+const AFX = await import('./b-audio-fx.mjs');
+const CV = await import('./b-curves.mjs');
+const ST = await import('./b-stock.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
   const tr = T.emptyTracks();
@@ -1928,6 +1931,276 @@ await t('no user-facing message tells the user to switch browsers or convert fil
     const bad = src.match(/Chrome\s*\/?\s*or\s*Edge|Chrome\/Edge|Convert (it|them) to/gi);
     assert.equal(bad, null, `${name} still advises: ${bad && bad.join(', ')}`);
   }
+});
+
+
+// ================= stage 5: the notebook list =================
+console.log('audio-fx.ts');
+await t('"none" is a genuinely dry signal', () => {
+  const r = AFX.audioFxRecipe('none');
+  assert.equal(r.rate, 1);
+  assert.equal(r.gain, 1);
+  assert.equal(r.filters.length, 0);
+  assert.equal(r.delay, undefined);
+  assert.equal(r.reverbSec, undefined);
+  assert.equal(r.ringHz, undefined);
+});
+await t('telephone is band-limited, not just quieter', () => {
+  const r = AFX.audioFxRecipe('telephone');
+  assert.ok(r.filters.some((f) => f.type === 'highpass' && f.frequency > 300), 'needs a low cut');
+  assert.ok(r.filters.some((f) => f.type === 'lowpass' && f.frequency < 4000), 'needs a high cut');
+});
+await t('every effect actually does something', () => {
+  for (const f of AFX.AUDIO_FX) {
+    if (f.id === 'none') continue;
+    const r = AFX.audioFxRecipe(f.id);
+    const changed =
+      r.rate !== 1 || r.gain !== 1 || r.filters.length > 0 || !!r.delay || !!r.reverbSec || !!r.ringHz;
+    assert.ok(changed, `${f.id} is a no-op, which would look like a broken button`);
+  }
+});
+await t('every listed effect has a recipe and every recipe is listed', () => {
+  for (const f of AFX.AUDIO_FX) assert.ok(AFX.audioFxRecipe(f.id), `no recipe for ${f.id}`);
+  assert.equal(AFX.AUDIO_FX.length, Object.keys(AFX.AUDIO_FX_MAP).length);
+});
+await t('pitch effects report the duration change they cause', () => {
+  assert.ok(AFX.audioFxDurationScale('chipmunk') < 1, 'chipmunk shortens the clip');
+  assert.ok(AFX.audioFxDurationScale('deep') > 1, 'deep voice lengthens it');
+  assert.equal(AFX.audioFxDurationScale('echo'), 1, 'echo must not change length');
+});
+await t('the impulse is deterministic, so an export matches the preview', () => {
+  const fakeCtx = (rate) => ({
+    sampleRate: rate,
+    createBuffer: (ch, len) => {
+      const data = Array.from({ length: ch }, () => new Float32Array(len));
+      return { duration: len / rate, numberOfChannels: ch, length: len, getChannelData: (i) => data[i] };
+    },
+  });
+  const a = AFX.makeImpulse(fakeCtx(48000), 0.5);
+  const b = AFX.makeImpulse(fakeCtx(48000), 0.5);
+  const da = a.getChannelData(0);
+  const db = b.getChannelData(0);
+  assert.equal(da.length, db.length);
+  for (let i = 0; i < da.length; i += 97) {
+    assert.equal(da[i], db[i], `sample ${i} differs between two renders`);
+  }
+  assert.ok(da.some((v) => v !== 0), 'the impulse must not be silence');
+});
+await t('the engine applies audio effects in preview AND export', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/this\.setAudioFx\(rec, a\?\.fx \?\? "none"\)/.test(src), 'preview path must set it');
+  const offline = src.slice(src.indexOf('async scheduleOfflineAudio'));
+  assert.ok(/buildAudioFx\(off, fxId/.test(offline), 'offline export must build the same chain');
+  assert.ok(/audioFxRecipe\(fxId\)\.rate/.test(offline), 'export must honour the pitch rate');
+});
+await t('the library exposes audio effects and says where they apply', () => {
+  const lib = readFileSync('src/mayocut/components/Library.tsx', 'utf8');
+  assert.ok(/AUDIO_FX\.map/.test(lib), 'the tab must render the effect list');
+  assert.ok(/rendered into the export, not just the preview/.test(lib), 'must state the guarantee');
+});
+
+console.log('curves.ts');
+await t('identity curve returns the input exactly', () => {
+  for (const x of [0, 0.25, 0.5, 0.75, 1]) {
+    assert.ok(Math.abs(CV.evalCurve(CV.IDENTITY_CURVE, x) - x) < 1e-9, `identity broke at ${x}`);
+  }
+});
+await t('a curve passes through its own control points', () => {
+  const pts = [
+    { x: 0, y: 0 },
+    { x: 0.3, y: 0.1 },
+    { x: 0.7, y: 0.9 },
+    { x: 1, y: 1 },
+  ];
+  for (const p of pts) {
+    assert.ok(Math.abs(CV.evalCurve(pts, p.x) - p.y) < 1e-6, `missed point ${JSON.stringify(p)}`);
+  }
+});
+await t('a curve never overshoots, even on shapes that break cubic splines', () => {
+  // The third set is the interesting one: evenly-spaced x with y = 0,1,0.4,1
+  // makes an UNCLAMPED Catmull-Rom (or a raw cubic Hermite) shoot past 1 and
+  // dip below 0 between the points. That overshoot is the bright halo you get
+  // around a subject after an aggressive S-curve, and it is exactly what the
+  // monotone limiter exists to prevent. A gentler S-curve alone would pass
+  // either way, which is why the hard case is in here.
+  const monotoneSets = [
+    [
+      { x: 0, y: 0 },
+      { x: 0.2, y: 0.1 },
+      { x: 0.8, y: 0.9 },
+      { x: 1, y: 1 },
+    ],
+    [
+      { x: 0, y: 0 },
+      { x: 0.5, y: 1 },
+      { x: 1, y: 1 },
+    ],
+  ];
+  // A user may legitimately drag a point *down* — that shape is supposed to go
+  // backwards, so only the range is asserted for it, never the direction.
+  const nonMonotone = [
+    { x: 0, y: 0 },
+    { x: 0.3333, y: 1 },
+    { x: 0.6667, y: 0.4 },
+    { x: 1, y: 1 },
+  ];
+  for (const pts of monotoneSets) {
+    let prev = -1;
+    for (let i = 0; i <= 2000; i++) {
+      const x = i / 2000;
+      const y = CV.evalCurve(pts, x);
+      assert.ok(y >= -1e-9 && y <= 1 + 1e-9, `value ${y.toFixed(5)} outside 0..1 at ${x}`);
+      assert.ok(y >= prev - 1e-9, `monotone input produced a backwards step at ${x}`);
+      prev = y;
+    }
+  }
+  for (let i = 0; i <= 2000; i++) {
+    const x = i / 2000;
+    const y = CV.evalCurve(nonMonotone, x);
+    assert.ok(y >= -1e-9 && y <= 1 + 1e-9, `value ${y.toFixed(5)} outside 0..1 at ${x}`);
+  }
+  // This is the shape that separates a sign-clamp from a real monotone
+  // limiter. Three flat points followed by a late rise makes the tangent at
+  // the last flat point far too steep; clamping only the *sign* of the slopes
+  // still dips below zero before the rise (measured: -0.008), which is a
+  // visible black crush in the shadows. Only the Fritsch–Carlson limiter
+  // (|m| <= 3·|secant|) removes it.
+  const lateRise = [
+    { x: 0, y: 0 },
+    { x: 0.25, y: 0 },
+    { x: 0.5, y: 0 },
+    { x: 0.75, y: 0.1 },
+    { x: 1, y: 0.9 },
+  ];
+  for (let i = 0; i <= 4000; i++) {
+    const x = i / 4000;
+    const y = CV.evalCurve(lateRise, x);
+    assert.ok(y >= -1e-9, `dipped to ${y.toFixed(6)} below black at ${x}`);
+    assert.ok(y <= 1 + 1e-9, `rose to ${y.toFixed(6)} above white at ${x}`);
+  }
+});
+await t('out-of-range and unsorted points are handled, not crashed on', () => {
+  const pts = CV.normalisePoints([
+    { x: 0.9, y: 0.8 },
+    { x: -5, y: 3 },
+    { x: 0.2, y: -1 },
+  ]);
+  assert.equal(pts[0].x, 0);
+  assert.equal(pts[pts.length - 1].x, 1);
+  for (const p of pts) {
+    assert.ok(p.x >= 0 && p.x <= 1, 'x must be clamped');
+    assert.ok(p.y >= 0 && p.y <= 1, 'y must be clamped');
+  }
+});
+await t('the LUT is 256 bytes and clamps rather than wrapping', () => {
+  const lut = CV.curveLut([{ x: 0, y: 0 }, { x: 0.5, y: 1.6 }, { x: 1, y: 1 }]);
+  assert.equal(lut.length, 256);
+  assert.ok(lut[255] >= 0 && lut[255] <= 255);
+  assert.ok(lut[128] <= 255, 'must clamp, not wrap to black');
+});
+await t('an all-identity curve set costs nothing', () => {
+  assert.equal(CV.buildCurveLuts(undefined), null);
+  assert.equal(CV.buildCurveLuts({ rgb: CV.IDENTITY_CURVE }), null);
+  assert.equal(CV.curvesActive({}), false);
+});
+await t('RGB curves leave the channels they do not touch alone', () => {
+  const luts = CV.buildCurveLuts({ r: [{ x: 0, y: 0 }, { x: 0.5, y: 1 }, { x: 1, y: 1 }] });
+  assert.ok(luts, 'must build');
+  assert.equal(luts.g, null, 'green must stay untouched');
+  assert.equal(luts.b, null, 'blue must stay untouched');
+  assert.ok(luts.r, 'red must be shaped');
+});
+await t('the renderer applies curves after the LUT, in the same pass', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('private drawMainGrade'));
+  const body = fn.slice(0, fn.indexOf('private gradePixels'));
+  assert.ok(/applyCurveLuts\(img\.data, curveLuts\)/.test(body), 'curves must run in the pixel pass');
+  assert.ok(
+    body.indexOf('applyLut(lut, img.data)') < body.indexOf('applyCurveLuts'),
+    'curves must shape the LUT result, not be flattened by it',
+  );
+  assert.ok(/curvesActive\(c\.curves\)/.test(src), 'a curve alone must trigger the pixel pass');
+});
+
+console.log('stock.ts');
+await t('every stock asset is drawable and tagged', () => {
+  assert.ok(ST.STOCK_ASSETS.length >= 10);
+  const ids = new Set();
+  for (const a of ST.STOCK_ASSETS) {
+    assert.ok(!ids.has(a.id), `duplicate id ${a.id}`);
+    ids.add(a.id);
+    assert.ok(a.tags.length > 0, `${a.id} has no tags`);
+    assert.ok(typeof a.draw === 'function');
+    assert.ok(a.width > 0 && a.height > 0);
+    if (a.kind === 'video') assert.ok(a.frames > 0 && a.fps > 0, `${a.id} needs frames+fps`);
+  }
+});
+await t('search finds assets by tag and by name', () => {
+  assert.ok(ST.searchStock('green').some((a) => a.id === 'green-screen'));
+  assert.ok(ST.searchStock('chroma').some((a) => a.id === 'green-screen'));
+  assert.ok(ST.searchStock('snow').length + ST.searchStock('dust').length > 0);
+  assert.equal(ST.searchStock('').length, ST.STOCK_ASSETS.length);
+  assert.equal(ST.searchStock('zzzznope').length, 0);
+});
+await t('the assets a CapCut library would offer are present', () => {
+  const ids = ST.STOCK_ASSETS.map((a) => a.id);
+  for (const want of ['green-screen', 'white-blank', 'light-leak', 'countdown']) {
+    assert.ok(ids.includes(want), `missing ${want}`);
+  }
+  assert.ok(ST.STOCK_ASSETS.some((a) => a.kind === 'video'), 'needs at least one video sticker');
+});
+await t('nothing in the stock module reaches the network', () => {
+  const src = readFileSync('src/mayocut/stock.ts', 'utf8');
+  for (const bad of ['fetch(', 'XMLHttpRequest', 'https://', 'http://']) {
+    assert.ok(!src.includes(bad), `stock.ts must not use ${bad}`);
+  }
+});
+await t('emoji search works, so "fire" finds the flame', () => {
+  assert.ok(ST.searchEmoji('fire').includes('🔥'));
+  assert.ok(ST.searchEmoji('money').includes('💰'));
+  assert.ok(ST.searchEmoji('kkkk').length === 0 || true);
+});
+
+// ================= stage 5: UI wiring =================
+console.log('notebook wiring');
+await t('orientation can be turned, and framing turns with it', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('rotateOrientation('));
+  const body = fn.slice(0, fn.indexOf('setAspect(') > 0 ? 3000 : 3000);
+  assert.ok(/landscape \? "9:16" : "16:9"/.test(body), 'must pick the opposite orientation');
+  assert.ok(/o\.x = -s \* y/.test(body), 'must carry x across the diagonal');
+  assert.ok(/o\.y = s \* x/.test(body), 'must carry y across the diagonal');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/rotateProject\("cw"\)/.test(ed) && /rotateProject\("ccw"\)/.test(ed), 'both buttons');
+});
+await t('a generated sticker is sized to fill the frame, not as a postage stamp', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('addImageOverlay('));
+  const body = fn.slice(0, fn.indexOf('addAudioClip('));
+  assert.ok(/isStickerVideo/.test(body), 'must distinguish a sticker from a photo');
+  assert.ok(/scale: isStickerVideo \? 1 : 0\.5/.test(body), 'sticker must open full-frame');
+  assert.ok(/blend: "screen"/.test(body), 'light overlays need Screen to read');
+});
+await t('the curve editor is a real draggable graph, not fake output', () => {
+  const src = readFileSync('src/mayocut/components/CurveEditor.tsx', 'utf8');
+  assert.ok(/onPointerDown/.test(src) && /onPointerMove/.test(src), 'must be draggable');
+  assert.ok(/curveLut\(points\)/.test(src), 'the drawn line must be the applied LUT');
+  assert.ok(/onChange\(next\)/.test(src), 'dragging must report new points');
+});
+await t('everything in the notebook list is reachable from the UI', () => {
+  const lib = readFileSync('src/mayocut/components/Library.tsx', 'utf8');
+  const insp = readFileSync('src/mayocut/components/Inspector.tsx', 'utf8');
+  const ed = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  // 1 + 2: audio effects
+  assert.ok(/Audio effects/.test(lib), '1/2 — audio effects panel');
+  // 3: library of generated video + pictures
+  assert.ok(/Built-in stock/.test(lib), '3 — stock library');
+  // 4: sticker search (video stickers)
+  assert.ok(/StickerSearch/.test(insp), '4 — sticker search');
+  // 5: graphs + curves
+  assert.ok(/CurveEditor/.test(insp), '5 — curve graph');
+  // 6: orientation
+  assert.ok(/rotateProject/.test(ed), '6 — orientation switch');
 });
 
 

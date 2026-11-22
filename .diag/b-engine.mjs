@@ -271,7 +271,7 @@ var require_omggif = __commonJS({
       }
       return p;
     }
-    function GifReader3(buf) {
+    function GifReader2(buf) {
       var p = 0;
       if (buf[p++] !== 71 || buf[p++] !== 73 || buf[p++] !== 70 || buf[p++] !== 56 || (buf[p++] + 1 & 253) !== 56 || buf[p++] !== 97) {
         throw new Error("Invalid GIF 87a/89a header.");
@@ -584,7 +584,7 @@ var require_omggif = __commonJS({
     }
     try {
       exports.GifWriter = GifWriter2;
-      exports.GifReader = GifReader3;
+      exports.GifReader = GifReader2;
     } catch (e) {
     }
   }
@@ -4153,8 +4153,6 @@ function mainClipGain(clip, span, next, t, hasPrevious = true) {
     if (t >= winStart) {
       v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
     }
-  } else if (span.end - t < 0.3 && clip.transitionIn === "none") {
-    v *= Math.max(0, Math.min(1, (span.end - t) / 0.3));
   }
   return Math.max(0, Math.min(1, v));
 }
@@ -4338,6 +4336,346 @@ function fmtDuration(sec) {
   return `${h} h ${m % 60} min`;
 }
 
+// src/mayocut/audio-fx.ts
+var AUDIO_FX = [
+  { id: "none", name: "None", hint: "Dry signal" },
+  { id: "echo", name: "Echo", hint: "Single slap-back delay" },
+  { id: "reverb", name: "Reverb", hint: "Small room, generated impulse" },
+  { id: "room", name: "Room", hint: "Short tight ambience" },
+  { id: "stadium", name: "Stadium", hint: "Long wide tail" },
+  { id: "cave", name: "Cave", hint: "Very long dark tail" },
+  { id: "chipmunk", name: "Chipmunk", hint: "Higher and faster" },
+  { id: "deep", name: "Deep voice", hint: "Lower and slower" },
+  { id: "telephone", name: "Telephone", hint: "Narrow band, thin" },
+  { id: "radio", name: "Radio", hint: "AM-style band limit + grit" },
+  { id: "lofi", name: "Lo-fi", hint: "Muffled, warm, slightly crushed" },
+  { id: "robot", name: "Robot", hint: "Ring modulation buzz" },
+  { id: "underwater", name: "Underwater", hint: "Dark and wobbly" },
+  { id: "megaphone", name: "Megaphone", hint: "Horn-like mid boost" },
+  { id: "whisper", name: "Whisper", hint: "Thin, airy, quiet" },
+  { id: "vinyl", name: "Vinyl", hint: "Warm band limit and hiss" }
+];
+var AUDIO_FX_MAP = Object.fromEntries(
+  AUDIO_FX.map((f) => [f.id, f])
+);
+function audioFxRecipe(id) {
+  const dry = { rate: 1, gain: 1, filters: [] };
+  switch (id) {
+    case "none":
+      return dry;
+    case "echo":
+      return {
+        rate: 1,
+        gain: 1,
+        filters: [],
+        delay: { time: 0.28, feedback: 0.32, wet: 0.45 }
+      };
+    case "reverb":
+      return {
+        rate: 1,
+        gain: 1,
+        filters: [],
+        reverbSec: 1.4,
+        delay: { time: 0, feedback: 0, wet: 0.5 }
+      };
+    case "room":
+      return {
+        rate: 1,
+        gain: 1,
+        filters: [],
+        reverbSec: 0.55,
+        delay: { time: 0, feedback: 0, wet: 0.4 }
+      };
+    case "stadium":
+      return {
+        rate: 1,
+        gain: 1,
+        filters: [{ type: "highpass", frequency: 180 }],
+        reverbSec: 3.2,
+        delay: { time: 0, feedback: 0, wet: 0.62 }
+      };
+    case "cave":
+      return {
+        rate: 1,
+        gain: 1,
+        filters: [{ type: "lowpass", frequency: 1400 }],
+        reverbSec: 4.5,
+        delay: { time: 0, feedback: 0, wet: 0.7 }
+      };
+    case "chipmunk":
+      return { rate: 1.42, gain: 1, filters: [{ type: "highpass", frequency: 140 }] };
+    case "deep":
+      return { rate: 0.74, gain: 1.05, filters: [{ type: "lowshelf", frequency: 200, gain: 4 }] };
+    case "telephone":
+      return {
+        rate: 1,
+        gain: 1.1,
+        filters: [
+          { type: "highpass", frequency: 420, q: 0.9 },
+          { type: "lowpass", frequency: 3100, q: 0.9 },
+          { type: "peaking", frequency: 1600, gain: 6, q: 1.2 }
+        ]
+      };
+    case "radio":
+      return {
+        rate: 1,
+        gain: 1.1,
+        filters: [
+          { type: "highpass", frequency: 500 },
+          { type: "lowpass", frequency: 2600 },
+          { type: "peaking", frequency: 1200, gain: 5, q: 1 }
+        ]
+      };
+    case "lofi":
+      return {
+        rate: 0.96,
+        gain: 1,
+        filters: [
+          { type: "lowpass", frequency: 5200 },
+          { type: "highpass", frequency: 90 }
+        ],
+        flutterCents: 6
+      };
+    case "robot":
+      return { rate: 1, gain: 0.95, filters: [], ringHz: 58 };
+    case "underwater":
+      return {
+        rate: 0.92,
+        gain: 1,
+        filters: [{ type: "lowpass", frequency: 640, q: 3 }],
+        flutterCents: 14
+      };
+    case "megaphone":
+      return {
+        rate: 1,
+        gain: 1.15,
+        filters: [
+          { type: "highpass", frequency: 700 },
+          { type: "peaking", frequency: 2e3, gain: 9, q: 1.4 },
+          { type: "lowpass", frequency: 4800 }
+        ]
+      };
+    case "whisper":
+      return {
+        rate: 1,
+        gain: 0.7,
+        filters: [
+          { type: "highpass", frequency: 2200 },
+          { type: "lowpass", frequency: 9e3 }
+        ]
+      };
+    case "vinyl":
+      return {
+        rate: 1,
+        gain: 1,
+        filters: [
+          { type: "lowpass", frequency: 7e3 },
+          { type: "peaking", frequency: 300, gain: 3, q: 0.8 }
+        ],
+        flutterCents: 3
+      };
+    default:
+      return dry;
+  }
+}
+function seededNoise(seed) {
+  let s = seed >>> 0 || 1;
+  return () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s >>>= 0;
+    return s / 4294967295 * 2 - 1;
+  };
+}
+function makeImpulse(ctx, seconds, decay = 2.6) {
+  const rate = ctx.sampleRate;
+  const len = Math.max(1, Math.round(seconds * rate));
+  const buf = ctx.createBuffer(2, len, rate);
+  const rnd = seededNoise(Math.round(seconds * 1e3) + 7);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buf.getChannelData(ch);
+    const offset = ch * 13;
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const env = Math.pow(1 - t, decay);
+      const early = i < rate * 0.02 ? 0.4 : 1;
+      data[i] = rnd() * env * early * (i === offset ? 1 : 1);
+    }
+  }
+  return buf;
+}
+function buildAudioFx(ctx, id, opts = {}) {
+  const recipe = audioFxRecipe(id);
+  const nodes = [];
+  let head = ctx.createGain();
+  const inputGain = head;
+  inputGain.gain.value = 1;
+  nodes.push(head);
+  for (const f of recipe.filters) {
+    const bq = ctx.createBiquadFilter();
+    bq.type = f.type;
+    bq.frequency.value = f.frequency;
+    if (f.q !== void 0) bq.Q.value = f.q;
+    if (f.gain !== void 0) bq.gain.value = f.gain;
+    head.connect(bq);
+    head = bq;
+    nodes.push(bq);
+  }
+  if (recipe.ringHz && recipe.ringHz > 0) {
+    const ring = ctx.createGain();
+    ring.gain.value = 0;
+    const osc = ctx.createOscillator();
+    osc.frequency.value = recipe.ringHz;
+    const depth = ctx.createGain();
+    depth.gain.value = 1;
+    osc.connect(depth);
+    depth.connect(ring.gain);
+    osc.start();
+    head.connect(ring);
+    head = ring;
+    nodes.push(ring, osc, depth);
+  }
+  if (recipe.reverbSec && recipe.reverbSec > 0) {
+    const wet = ctx.createGain();
+    wet.gain.value = Math.max(0, Math.min(1, recipe.delay?.wet ?? 0.5));
+    const conv = ctx.createConvolver();
+    conv.buffer = opts.impulse ? opts.impulse(recipe.reverbSec) : makeImpulse(ctx, recipe.reverbSec);
+    head.connect(conv);
+    conv.connect(wet);
+    const mix = ctx.createGain();
+    mix.gain.value = 1;
+    head.connect(mix);
+    wet.connect(mix);
+    head = mix;
+    nodes.push(conv, wet, mix);
+  } else if (recipe.delay && recipe.delay.time > 0) {
+    const d = recipe.delay;
+    const delay = ctx.createDelay(1.5);
+    delay.delayTime.value = Math.max(1e-3, d.time);
+    const fb = ctx.createGain();
+    fb.gain.value = Math.max(0, Math.min(0.95, d.feedback));
+    const wet = ctx.createGain();
+    wet.gain.value = Math.max(0, Math.min(1, d.wet));
+    head.connect(delay);
+    delay.connect(fb);
+    fb.connect(delay);
+    delay.connect(wet);
+    const mix = ctx.createGain();
+    mix.gain.value = 1;
+    head.connect(mix);
+    wet.connect(mix);
+    head = mix;
+    nodes.push(delay, fb, wet, mix);
+  }
+  const out = ctx.createGain();
+  out.gain.value = Math.max(0, Math.min(2, recipe.gain));
+  head.connect(out);
+  nodes.push(out);
+  return { input: inputGain, output: out, rate: recipe.rate, nodes };
+}
+
+// src/mayocut/curves.ts
+function isIdentity(points) {
+  if (!points || points.length < 2) return true;
+  return points.every((p, i) => {
+    const want = i / (points.length - 1);
+    return Math.abs(p.x - want) < 1e-6 && Math.abs(p.y - want) < 1e-6;
+  });
+}
+function curvesActive(c) {
+  if (!c) return false;
+  return !isIdentity(c.rgb) || !isIdentity(c.r) || !isIdentity(c.g) || !isIdentity(c.b);
+}
+function normalisePoints(points) {
+  const clean = points.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)).map((p) => ({ x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) })).sort((a, b) => a.x - b.x);
+  const out = [];
+  for (const p of clean) {
+    if (out.length && Math.abs(out[out.length - 1].x - p.x) < 1e-4) continue;
+    out.push(p);
+  }
+  if (!out.length || out[0].x > 1e-4) out.unshift({ x: 0, y: out[0]?.y ?? 0 });
+  if (out[out.length - 1].x < 1 - 1e-4) out.push({ x: 1, y: out[out.length - 1].y });
+  return out;
+}
+function evalCurve(points, x) {
+  const pts = normalisePoints(points);
+  const n = pts.length;
+  if (n === 0) return x;
+  if (n === 1) return pts[0].y;
+  if (x <= pts[0].x) return pts[0].y;
+  if (x >= pts[n - 1].x) return pts[n - 1].y;
+  let i = 0;
+  while (i < n - 2 && x > pts[i + 1].x) i++;
+  const x0 = pts[i].x;
+  const x1 = pts[i + 1].x;
+  const y0 = pts[i].y;
+  const y1 = pts[i + 1].y;
+  const h = x1 - x0;
+  if (h <= 1e-9) return y1;
+  const d = [];
+  for (let k = 0; k < n - 1; k++) d.push((pts[k + 1].y - pts[k].y) / (pts[k + 1].x - pts[k].x));
+  const m = new Array(n).fill(0);
+  m[0] = d[0];
+  m[n - 1] = d[n - 2];
+  for (let k = 1; k < n - 1; k++) {
+    if (d[k - 1] * d[k] <= 0) m[k] = 0;
+    else m[k] = (d[k - 1] + d[k]) / 2;
+  }
+  for (let k = 0; k < n - 1; k++) {
+    if (Math.abs(d[k]) < 1e-9) {
+      m[k] = 0;
+      m[k + 1] = 0;
+      continue;
+    }
+    const a = m[k] / d[k];
+    const b = m[k + 1] / d[k];
+    const h2 = a * a + b * b;
+    if (h2 > 9) {
+      const t4 = 3 / Math.sqrt(h2);
+      m[k] = t4 * a * d[k];
+      m[k + 1] = t4 * b * d[k];
+    }
+  }
+  const t = (x - x0) / h;
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (2 * t3 - 3 * t2 + 1) * y0 + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * y1 + (t3 - t2) * h * m[i + 1];
+}
+function curveLut(points) {
+  const lut = new Uint8ClampedArray(256);
+  for (let i = 0; i < 256; i++) lut[i] = Math.round(evalCurve(points, i / 255) * 255);
+  return lut;
+}
+function buildCurveLuts(c) {
+  if (!c || !curvesActive(c)) return null;
+  return {
+    rgb: isIdentity(c.rgb) ? null : curveLut(c.rgb),
+    r: isIdentity(c.r) ? null : curveLut(c.r),
+    g: isIdentity(c.g) ? null : curveLut(c.g),
+    b: isIdentity(c.b) ? null : curveLut(c.b)
+  };
+}
+function applyCurveLuts(d, luts) {
+  const { rgb, r, g, b } = luts;
+  for (let i = 0; i < d.length; i += 4) {
+    let R = d[i];
+    let G = d[i + 1];
+    let B = d[i + 2];
+    if (rgb) {
+      R = rgb[R];
+      G = rgb[G];
+      B = rgb[B];
+    }
+    if (r) R = r[R];
+    if (g) G = g[G];
+    if (b) B = b[B];
+    d[i] = R;
+    d[i + 1] = G;
+    d[i + 2] = B;
+  }
+}
+
 // src/mayocut/proxy.ts
 function sourceFor(consumer, originalUrl, proxyUrl) {
   if (consumer === "export") return originalUrl;
@@ -4381,26 +4719,53 @@ function applyLut(table, px) {
   }
 }
 
-// src/mayocut/utils.ts
-var import_omggif = __toESM(require_omggif(), 1);
-function makeImpulse(ctx, seconds = 1.8, decay = 3) {
-  const rate = ctx.sampleRate;
-  const len = Math.max(1, Math.round(seconds * rate));
-  const buf = ctx.createBuffer(2, len, rate);
-  for (let ch = 0; ch < 2; ch++) {
-    const d = buf.getChannelData(ch);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+// src/mayocut/timeline.ts
+function sampleTimeline(project, time) {
+  if (!Number.isFinite(time) || time < 0) throw new RangeError("Invalid timeline time");
+  const spans = mainSpans(project);
+  const main = [];
+  for (let i = 0; i < spans.length; i++) {
+    const span = spans[i];
+    const clip = span.clip;
+    const dur = i > 0 && clip.transitionIn !== "none" ? Math.max(0, clip.transitionDur) : 0;
+    const transitionStart = span.start - dur;
+    if (time < transitionStart || time >= span.end) continue;
+    const transition = dur > 0 && time < span.start ? {
+      kind: clip.transitionIn,
+      progress: Math.max(0, Math.min(1, (time - transitionStart) / dur)),
+      previous: spans[i - 1]
+    } : null;
+    main.push({
+      ...span,
+      sourceTime: mainSrcAt(clip, time - span.start),
+      playbackRate: mainPlaybackRate(clip, time - span.start),
+      gain: mainClipGain(clip, span, spans[i + 1] ?? null, time),
+      transition
+    });
   }
-  return buf;
+  const overlays = [];
+  for (const track of project.tracks) {
+    for (const clip of track.clips) {
+      if (time < clip.start || time >= clip.start + clip.duration) continue;
+      const localTime = time - clip.start;
+      overlays.push({
+        trackId: track.id,
+        clip,
+        localTime,
+        sourceTime: (clip.sourceOffset ?? 0) + localTime * (clip.kind === "video" ? clip.speed ?? 1 : 1)
+      });
+    }
+  }
+  return { time, main, overlays };
 }
 
 // src/mayocut/engine.ts
-var import_omggif2 = __toESM(require_omggif(), 1);
+var import_omggif = __toESM(require_omggif(), 1);
 function decodeGifFrames(blob) {
   return new Promise((resolve) => {
     if (blob.size > 8 * 1024 * 1024) return resolve(null);
     blob.arrayBuffer().then((ab) => {
-      const reader = new import_omggif2.GifReader(new Uint8Array(ab));
+      const reader = new import_omggif.GifReader(new Uint8Array(ab));
       const count = Math.min(48, reader.numFrames());
       const info = reader.frameInfo(0);
       if (!info || count === 0) return resolve(null);
@@ -4720,6 +5085,8 @@ var Engine = class {
   pendingProxies = /* @__PURE__ */ new Map();
   lastPaintAt = 0;
   lastUiTimeAt = 0;
+  buffering = false;
+  onBufferingChange = null;
   audioCtx = null;
   master = null;
   exportDest = null;
@@ -4802,6 +5169,9 @@ var Engine = class {
     this.routeEl(record, media.id);
     return record;
   }
+  hasMediaUrl(mediaId) {
+    return !!this.els.get(mediaId)?.url;
+  }
   /**
    * Register a preview proxy for a media item.
    *
@@ -4858,7 +5228,13 @@ var Engine = class {
         if (rec.videoLoadTimer) window.clearTimeout(rec.videoLoadTimer);
         rec.videoLoadTimer = void 0;
       };
-      video.addEventListener("loadeddata", clearWatchdog);
+      video.addEventListener("loadeddata", () => {
+        clearWatchdog();
+        this.draw();
+      });
+      video.addEventListener("seeked", () => {
+        if (!this.playing) this.draw();
+      });
       video.addEventListener("canplay", clearWatchdog);
       video.addEventListener("error", () => {
         clearWatchdog();
@@ -4934,9 +5310,11 @@ var Engine = class {
     if (rec.videoLoadRequested) return;
     rec.videoLoadRequested = true;
     video.preload = "auto";
-    try {
-      video.load();
-    } catch {
+    if (video.networkState === HTMLMediaElement.NETWORK_EMPTY) {
+      try {
+        video.load();
+      } catch {
+      }
     }
     rec.videoLoadTimer = window.setTimeout(() => {
       rec.videoLoadTimer = void 0;
@@ -5015,7 +5393,7 @@ var Engine = class {
     const feedback = ctx.createGain();
     feedback.gain.value = 0;
     const conv = ctx.createConvolver();
-    if (!this.impulse) this.impulse = makeImpulse(ctx);
+    if (!this.impulse) this.impulse = makeImpulse(ctx, 1.8);
     conv.buffer = this.impulse;
     const convWet = ctx.createGain();
     convWet.gain.value = 0;
@@ -5035,7 +5413,11 @@ var Engine = class {
     inNode.connect(low);
     low.connect(mid);
     mid.connect(high);
-    high.connect(out);
+    const fxIn = ctx.createGain();
+    const fxOut = ctx.createGain();
+    high.connect(fxIn);
+    fxIn.connect(fxOut);
+    fxOut.connect(out);
     inNode.connect(delay);
     delay.connect(delayWet);
     delayWet.connect(out);
@@ -5055,7 +5437,10 @@ var Engine = class {
       convWet,
       low,
       mid,
-      high
+      high,
+      fxIn,
+      fxOut,
+      fxNodes: []
     };
     if (rec) {
       if (rec.sourceNode) {
@@ -5090,8 +5475,8 @@ var Engine = class {
     }
   }
   /**
-   * Decode a source segment [inS, outS) of a media's embedded audio to mono.
-   * Powers "Extract audio" (CapCut-style detach). On-device limit: sources
+   * Decode a source segment [inS, outS), preserving its channels and also
+   * producing a mono waveform for analysis. Powers "Extract audio". Limit: sources
    * up to ~15 min (decodeAudioData needs the whole file in memory).
    */
   async extractAudioWav(mediaId, inS, outS) {
@@ -5110,7 +5495,8 @@ var Engine = class {
       const d = buf.getChannelData(c);
       for (let i = 0; i < n; i++) out[i] += d[start + i] / chs;
     }
-    return { samples: out, sampleRate: sr, duration: n / sr };
+    const channels = Array.from({ length: chs }, (_, c) => buf.getChannelData(c).slice(start, end));
+    return { samples: out, channels, sampleRate: sr, duration: n / sr };
   }
   /** On-device memory guard for full-file audio decode. */
   audioBufferAllowed(mediaId) {
@@ -5129,14 +5515,15 @@ var Engine = class {
         if (t >= c.start && t < c.start + c.duration) {
           active.set(c.mediaId, {
             reverb: clamp012(c.fx?.reverb ?? 0),
-            echo: clamp012(c.fx?.echo ?? 0)
+            echo: clamp012(c.fx?.echo ?? 0),
+            fx: c.audioFx ?? "none"
           });
         }
       }
     for (const s2 of mainSpans(this.project)) {
       if (!s2.clip.voice) continue;
       if (t >= s2.start && t < s2.end) {
-        const cur = active.get(s2.clip.mediaId) ?? { reverb: 0, echo: 0 };
+        const cur = active.get(s2.clip.mediaId) ?? { reverb: 0, echo: 0, fx: "none" };
         active.set(s2.clip.mediaId, {
           ...cur,
           low: s2.clip.voice.low,
@@ -5160,7 +5547,55 @@ var Engine = class {
       fx.mid.gain.value = (a?.mid ?? 0) * 10;
       fx.high.gain.value = (a?.high ?? 0) * 12;
       fx.in.gain.value = 1 - 0.35 * Math.max(reverb, echo);
+      this.setAudioFx(rec, a?.fx ?? "none");
     }
+  }
+  /**
+   * Put a one-tap audio effect on a media's chain, or clear it.
+   *
+   * Rebuilds only when the effect actually changes: a rebuild disconnects and
+   * reconnects nodes, which would click if it happened on every frame.
+   */
+  setAudioFx(rec, id) {
+    const ctx = this.audioCtx;
+    const fx = rec.fx;
+    if (!ctx || !fx || !fx.fxIn || !fx.fxOut) return;
+    if (fx.fxId === id) return;
+    for (const n of fx.fxNodes) {
+      try {
+        n.disconnect();
+      } catch {
+      }
+      const maybe = n;
+      if (typeof maybe.stop === "function") {
+        try {
+          maybe.stop();
+        } catch {
+        }
+      }
+    }
+    fx.fxNodes = [];
+    try {
+      fx.fxIn.disconnect();
+    } catch {
+    }
+    if (id === "none") {
+      fx.fxIn.connect(fx.fxOut);
+      fx.fxId = id;
+      return;
+    }
+    const chain = buildAudioFx(ctx, id, {
+      impulse: (sec) => {
+        if (!this.impulse || Math.abs(this.impulse.duration - sec) > 0.05) {
+          this.impulse = makeImpulse(ctx, sec);
+        }
+        return this.impulse;
+      }
+    });
+    fx.fxIn.connect(chain.input);
+    chain.output.connect(fx.fxOut);
+    fx.fxNodes = [chain.input, chain.output, ...chain.nodes];
+    fx.fxId = id;
   }
   /** Pitch-shifted playback of a short overlay audio clip via buffer source. */
   async startBufferSource(c, local) {
@@ -5178,7 +5613,7 @@ var Engine = class {
     src.detune.value = Math.max(-1200, Math.min(1200, (c.fx?.pitch ?? 0) * 100));
     src.connect(rec.fx.in);
     rec.bufSrc = src;
-    rec.bufClip = { clipId: c.id, start: c.start };
+    rec.bufClip = { clipId: c.id, start: local };
     rec.bufStartWall = this.audioCtx.currentTime;
     try {
       src.start(0, Math.min(local, buf.duration));
@@ -5223,9 +5658,72 @@ var Engine = class {
     for (const e of els) if (!e.clipReverse) void e.el.play().catch(() => void 0);
     this.loopRaf();
   }
+  setBuffering(value) {
+    if (this.buffering === value) return;
+    this.buffering = value;
+    this.onBufferingChange?.(value);
+  }
+  /** Only active visual sources can hold up the timeline. */
+  videosAwaitingFrame() {
+    const ids = /* @__PURE__ */ new Set();
+    const sample = sampleTimeline(this.project, this.t);
+    for (const s of sample.main) ids.add(s.clip.mediaId);
+    for (const layer of sample.overlays) {
+      const track = this.project.tracks.find((tr) => tr.id === layer.trackId);
+      if (!track?.hidden && layer.clip.kind === "video" && layer.clip.mediaId)
+        ids.add(layer.clip.mediaId);
+    }
+    const pending = [];
+    for (const id of ids) {
+      const rec = this.els.get(id);
+      if (!rec || rec.videoBroken || !(rec.el instanceof HTMLVideoElement)) continue;
+      this.requestVideoLoad(id);
+      if (rec.el.readyState < 2 || rec.el.seeking) pending.push(rec.el);
+    }
+    return pending;
+  }
+  /** Wait for the first frame before starting a real-time export recording. */
+  async prepareExportFrame() {
+    this.syncElements(true);
+    const pending = this.videosAwaitingFrame();
+    await Promise.all(
+      pending.map(
+        (el) => new Promise((resolve, reject) => {
+          const cleanup = () => {
+            clearTimeout(timer);
+            el.removeEventListener("loadeddata", check);
+            el.removeEventListener("seeked", check);
+            el.removeEventListener("error", fail);
+          };
+          const check = () => {
+            if (el.readyState >= 2 && !el.seeking) {
+              cleanup();
+              resolve();
+            }
+          };
+          const fail = () => {
+            cleanup();
+            reject(new Error("Video could not be decoded for export"));
+          };
+          el.addEventListener("loadeddata", check);
+          el.addEventListener("seeked", check);
+          el.addEventListener("error", fail);
+          const timer = setTimeout(() => {
+            cleanup();
+            reject(
+              new Error("Video took too long to load for export. Try a smaller H.264 video.")
+            );
+          }, 15e3);
+          check();
+        })
+      )
+    );
+    this.draw();
+  }
   pause() {
     if (!this.playing) return;
     this.playing = false;
+    this.setBuffering(false);
     cancelAnimationFrame(this.raf);
     for (const rec of this.els.values()) {
       const e = rec.el;
@@ -5358,24 +5856,27 @@ var Engine = class {
     cancelAnimationFrame(this.raf);
     const step = (now) => {
       if (!this.playing) return;
-      const rawDt = (now - this.lastNow) / 1e3;
-      const dur = this.duration();
-      const holdVerdict = this.visibleLayerReady(this.t);
-      if (holdVerdict === "loading") {
-        this.stallMs = (this.stallMs ?? 0) + rawDt * 1e3;
-        if (this.stallMs < 900) {
-          if (now - this.lastPaintAt >= 1e3 / 30) {
-            this.lastPaintAt = now;
-            this.draw();
+      if (!this.exporting && this.videosAwaitingFrame().length) {
+        if (!this.buffering) {
+          this.setBuffering(true);
+          for (const [id, rec] of this.els) {
+            const el = rec.el;
+            if (el && !el.paused) el.pause?.();
+            if (rec.audioFallback && !rec.audioFallback.paused) rec.audioFallback.pause();
+            if (rec.bufSrc) this.stopBufSource(id);
           }
-          this.lastNow = now;
-          this.raf = requestAnimationFrame(step);
-          return;
         }
-      } else {
-        this.stallMs = 0;
+        this.lastNow = now;
+        this.raf = requestAnimationFrame(step);
+        return;
       }
-      const dt = Math.min(0.25, rawDt);
+      if (this.buffering) {
+        this.setBuffering(false);
+        this.syncElements(true);
+        this.lastNow = now;
+      }
+      const dt = Math.min(0.25, (now - this.lastNow) / 1e3);
+      const dur = this.duration();
       this.lastNow = now;
       this.t += dt;
       if (this.t >= dur) {
@@ -5412,7 +5913,7 @@ var Engine = class {
   /**
    * Glue media elements to the timeline clock.
    * Reverse clips: the element is held paused and re-seeked to the mirrored
-   * source position every frame (its audio is muted — see effectiveVolume).
+   * source position every frame (its audio is muted by the timeline gain).
    */
   syncElements(hard) {
     if (this.audioCtx) {
@@ -5423,11 +5924,11 @@ var Engine = class {
     }
     const spans = mainSpans(this.project);
     const t = this.t;
+    const next = spans.find((s) => s.start > t && s.start - t <= 3);
+    if (next) this.requestVideoLoad(next.clip.mediaId);
     const activeIds = /* @__PURE__ */ new Set();
-    for (const s of spans) {
-      const winStart = s.clip.transitionIn !== "none" ? s.start - s.clip.transitionDur : s.start;
-      const active = t >= winStart && t < s.end + 1e-3;
-      if (!active) continue;
+    const sample = sampleTimeline(this.project, t);
+    for (const s of sample.main) {
       activeIds.add(s.clip.mediaId);
       const rec = this.els.get(s.clip.mediaId);
       const el = this.audioEl(s.clip.mediaId);
@@ -5446,7 +5947,7 @@ var Engine = class {
           if (!el.paused) el.pause();
           continue;
         }
-        const local = mainSrcAt(s.clip, t - s.start);
+        const local = s.sourceTime;
         if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
           try {
             el.currentTime = Math.max(0, local);
@@ -5454,11 +5955,14 @@ var Engine = class {
           }
         }
         {
-          const rate = mainPlaybackRate(s.clip, t - s.start);
+          const rate = s.playbackRate;
           const safe = Number.isFinite(rate) && rate > 0 ? Math.min(16, rate) : 1;
           if (el.playbackRate !== safe) el.playbackRate = safe;
         }
-        el.volume = this.effectiveVolume(s.clip, t, s);
+        el.volume = Math.max(
+          0,
+          Math.min(1, s.gain * (this.mainTrackAudible() ? this.duckFactor(t) : 0))
+        );
         if (s.clip.reverse) {
           if (!el.paused) el.pause();
         } else if (this.playing && el.paused) {
@@ -5468,56 +5972,56 @@ var Engine = class {
         el.pause();
       }
     }
-    for (const tr of this.project.tracks) {
-      for (const c of tr.clips) {
-        if (c.kind === "audio") {
-          if (!c.mediaId) continue;
-          if (t >= c.start && t < c.start + c.duration) {
-            activeIds.add(c.mediaId);
-            const el = this.audioEl(c.mediaId);
-            if (!el) continue;
-            const local = t - c.start;
-            const pitch = c.fx?.pitch ?? 0;
-            const media = this.media.get(c.mediaId);
-            const md = media?.duration ?? 0;
-            const canPitch = pitch !== 0 && this.playing && !!media && md > 0 && md <= 120 && !!this.audioCtx;
-            if (canPitch) {
-              el.volume = 0;
-              if (!el.paused) el.pause();
-              void this.startBufferSource(c, local);
-            } else {
-              this.stopBufSource(c.mediaId);
-              if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-                try {
-                  el.currentTime = Math.max(0, local);
-                } catch {
-                }
+    for (const layer of sample.overlays) {
+      const c = layer.clip;
+      if (c.kind === "audio") {
+        if (!c.mediaId) continue;
+        if (t >= c.start && t < c.start + c.duration) {
+          activeIds.add(c.mediaId);
+          const el = this.audioEl(c.mediaId);
+          if (!el) continue;
+          const local = layer.sourceTime;
+          const pitch = c.fx?.pitch ?? 0;
+          const media = this.media.get(c.mediaId);
+          const md = media?.duration ?? 0;
+          const canPitch = pitch !== 0 && this.playing && !!media && md > 0 && md <= 120 && !!this.audioCtx;
+          if (canPitch) {
+            el.volume = 0;
+            if (!el.paused) el.pause();
+            void this.startBufferSource(c, local);
+          } else {
+            this.stopBufSource(c.mediaId);
+            if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
+              try {
+                el.currentTime = Math.max(0, local);
+              } catch {
               }
-              el.volume = this.overlayAudioVolume(c, t) * this.duckFactor(t);
-              if (this.playing && el.paused) void el.play().catch(() => void 0);
             }
+            if (el.playbackRate !== 1) el.playbackRate = 1;
+            el.volume = this.overlayAudioVolume(c, t) * this.duckFactor(t);
+            if (this.playing && el.paused) void el.play().catch(() => void 0);
           }
-        } else if (c.kind === "video" && c.mediaId) {
-          if (t >= c.start && t < c.start + c.duration) {
-            activeIds.add(c.mediaId);
-            const el = this.audioEl(c.mediaId);
-            if (el instanceof HTMLVideoElement) {
-              this.requestVideoLoad(c.mediaId);
-              let local = (t - c.start) * (c.speed ?? 1);
-              if (c.loop) {
-                const md = this.media.get(c.mediaId)?.duration ?? 0;
-                if (md > 0.05) local %= md;
-              }
-              if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-                try {
-                  el.currentTime = Math.max(0, local);
-                } catch {
-                }
-              }
-              el.playbackRate = 1;
-              el.volume = 0;
-              if (this.playing && el.paused) void el.play().catch(() => void 0);
+        }
+      } else if (c.kind === "video" && c.mediaId) {
+        if (t >= c.start && t < c.start + c.duration) {
+          activeIds.add(c.mediaId);
+          const el = this.audioEl(c.mediaId);
+          if (el instanceof HTMLVideoElement) {
+            this.requestVideoLoad(c.mediaId);
+            let local = layer.sourceTime;
+            if (c.loop) {
+              const md = this.media.get(c.mediaId)?.duration ?? 0;
+              if (md > 0.05) local %= md;
             }
+            if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
+              try {
+                el.currentTime = Math.max(0, local);
+              } catch {
+              }
+            }
+            el.playbackRate = Math.max(0.05, Math.min(16, c.speed ?? 1));
+            el.volume = 0;
+            if (this.playing && el.paused) void el.play().catch(() => void 0);
           }
         }
       }
@@ -5531,28 +6035,23 @@ var Engine = class {
     }
   }
   activeAudioEls() {
-    const spans = mainSpans(this.project);
     const out = [];
-    const t = this.t;
-    for (const s of spans) {
-      const winStart = s.clip.transitionIn !== "none" ? s.start - s.clip.transitionDur : s.start;
-      if (t >= winStart && t < s.end) {
-        if (s.clip.freeze) continue;
-        const rec = this.els.get(s.clip.mediaId);
-        if (rec?.videoBroken && rec.el instanceof HTMLVideoElement) {
-          rec.el.muted = true;
-          if (!rec.el.paused) rec.el.pause();
-        }
-        const el = this.audioEl(s.clip.mediaId);
-        if (el) out.push({ el, clipReverse: !!s.clip.reverse });
+    const sample = sampleTimeline(this.project, this.t);
+    for (const s of sample.main) {
+      if (s.clip.freeze) continue;
+      const rec = this.els.get(s.clip.mediaId);
+      if (rec?.videoBroken && rec.el instanceof HTMLVideoElement) {
+        rec.el.muted = true;
+        if (!rec.el.paused) rec.el.pause();
       }
+      const el = this.audioEl(s.clip.mediaId);
+      if (el) out.push({ el, clipReverse: !!s.clip.reverse });
     }
-    for (const tr of this.project.tracks)
-      for (const c of tr.clips)
-        if ((c.kind === "audio" || c.kind === "video") && c.mediaId && t >= c.start && t < c.start + c.duration) {
-          const el = this.audioEl(c.mediaId);
-          if (el) out.push({ el, clipReverse: c.kind === "video" });
-        }
+    for (const { clip } of sample.overlays) {
+      if (clip.kind !== "audio" && clip.kind !== "video" || !clip.mediaId) continue;
+      const el = this.audioEl(clip.mediaId);
+      if (el) out.push({ el, clipReverse: clip.kind === "video" });
+    }
     return out;
   }
   effectiveVolume(clip, t, s) {
@@ -5666,6 +6165,38 @@ var Engine = class {
       this.draw();
     }
   }
+  /**
+   * Rotate the whole project between landscape and portrait.
+   *
+   * CapCut's version of this asks which direction to turn and then *flips the
+   * picture*, not just the canvas: every main clip and every positioned overlay
+   * gets mirrored across the diagonal, so a clip that was framed top-left in
+   * landscape is still top-left after the turn. Rotating the canvas alone would
+   * silently re-frame everything the user had placed.
+   */
+  rotateOrientation(dir = "cw") {
+    const a = ASPECTS[this.project.aspect];
+    const landscape = a.w > a.h;
+    const target = landscape ? "9:16" : "16:9";
+    const s = dir === "cw" ? 1 : -1;
+    const turn = (o) => {
+      const x = o.x ?? 0;
+      const y = o.y ?? 0;
+      o.x = -s * y;
+      o.y = s * x;
+      if (o.rot !== void 0) o.rot = (o.rot + 90 * s) % 360;
+    };
+    for (const tr of this.project.tracks) for (const c of tr.clips) if (c.kind !== "text") turn(c);
+    this.project.aspect = target;
+    this.bump();
+    if (this.canvas) {
+      const b = ASPECTS[target];
+      this.canvas.width = b.w;
+      this.canvas.height = b.h;
+      this.draw();
+    }
+    return target;
+  }
   /** Base animation values for a clip (used when a param has no keyframes). */
   animBase(clip) {
     if ("kind" in clip && (clip.kind === "image" || clip.kind === "video")) {
@@ -5776,84 +6307,83 @@ var Engine = class {
       }
     }
     this.overlayRects.length = 0;
-    for (const tr of this.project.tracks) {
-      if (tr.hidden) continue;
-      for (const c of tr.clips) {
-        if (t < c.start || t >= c.start + c.duration) continue;
-        const localT = t - c.start;
-        const rampIn = Math.min(1, localT / 0.4);
-        const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
-        const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
-        const anim = animAt(c.keyframes, this.animBase(c), localT);
-        if (c.kind === "text")
-          this.drawText(ctx, c, W, H, fadeAlpha * clamp012(anim.opacity), localT, c.duration, anim);
-        if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
-          const rec = this.els.get(c.mediaId);
-          if (!rec || !rec.url) continue;
-          let src = rec.el;
-          if (rec.gif && rec.gif.frames.length > 0) {
-            src = rec.gif.frames[Math.floor(localT * rec.gif.fps) % rec.gif.frames.length];
+    for (const layer of comp.overlays) {
+      const tr = this.project.tracks.find((track) => track.id === layer.trackId);
+      if (tr?.hidden) continue;
+      const c = layer.clip;
+      const localT = layer.local;
+      const rampIn = Math.min(1, localT / 0.4);
+      const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
+      const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
+      const anim = animAt(c.keyframes, this.animBase(c), localT);
+      if (c.kind === "text")
+        this.drawText(ctx, c, W, H, fadeAlpha * clamp012(anim.opacity), localT, c.duration, anim);
+      if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
+        const rec = this.els.get(c.mediaId);
+        if (!rec || !rec.url) continue;
+        let src = rec.el;
+        if (rec.gif && rec.gif.frames.length > 0) {
+          src = rec.gif.frames[Math.floor(localT * rec.gif.fps) % rec.gif.frames.length];
+        }
+        const sw = srcW(src);
+        const sh = srcH(src);
+        if (!sw || !sh) continue;
+        const size = Math.max(1, anim.scale * W);
+        const ar = sw / sh;
+        const cx = W / 2 + anim.x * (W / 2);
+        const cy = H / 2 + anim.y * (H / 2);
+        this.overlayRects.push({
+          clipId: c.id,
+          x: cx - size / 2,
+          y: cy - size / (2 * ar),
+          w: size,
+          h: size / ar
+        });
+        const rot = anim.rotation * Math.PI / 180;
+        const alpha = clamp012(fadeAlpha * anim.opacity);
+        const blend = c.blend && c.blend !== "normal" ? c.blend : null;
+        if (c.chroma && sw * sh > 4) {
+          this.drawChroma(
+            ctx,
+            rec.el,
+            c,
+            size,
+            ar,
+            alpha,
+            cx,
+            cy,
+            rot,
+            blend
+          );
+        } else {
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          if (blend) ctx.globalCompositeOperation = blend;
+          if (c.filter && c.filter !== "none") {
+            ctx.filter = presetCss(c.filter) || "none";
           }
-          const sw = srcW(src);
-          const sh = srcH(src);
-          if (!sw || !sh) continue;
-          const size = Math.max(1, anim.scale * W);
-          const ar = sw / sh;
-          const cx = W / 2 + anim.x * (W / 2);
-          const cy = H / 2 + anim.y * (H / 2);
-          this.overlayRects.push({
-            clipId: c.id,
-            x: cx - size / 2,
-            y: cy - size / (2 * ar),
-            w: size,
-            h: size / ar
-          });
-          const rot = anim.rotation * Math.PI / 180;
-          const alpha = clamp012(fadeAlpha * anim.opacity);
-          const blend = c.blend && c.blend !== "normal" ? c.blend : null;
-          if (c.chroma && sw * sh > 4) {
-            this.drawChroma(
-              ctx,
-              rec.el,
-              c,
-              size,
-              ar,
-              alpha,
-              cx,
-              cy,
-              rot,
-              blend
-            );
+          ctx.translate(cx, cy);
+          ctx.rotate(rot);
+          if (c.flipX || c.flipY) ctx.scale(c.flipX ? -1 : 1, c.flipY ? -1 : 1);
+          if (c.mask && c.mask !== "none") this.applyMask(ctx, c.mask, size, ar);
+          const dw = size;
+          const dh = size / ar;
+          if (c.fit === "contain" || c.fit === "blur") {
+            const k2 = Math.min(dw / sw, dh / sh);
+            const iw = sw * k2;
+            const ih = sh * k2;
+            if (c.fit === "blur") {
+              const s2 = Math.max(dw / sw, dh / sh) * 1.1;
+              const bx = ctx.filter;
+              ctx.filter = `${bx ? bx + " " : ""}blur(${Math.max(2, dh * 0.06).toFixed(1)}px)`;
+              ctx.drawImage(src, (dw - sw * s2) / 2, (dh - sh * s2) / 2, sw * s2, sh * s2);
+              ctx.filter = bx || "none";
+            }
+            ctx.drawImage(src, -iw / 2, -ih / 2, iw, ih);
           } else {
-            ctx.save();
-            ctx.globalAlpha = alpha;
-            if (blend) ctx.globalCompositeOperation = blend;
-            if (c.filter && c.filter !== "none") {
-              ctx.filter = presetCss(c.filter) || "none";
-            }
-            ctx.translate(cx, cy);
-            ctx.rotate(rot);
-            if (c.flipX || c.flipY) ctx.scale(c.flipX ? -1 : 1, c.flipY ? -1 : 1);
-            if (c.mask && c.mask !== "none") this.applyMask(ctx, c.mask, size, ar);
-            const dw = size;
-            const dh = size / ar;
-            if (c.fit === "contain" || c.fit === "blur") {
-              const k2 = Math.min(dw / sw, dh / sh);
-              const iw = sw * k2;
-              const ih = sh * k2;
-              if (c.fit === "blur") {
-                const s2 = Math.max(dw / sw, dh / sh) * 1.1;
-                const bx = ctx.filter;
-                ctx.filter = `${bx ? bx + " " : ""}blur(${Math.max(2, dh * 0.06).toFixed(1)}px)`;
-                ctx.drawImage(src, (dw - sw * s2) / 2, (dh - sh * s2) / 2, sw * s2, sh * s2);
-                ctx.filter = bx || "none";
-              }
-              ctx.drawImage(src, -iw / 2, -ih / 2, iw, ih);
-            } else {
-              ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
-            }
-            ctx.restore();
+            ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
           }
+          ctx.restore();
         }
       }
     }
@@ -6059,7 +6589,7 @@ var Engine = class {
     }
     const lut = c.lut ? this.lutCache.get(c.lut) : null;
     const glitching = eff === "glitch" && this.glitchWindow(localT);
-    const needsGrade = this.gradeActive(c.adjust);
+    const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves);
     if (lut || needsGrade) {
       this.drawMainGrade(ctx, el, W, H, c, lut ?? null);
     } else if (glitching || eff === "vhs") {
@@ -6404,6 +6934,8 @@ var Engine = class {
     const img = octx.getImageData(0, 0, W2, H2);
     this.gradePixels(img.data, W2, H2, c.adjust);
     if (lut) applyLut(lut, img.data);
+    const curveLuts = buildCurveLuts(c.curves);
+    if (curveLuts) applyCurveLuts(img.data, curveLuts);
     octx.putImageData(img, 0, 0);
     ctx.drawImage(off, 0, 0, W, H);
   }
@@ -6555,10 +7087,6 @@ var Engine = class {
       ctx.fillStyle = "rgba(255,255,255,0.4)";
       ctx.font = `500 ${Math.round(H * 0.016)}px system-ui, sans-serif`;
       ctx.fillText(m?.name ?? "", W / 2, H / 2 + H * 0.085);
-    } else {
-      ctx.fillStyle = "rgba(255,255,255,0.45)";
-      ctx.font = `500 ${Math.round(H * 0.022)}px system-ui, sans-serif`;
-      ctx.fillText(m ? m.name : "media loading\u2026", W / 2, H / 2);
     }
     ctx.restore();
   }
@@ -6864,6 +7392,12 @@ var Engine = class {
     }
   }
   // ------------------------------------------------------------- mutations
+  /** Notify the editor after a direct model edit and update playback immediately. */
+  commitChange() {
+    this.bump();
+    this.syncElements(false);
+    this.draw();
+  }
   bump() {
     this.version++;
     this.onVersion?.();
@@ -6881,8 +7415,8 @@ var Engine = class {
       adjust: { ...DEFAULT_ADJUST },
       volume: 1,
       muted: false,
-      transitionIn: "crossfade",
-      transitionDur: 0.5
+      transitionIn: "none",
+      transitionDur: 0
     };
     if (!atEnd) this.project.main.unshift(clip);
     else this.project.main.push(clip);
@@ -6899,6 +7433,7 @@ var Engine = class {
       const s = spans[i];
       if (t <= s.start || t >= s.end) continue;
       const c = s.clip;
+      if (c.freeze || c.rampTo != null || (c.curve?.length ?? 0) >= 2) return false;
       const srcAt = mainSrcAt(c, t - s.start);
       if (srcAt - c.in < 0.08 || c.out - srcAt < 0.08) return false;
       const local = t - s.start;
@@ -6907,17 +7442,17 @@ var Engine = class {
       const a = {
         ...c,
         id: uid("mc"),
-        in: c.in,
-        out: srcAt,
-        transitionIn: "none",
-        transitionDur: 0,
+        in: c.reverse ? srcAt : c.in,
+        out: c.reverse ? c.out : srcAt,
         keyframes: kfsA && kfsA.length ? kfsA : void 0
       };
       const b = {
         ...c,
         id: uid("mc"),
-        in: srcAt,
-        out: c.out,
+        in: c.reverse ? c.in : srcAt,
+        out: c.reverse ? srcAt : c.out,
+        transitionIn: "none",
+        transitionDur: 0,
         keyframes: kfsB && kfsB.length ? kfsB : void 0
       };
       this.project.main.splice(i, 1, a, b);
@@ -6990,6 +7525,7 @@ var Engine = class {
   }
   addImageOverlay(trackId, media, start) {
     const track = this.project.tracks.find((t) => t.id === trackId) ?? this.project.tracks[1];
+    const isStickerVideo = media.kind === "video" && (media.duration ?? 0) <= 6;
     const clip = {
       id: uid("ic"),
       kind: media.kind === "video" ? "video" : "image",
@@ -6997,11 +7533,12 @@ var Engine = class {
       start: Math.max(0, start),
       // full source length: silently cutting to 6s truncated real footage
       duration: media.kind === "video" ? Math.max(0.5, media.duration ?? 6) : 3,
-      scale: 0.5,
+      scale: isStickerVideo ? 1 : 0.5,
       x: 0,
-      y: -0.4,
+      y: isStickerVideo ? 0 : -0.4,
       rot: 0,
-      chroma: false
+      chroma: false,
+      ...isStickerVideo ? { blend: "screen", loop: true } : {}
     };
     track.clips.push(clip);
     this.bump();
@@ -7088,7 +7625,7 @@ var Engine = class {
       this.bump();
       return f2;
     }
-    this.splitAt(t);
+    if (!this.splitAt(t)) return false;
     const spans2 = mainSpans(this.project);
     const idx2 = spans2.findIndex((sp) => t >= sp.start - 1e-3 && t < sp.start + 0.02);
     const f = freezeClipFrom(c, srcAt, hold);
@@ -7299,63 +7836,82 @@ var Engine = class {
     this.exportScale = opts.scale ?? 1;
     this.exporting = true;
     this.previewMaxSide = 0;
-    this.useOriginalSources();
-    for (const [id, rec2] of this.els) {
-      if (rec2.el instanceof HTMLImageElement) continue;
-      const target = rec2.videoBroken ? rec2.audioFallback : rec2.el;
-      if (!target) continue;
-      if (!rec2.sourceNode) {
-        rec2.sourceNode = this.audioCtx.createMediaElementSource(target);
-        rec2.sourceNode.connect(this.ensureFx(id).in);
-      }
-    }
     const wasLoop = this.loop;
+    let canvasStream;
+    let recorder;
     this.loop = false;
-    const wasPlaying = this.playing;
-    if (wasPlaying) this.pause();
-    this.seek(0);
-    this.draw();
-    const canvasStream = this.canvas.captureStream(opts.fps);
-    const mixed = new MediaStream([
-      ...canvasStream.getVideoTracks(),
-      ...this.exportDest.stream.getAudioTracks()
-    ]);
-    const rec = new MediaRecorder(mixed, {
-      mimeType: picked.mime,
-      videoBitsPerSecond: opts.videoBitsPerSecond,
-      audioBitsPerSecond: opts.audioBitsPerSecond
-    });
-    const chunks = [];
-    rec.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-    const stopped = new Promise((resolve) => {
-      rec.onstop = () => resolve(new Blob(chunks, { type: picked.mime }));
-    });
-    const dur = this.duration();
     try {
+      this.useOriginalSources();
+      for (const [id, rec2] of this.els) {
+        if (rec2.el instanceof HTMLImageElement) continue;
+        const target = rec2.videoBroken ? rec2.audioFallback : rec2.el;
+        if (!target) continue;
+        if (!rec2.sourceNode) {
+          rec2.sourceNode = this.audioCtx.createMediaElementSource(target);
+          rec2.sourceNode.connect(this.ensureFx(id).in);
+        }
+      }
+      if (this.playing) this.pause();
+      this.seek(0);
+      await this.prepareExportFrame();
+      canvasStream = this.canvas.captureStream(opts.fps);
+      const mixed = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...this.exportDest.stream.getAudioTracks()
+      ]);
+      recorder = new MediaRecorder(mixed, {
+        mimeType: picked.mime,
+        videoBitsPerSecond: opts.videoBitsPerSecond,
+        audioBitsPerSecond: opts.audioBitsPerSecond
+      });
+      const rec = recorder;
+      const chunks = [];
+      let recorderError;
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      const stopped = new Promise((resolve) => {
+        rec.onstop = () => resolve();
+        rec.onerror = (event) => {
+          recorderError = event.error ?? new Error("Video recording failed");
+          resolve();
+        };
+      });
+      const dur = this.duration();
       rec.start(500);
       await this.play();
       const deadline = performance.now() + (dur + 15) * 1e3;
-      while (rec.state === "recording") {
+      while (rec.state === "recording" && !recorderError) {
         onProgress(Math.min(1, this.t / Math.max(1e-3, dur)));
-        if (performance.now() > deadline) break;
+        if (!this.playing) break;
+        if (performance.now() > deadline)
+          throw new Error("Export timed out before playback finished");
         await new Promise((r) => setTimeout(r, 200));
       }
-    } finally {
-      if (!wasPlaying) this.pause();
-      this.loop = wasLoop;
+      const endedEarly = this.t < dur - 0.03;
       if (rec.state !== "inactive") rec.stop();
+      await stopped;
+      if (recorderError) throw recorderError;
+      if (endedEarly) throw new Error("Recording stopped before the timeline finished");
+      const blob = new Blob(chunks, { type: picked.mime });
+      if (blob.size < 1e3) throw new Error("Export produced no data \u2014 try again");
+      onProgress(1);
+      return blob;
+    } finally {
+      this.pause();
+      if (recorder && recorder.state !== "inactive") {
+        try {
+          recorder.stop();
+        } catch {
+        }
+      }
+      canvasStream?.getTracks().forEach((track) => track.stop());
+      this.loop = wasLoop;
       this.exportScale = prevScale;
       this.exporting = false;
       this.previewMaxSide = prevCap;
       this.usePreviewSources();
     }
-    const blob = await stopped;
-    canvasStream.getTracks().forEach((t) => t.stop());
-    if (blob.size < 1e3) throw new Error("Export produced no data \u2014 try again");
-    onProgress(1);
-    return blob;
   }
   // ------------------------------------------- export (MP4, frame-stepped)
   //
@@ -7798,7 +8354,7 @@ var Engine = class {
     }
   }
   // ------------------------------------------------------------- export (MP4)
-  // WebCodecs: H.264 video + Opus audio, muxed by mp4-muxer. Real-time render
+  // WebCodecs: H.264 video + AAC audio, muxed by mp4-muxer. Real-time render
   // (the timeline plays once while frames are captured), same as the WebM path.
   async exportMP4(opts, onProgress) {
     if (!this.canvas) throw new Error("Canvas not ready");
@@ -7806,7 +8362,9 @@ var Engine = class {
       throw new Error(
         "This browser cannot encode H.264 through WebCodecs, so MP4 is unavailable here. WebM works and can be exported frame-accurately."
       );
-    const { w: W, h: H } = ASPECTS[this.project.aspect];
+    const baseSize = ASPECTS[this.project.aspect];
+    const W = baseSize.w * (opts.scale ?? 1);
+    const H = baseSize.h * (opts.scale ?? 1);
     const codec = await pickAvcCodec(W, H, opts.fps, opts.videoBitsPerSecond);
     if (!codec)
       throw new Error("H.264 encoding is not supported at this resolution here \u2014 use WebM.");
@@ -7832,8 +8390,17 @@ var Engine = class {
     this.exportScale = opts.scale ?? 1;
     this.exporting = true;
     this.previewMaxSide = 0;
-    this.useOriginalSources();
+    const wasLoop = this.loop;
+    const wasPlaying = this.playing;
+    this.loop = false;
+    let videoEncoder;
+    let audioEncoder;
+    let streamSource;
+    let sp;
+    let silence;
+    let audioArmed = false;
     try {
+      this.useOriginalSources();
       for (const [id, rec] of this.els) {
         if (rec.el instanceof HTMLImageElement) continue;
         const target2 = rec.videoBroken ? rec.audioFallback : rec.el;
@@ -7843,6 +8410,9 @@ var Engine = class {
           rec.sourceNode.connect(this.ensureFx(id).in);
         }
       }
+      if (wasPlaying) this.pause();
+      this.seek(0);
+      await this.prepareExportFrame();
       const target = new ArrayBufferTarget();
       const muxer = new Muxer({
         target,
@@ -7852,7 +8422,7 @@ var Engine = class {
       });
       let encError = null;
       const W_ = window;
-      const videoEncoder = new W_.VideoEncoder({
+      videoEncoder = new W_.VideoEncoder({
         output: (chunk, meta) => {
           try {
             muxer.addVideoChunk(chunk, meta);
@@ -7871,7 +8441,7 @@ var Engine = class {
         framerate: opts.fps,
         bitrate: opts.videoBitsPerSecond
       });
-      const audioEncoder = new W_.AudioEncoder({
+      audioEncoder = new W_.AudioEncoder({
         output: (chunk, meta) => {
           try {
             muxer.addAudioChunk(chunk, meta);
@@ -7884,14 +8454,13 @@ var Engine = class {
         }
       });
       await audioEncoder.configure(aacConfig);
-      const streamSource = this.audioCtx.createMediaStreamSource(this.exportDest.stream);
-      const sp = this.audioCtx.createScriptProcessor(4096, 2, 2);
-      const silence = this.audioCtx.createGain();
+      streamSource = this.audioCtx.createMediaStreamSource(this.exportDest.stream);
+      sp = this.audioCtx.createScriptProcessor(4096, 2, 2);
+      silence = this.audioCtx.createGain();
       silence.gain.value = 0;
       streamSource.connect(sp);
       sp.connect(silence);
       silence.connect(this.audioCtx.destination);
-      let audioArmed = false;
       let audioT0 = null;
       sp.onaudioprocess = (e) => {
         if (!audioArmed || encError) return;
@@ -7901,45 +8470,49 @@ var Engine = class {
         try {
           const ch0 = ab.getChannelData(0);
           const ch1 = ab.numberOfChannels > 1 ? ab.getChannelData(1) : ch0;
+          const samples = new Float32Array(ab.length * 2);
+          samples.set(ch0, 0);
+          samples.set(ch1, ab.length);
           const ad = new AudioData({
             format: "f32-planar",
             sampleRate: ab.sampleRate,
             numberOfFrames: ab.length,
             numberOfChannels: 2,
             timestamp: Math.max(0, Math.round(rawTs - audioT0)),
-            // f32-planar: one Float32Array per channel (lib.dom types lag the spec)
-            data: [ch0.slice(0), ch1.slice(0)]
+            data: samples
           });
-          audioEncoder.encode(ad);
+          try {
+            audioEncoder.encode(ad);
+          } finally {
+            ad.close();
+          }
         } catch (er) {
           encError = encError ?? er;
         }
       };
-      const wasLoop = this.loop;
-      this.loop = false;
-      const wasPlaying = this.playing;
-      if (wasPlaying) this.pause();
-      this.seek(0);
-      this.draw();
       const dur = this.duration();
       const frameDurUs = 1e6 / opts.fps;
       const keyEvery = opts.fps * 2;
       let frame = 0;
       let lastKeyFrame = -keyEvery;
-      void this.play();
+      await this.play();
       audioArmed = true;
       const deadline = performance.now() + (dur + 15) * 1e3;
       while (this.playing || this.t < dur - 0.03) {
         const targetT = frame / opts.fps;
         if (this.t >= targetT - 2e-3) {
           try {
+            frame = Math.max(frame, Math.floor(this.t * opts.fps));
             const wantKey = frame - lastKeyFrame >= keyEvery;
             const vf = new W_.VideoFrame(this.canvas, {
               timestamp: Math.round(frame * frameDurUs)
             });
-            videoEncoder.encode(vf, { keyFrame: wantKey });
+            try {
+              videoEncoder.encode(vf, { keyFrame: wantKey });
+            } finally {
+              vf.close();
+            }
             if (wantKey) lastKeyFrame = frame;
-            vf.close();
             frame++;
           } catch (e) {
             encError = encError ?? e;
@@ -7947,45 +8520,15 @@ var Engine = class {
         }
         onProgress(Math.min(1, this.t / Math.max(1e-3, dur)));
         if (encError) break;
-        if (performance.now() > deadline) break;
+        if (performance.now() > deadline) {
+          encError = new Error("MP4 export timed out before the timeline finished");
+          break;
+        }
         await new Promise((r) => setTimeout(r, 16));
       }
-      if (!encError && this.t >= dur - 0.05) {
-        try {
-          const vf = new W_.VideoFrame(this.canvas, { timestamp: Math.round(frame * frameDurUs) });
-          videoEncoder.encode(vf);
-          vf.close();
-          frame++;
-        } catch {
-        }
-      }
-      try {
-        await videoEncoder.flush();
-        await audioEncoder.flush();
-      } finally {
-        audioArmed = false;
-        sp.onaudioprocess = null;
-        try {
-          sp.disconnect();
-          silence.disconnect();
-          streamSource.disconnect();
-        } catch {
-        }
-        try {
-          audioEncoder.close();
-        } catch {
-        }
-        try {
-          videoEncoder.close();
-        } catch {
-        }
-        if (!wasPlaying) this.pause();
-        this.loop = wasLoop;
-        this.exportScale = prevScale;
-        this.exporting = false;
-        this.previewMaxSide = prevCap;
-        this.usePreviewSources();
-      }
+      audioArmed = false;
+      await videoEncoder.flush();
+      await audioEncoder.flush();
       if (encError)
         throw encError instanceof Error ? encError : new Error("Encoder failed: " + String(encError));
       muxer.finalize();
@@ -7994,9 +8537,26 @@ var Engine = class {
       onProgress(1);
       return blob;
     } finally {
+      audioArmed = false;
+      if (sp) sp.onaudioprocess = null;
+      for (const node of [sp, silence, streamSource]) {
+        try {
+          node?.disconnect();
+        } catch {
+        }
+      }
+      for (const encoder of [audioEncoder, videoEncoder]) {
+        try {
+          if (encoder && encoder.state !== "closed") encoder.close();
+        } catch {
+        }
+      }
+      this.pause();
+      this.loop = wasLoop;
       this.exportScale = prevScale;
       this.exporting = false;
       this.previewMaxSide = prevCap;
+      this.usePreviewSources();
     }
   }
   // ------------------------------------------------------------- export (GIF)
@@ -8038,7 +8598,7 @@ var Engine = class {
       }
       const frames = Math.max(1, Math.floor(dur * fps));
       const buf = new Uint8Array(W * H * frames + 1024 * 1024);
-      const writer = new import_omggif2.GifWriter(buf, W, H, { loop: 0, palette });
+      const writer = new import_omggif.GifWriter(buf, W, H, { loop: 0, palette });
       const off = document.createElement("canvas");
       off.width = W;
       off.height = H;
@@ -8127,13 +8687,21 @@ var Engine = class {
     const master = off.createGain();
     master.gain.value = this.project.masterGain ?? 1;
     master.connect(dest);
-    const rampedSource = (buf, startAt, srcOffset, length, rate, gainAt) => {
+    const rampedSource = (buf, startAt, srcOffset, length, rate, gainAt, fxId = "none") => {
       const src = off.createBufferSource();
       src.buffer = buf;
       src.playbackRate.value = Math.max(0.05, rate);
       const g = off.createGain();
       src.connect(g);
-      g.connect(master);
+      const fx = fxId !== "none" ? buildAudioFx(off, fxId, {
+        impulse: (sec) => makeImpulse(off, sec)
+      }) : null;
+      if (fx) {
+        g.connect(fx.input);
+        fx.output.connect(master);
+      } else {
+        g.connect(master);
+      }
       let last2 = Math.max(0, Math.min(2, gainAt(0)));
       g.gain.setValueAtTime(last2, startAt);
       for (let dt = step; dt < length; dt += step) {
@@ -8155,13 +8723,15 @@ var Engine = class {
         const idx = spans.indexOf(s);
         const nextSpan = idx + 1 < spans.length ? spans[idx + 1] : null;
         const clipDur = Math.max(0.01, s.end - s.start);
+        const mainFx = s.clip.audioFx ?? "none";
         rampedSource(
           buf,
           Math.max(from, s.start),
           s.clip.in,
           clipDur,
-          s.clip.speed,
-          (dt) => mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0)
+          s.clip.speed * audioFxRecipe(mainFx).rate,
+          (dt) => mainClipGain(s.clip, s, nextSpan, s.start + dt, idx > 0),
+          mainFx
         );
       }
     }
@@ -8181,12 +8751,22 @@ var Engine = class {
         const vol = Math.max(0, Math.min(1, c.volume ?? 1));
         const fadeIn = Math.max(0, c.fadeIn ?? 0.15);
         const fadeOut = Math.max(0, c.fadeOut ?? 0.15);
-        rampedSource(buf, Math.max(from, start), 0, end - start, 1, (dt) => {
-          let v = vol;
-          if (fadeIn > 0) v *= Math.min(1, dt / fadeIn);
-          if (fadeOut > 0) v *= Math.min(1, (end - start - dt) / fadeOut);
-          return v * trackGain;
-        });
+        const fxId = c.audioFx ?? "none";
+        const fxRate = audioFxRecipe(fxId).rate;
+        rampedSource(
+          buf,
+          Math.max(from, start),
+          0,
+          end - start,
+          fxRate,
+          (dt) => {
+            let v = vol;
+            if (fadeIn > 0) v *= Math.min(1, dt / fadeIn);
+            if (fadeOut > 0) v *= Math.min(1, (end - start - dt) / fadeOut);
+            return v * trackGain;
+          },
+          fxId
+        );
       }
     }
   }
@@ -8227,8 +8807,8 @@ var Engine = class {
       g.connect(master);
       const start = Math.max(0, at);
       const offset = Math.max(0, srcStart);
-      const dur2 = Math.min(length, buf.duration - offset);
-      if (dur2 > 1e-3) s2.start(start, offset, dur2 / rate);
+      const dur2 = Math.min(length * rate, buf.duration - offset);
+      if (dur2 > 1e-3) s2.start(start, offset, dur2);
     };
     const spans = mainSpans(this.project);
     const hasSolo = this.project.tracks.some((t) => t.solo);
@@ -8252,7 +8832,7 @@ var Engine = class {
         if (c.kind !== "audio" || !c.mediaId || trackGain === 0) continue;
         const buf = await decode(c.mediaId);
         if (!buf) continue;
-        schedule(buf, c.start, 0, c.duration, (c.volume ?? 1) * trackGain);
+        schedule(buf, c.start, c.sourceOffset ?? 0, c.duration, (c.volume ?? 1) * trackGain);
       }
     }
     onProgress(0.96);

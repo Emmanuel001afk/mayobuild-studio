@@ -1,4 +1,6 @@
 // MayoCut — core data model.
+import type { AudioFxId } from "./audio-fx";
+import type { CurveSet } from "./curves";
 // Everything lives on the user's device (IndexedDB). No database, no backend.
 
 export type MediaKind = "video" | "image" | "audio";
@@ -300,6 +302,8 @@ export interface MainClip {
   lut?: string; // LUT name (built-in or imported .cube)
   effect?: EffectId; // motion effect
   adjust: FilterAdjust;
+  /** tone / RGB curves, applied after the grade in the same pixel pass */
+  curves?: CurveSet;
   volume: number; // 0..1
   muted: boolean;
   transitionIn: TransitionKind;
@@ -311,6 +315,8 @@ export interface MainClip {
   flipY?: boolean;
   /** equaliser-style voice shaping, dB-ish -1..1 offsets */
   voice?: VoiceShape;
+  /** one-tap audio effect (echo, chipmunk, cave…), applied in preview AND export */
+  audioFx?: AudioFxId;
 }
 
 export type FrameFit = "cover" | "contain" | "blur";
@@ -747,6 +753,8 @@ export interface OverlayClip {
   fadeIn?: number; // seconds (default 0.15)
   fadeOut?: number; // seconds (default 0.15)
   fx?: AudioFx; // reverb / echo / pitch
+  /** one-tap audio effect (telephone, chipmunk, cave…), applied in preview AND export */
+  audioFx?: AudioFxId;
   filter?: string;
   keyframes?: Keyframe[];
 }
