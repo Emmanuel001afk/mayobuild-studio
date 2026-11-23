@@ -596,6 +596,71 @@ arithmetic — the real fix is a WebGL shader, which is not written yet and is
 therefore not claimed. On a low tier device the preview buffer is 960px rather
 than 1280px, which cuts all of these by roughly 44%.
 
+### Stalls, and work that survives a close (Stage 3h)
+
+Two reports, and neither was what it looked like.
+
+**"Video hangs and glitches when there is an effect or an overlay on top."** The
+play loop asked, every frame, whether any active video was "not ready", and
+stopped the clock while it waited. It counted two normal states as not-ready:
+re-buffering mid-clip (`readyState < 2`, which a healthy clip does constantly)
+and a seek in flight. The loop also *issues* seeks, to correct drift — so under
+load it would ask for a seek, see the seek, and pause everything, which on some
+browsers cancels the pending seek. The condition then never cleared: a freeze at
+the start, a resumed second, another freeze, and the clip dying near the end.
+
+The rule now tells three genuinely different situations apart, in `playback.ts`:
+
+| what is happening | before | now |
+| --- | --- | --- |
+| the clip has never produced a frame | hold | hold — nothing can be shown |
+| a seek we asked for is in flight | hold | hold, bounded by a 600 ms timer |
+| a warm clip dips to `readyState < 2` | hold **everything** | keep playing: a stale frame for a few ms beats a freeze |
+| the only clip cannot decode at all | hold | never hold; its audio still plays |
+
+The transport only hard-stops when *every* element on screen is cold, and the
+playing drift tolerance went from 0.2 s to 0.3 s so ordinary jitter stops
+triggering a corrective seek on every frame. Broken and cold are both tested.
+
+**"Everything I imported disappears when I close the platform."** Not one bug —
+three, all producing an empty library:
+
+1. *Writes were never checked.* `await db.putMedia(...)` rejecting meant the item
+   was not stored, but the failure was logged and a success toast shown anyway.
+   An import now waits for each write, counts what actually landed, and names the
+   files that did not.
+2. *The last edits were never written.* Autosave debounced 1200 ms from the last
+   edit, and the only flush was a React effect cleanup — which does not run when
+   a phone kills a backgrounded tab. There is now a 6 s ceiling (so a long drag
+   still reaches the disk), and `pagehide` / `visibilitychange` flush for the case
+   React never gets to run. A failed save raises a banner with a retry and an
+   export button, instead of vanishing into a console.
+3. *Nothing told the user the store was at risk.* A refused `persist()` grant and
+   a quota exhausted mid-import both looked like success. Large imports are now
+   checked against free space *before* the copy starts, and the reason a write
+   failed is translated into something actionable (`persistence.ts`).
+
+Worth stating plainly: **these fixes make loss unlikely and visible, not
+impossible.** Browser storage is still best-effort and Safari in particular can
+evict it. The honest answer for important work remains "export the pack".
+
+**The player itself.** Sampling the timeline costs 0.014 ms, so the player was
+not short of speed — it was short of control. It gained a frame grid (24/25/30/
+50/60) with one-frame step buttons and arrow-key stepping on that grid, a
+transport rate (0.25×/0.5×/1×/2×, also on J/K/L) because 0.25× is how you hear
+whether a cut lands on the beat, and an in/out loop region (I/O) so a single
+second can be watched until it is right.
+
+**How this was verified, and one near miss.** Six mutations were introduced into
+the new rules and the audit caught all six. The close-path test needed three
+attempts: the first waited seven seconds and read the store (that tests the
+debounce, not closing), the second clicked a control that did not exist and was
+rescued by a mount-time autosave. Both **passed with the fix deleted**. The
+version that shipped asserts the control exists, asserts that *no timer had
+saved yet* when the page closed, and reads back before the debounce could fire —
+it fails when the `pagehide` listener is removed, which is the only property
+worth having in such a test.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert

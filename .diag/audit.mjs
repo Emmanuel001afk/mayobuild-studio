@@ -23,6 +23,8 @@ const HSL = await import('./b-hsl.mjs');
 const SK = await import('./b-sticker-kinds.mjs');
 const SB = await import('./b-stickers.mjs');
 const FT = await import('./b-fonts.mjs');
+const PS = await import('./b-persistence.mjs');
+const PB = await import('./b-playback.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
   const tr = T.emptyTracks();
@@ -2615,6 +2617,117 @@ await t('the HSL pass stays fast enough to preview in real time', () => {
   HSL.applyHsl(d, set);
   const ms = Date.now() - t0;
   assert.ok(ms < 120, `HSL took ${ms} ms for one 720p frame (budget 120 ms)`);
+});
+
+
+// ================= stage 9: playback stalls + work that survives a close ======
+console.log('playback.ts — when may the transport advance?');
+await t('a clip that has never loaded holds playback', () => {
+  assert.equal(PB.blocksPlayback({ readyState: 0, seeking: false, warm: false, videoBroken: false }), true);
+  assert.equal(PB.blocksPlayback({ readyState: 1, seeking: false, warm: false, videoBroken: false }), true);
+});
+await t('a WARM clip that dips below readyState 2 does NOT stop the show', () => {
+  // This is the freeze: re-buffering mid-clip used to pause every element,
+  // which interrupted the seek that would have cleared the condition.
+  assert.equal(PB.blocksPlayback({ readyState: 0, seeking: false, warm: true, videoBroken: false }), false);
+  assert.equal(PB.blocksPlayback({ readyState: 1, seeking: false, warm: true, videoBroken: false }), false);
+});
+await t('a seek in flight DOES hold, because the frame is coming', () => {
+  assert.equal(PB.blocksPlayback({ readyState: 3, seeking: true, warm: true, videoBroken: false }), true);
+});
+await t('a clip that can never decode never holds the transport', () => {
+  const s = { readyState: 0, seeking: true, warm: false, videoBroken: true };
+  assert.equal(PB.blocksPlayback(s), false, 'an undecodable video must not freeze the timeline');
+  assert.equal(PB.shouldHardStop([s]), false);
+});
+await t('the transport only hard-stops when EVERYTHING on screen is cold', () => {
+  const cold = { readyState: 0, seeking: false, warm: false, videoBroken: false };
+  const ready = { readyState: 4, seeking: false, warm: true, videoBroken: false };
+  const refilling = { readyState: 1, seeking: false, warm: true, videoBroken: false };
+  assert.equal(PB.shouldHardStop([cold]), true);
+  assert.equal(PB.shouldHardStop([cold, ready]), false, 'one live picture means keep playing');
+  assert.equal(PB.shouldHardStop([cold, refilling]), false, 'a refilling warm clip is still on screen');
+  assert.equal(PB.shouldHardStop([]), false);
+  assert.equal(PB.shouldHardStop([{ ...cold, videoBroken: true }]), false);
+});
+await t('the overlay case that caused the report: main ready + overlay refilling', () => {
+  // A main clip that is fine, plus an overlay video that drops out for a moment.
+  // Before: both paused, picture froze. Now: playback continues.
+  const main = { readyState: 4, seeking: false, warm: true, videoBroken: false };
+  const overlay = { readyState: 1, seeking: false, warm: true, videoBroken: false };
+  assert.equal(PB.blocksPlayback(overlay), false);
+  assert.equal(PB.shouldHardStop([main, overlay]), false);
+});
+
+console.log('persistence.ts — saving that can be trusted');
+await t('autosave waits for the debounce, then writes', () => {
+  assert.equal(PS.shouldAutosave(1000, null, 0, 0), false, 'nothing dirty = nothing to write');
+  // last edit at 100, so the debounce elapses at 100 + 1200
+  assert.equal(PS.shouldAutosave(1300, 100, 100, 0), true);
+  assert.equal(PS.shouldAutosave(500, 100, 100, 0), false, 'too soon after the edit');
+  // a late timer firing after the write already landed must not write again
+  assert.equal(PS.shouldAutosave(5000, 100, 100, 1400), false, 'already on disk');
+});
+await t('autosave force-writes during a long drag that never pauses', () => {
+  // The debounce alone never fires while a user is dragging a slider, so the
+  // 6 s ceiling is the only thing that gets that work onto the disk.
+  const started = 0;
+  // Edited continuously: lastEdit keeps moving, so the debounce never elapses.
+  const stillDragging = PS.AUTOSAVE_MAX_WAIT_MS - 1;
+  assert.equal(PS.shouldAutosave(stillDragging, started, stillDragging, 0), false);
+  assert.equal(PS.shouldAutosave(PS.AUTOSAVE_MAX_WAIT_MS, started, stillDragging, 0), true);
+});
+await t('a full device is reported as a quota problem with a remedy', () => {
+  const e = new Error("The quota has been exceeded.");
+  e.name = "QuotaExceededError";
+  const f = PS.describeWriteFailure(e);
+  assert.equal(f.kind, 'quota');
+  assert.match(f.advice, /out of space|free/i);
+  assert.ok(f.advice.length > 20, 'advice must be actionable, not a bare error');
+});
+await t('a blocked or aborted write is named, not lumped together', () => {
+  const blocked = new Error("database connection is closing");
+  blocked.name = "InvalidStateError";
+  assert.equal(PS.describeWriteFailure(blocked).kind, 'blocked');
+  const aborted = new Error("The transaction was aborted");
+  aborted.name = "AbortError";
+  assert.equal(PS.describeWriteFailure(aborted).kind, 'aborted');
+  assert.equal(PS.describeWriteFailure(new Error("???")).kind, 'unknown');
+  // every kind must carry advice: a silent failure is the bug being fixed
+  for (const e of [blocked, aborted, new Error("???")]) {
+    assert.ok(PS.describeWriteFailure(e).advice.length > 10);
+  }
+});
+await t('an import larger than the free space is refused BEFORE copying', () => {
+  const tight = { used: 950, quota: 1000 }; // 50 bytes free
+  // A 90% margin: 50 free means ~45 usable, so 60 is refused and 40 is allowed.
+  assert.equal(PS.fitsBudget(60, tight).ok, false);
+  assert.match(PS.fitsBudget(60, tight).reason, /free/i);
+  assert.equal(PS.fitsBudget(40, tight).ok, true);
+  assert.equal(PS.fitsBudget(46, tight).ok, false, 'just over the usable margin');
+  // no estimate available = do not block the user
+  assert.equal(PS.fitsBudget(1e9, null).ok, true);
+});
+await t('saved-vs-actual comparison catches a write that did not land', () => {
+  const p = { id: 'p1', updatedAt: 5, main: [1], tracks: [1, 2] };
+  assert.equal(PS.sameProject(p, { ...p }), true);
+  assert.equal(PS.sameProject(p, { ...p, updatedAt: 6 }), false, 'a stale copy is not saved');
+  assert.equal(PS.sameProject(p, { ...p, main: [] }), false, 'a truncated copy is not saved');
+  assert.equal(PS.sameProject(p, undefined), false);
+});
+await t('byte formatting is honest at every scale', () => {
+  assert.equal(PS.fmtBytes(0), '0 B');
+  assert.equal(PS.fmtBytes(999), '999 B');
+  assert.equal(PS.fmtBytes(1024), '1.0 KB');
+  assert.equal(PS.fmtBytes(1024 * 1024 * 1.5), '1.5 MB');
+  assert.match(PS.fmtBytes(3 * 1024 ** 3), /GB/);
+  assert.equal(PS.fmtBytes(-5), '0 B');
+});
+await t('storage advice never claims durability the browser did not grant', () => {
+  assert.match(PS.storageAdvice(true), /won't be cleared/);
+  const notGranted = PS.storageAdvice(false);
+  assert.ok(!/won't be cleared/.test(notGranted), 'must not promise persistence that was refused');
+  assert.match(notGranted, /backup|open once more/i);
 });
 
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);

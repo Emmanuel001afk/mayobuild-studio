@@ -4945,6 +4945,20 @@ function applyHsl(d, set) {
   }
 }
 
+// src/mayocut/playback.ts
+var HAVE_CURRENT_DATA = 2;
+function blocksPlayback(s) {
+  if (s.videoBroken) return false;
+  if (s.seeking) return true;
+  if (s.readyState >= HAVE_CURRENT_DATA) return false;
+  return !s.warm;
+}
+function shouldHardStop(states) {
+  const relevant = states.filter((s) => !s.videoBroken);
+  if (relevant.length === 0) return false;
+  return relevant.every((s) => s.readyState < HAVE_CURRENT_DATA && !s.warm);
+}
+
 // src/mayocut/proxy.ts
 function sourceFor(consumer, originalUrl, proxyUrl) {
   if (consumer === "export") return originalUrl;
@@ -5343,6 +5357,10 @@ var Engine = class {
   ctx = null;
   t = 0;
   playing = false;
+  /** transport speed multiplier (J/K/L); 1 = real time, clamped to a sane range */
+  playbackRate = 1;
+  /** when set, playback loops between these two timeline seconds */
+  loopRegion = null;
   loop = true;
   raf = 0;
   lastNow = 0;
@@ -5632,6 +5650,12 @@ var Engine = class {
   /** Is a video's track undecodable on this device (runtime-confirmed)? */
   isVideoBroken(mediaId) {
     return this.els.get(mediaId)?.videoBroken ?? false;
+  }
+  /** The element record for a media id, creating it if needed. */
+  ensureMediaRec(mediaId) {
+    const media = this.media.get(mediaId);
+    if (!media) throw new Error(`unknown media ${mediaId}`);
+    return this.ensureEl(media);
   }
   clipUsingMedia(clipId, mediaId) {
     if (this.project.main.some((c) => c.id === clipId && c.mediaId === mediaId)) return true;
@@ -5935,6 +5959,58 @@ var Engine = class {
     this.onBufferingChange?.(value);
   }
   /** Only active visual sources can hold up the timeline. */
+  /**
+   * Seek an element and remember that a seek is in flight.
+   *
+   * Every `el.currentTime = x` in this file goes through here so the play loop
+   * can tell "we asked it to jump and it is honouring that" from "the decoder
+   * has stalled". The old code could not, so it treated both the same way — it
+   * paused every element, which on several browsers cancels the very seek that
+   * would have cleared the condition, and the transport stayed stuck.
+   */
+  seekEl(rec, mediaId, to) {
+    const el = rec.videoBroken && rec.audioFallback ? rec.audioFallback : rec.el;
+    if (el instanceof HTMLImageElement) return;
+    const target = Math.max(0, to);
+    if (!Number.isFinite(target)) return;
+    try {
+      rec.seeking = true;
+      el.currentTime = target;
+    } catch {
+      rec.seeking = false;
+      return;
+    }
+    if (rec.seekTimer) window.clearTimeout(rec.seekTimer);
+    rec.seekTimer = window.setTimeout(() => {
+      rec.seekTimer = void 0;
+      rec.seeking = false;
+    }, 600);
+    const clear = () => {
+      rec.seeking = false;
+      if (rec.seekTimer) {
+        window.clearTimeout(rec.seekTimer);
+        rec.seekTimer = void 0;
+      }
+      el.removeEventListener("seeked", clear);
+    };
+    el.addEventListener("seeked", clear, { once: true });
+  }
+  /**
+   * Videos that the play loop must not run past yet.
+   *
+   * This used to be "any active video whose readyState is below HAVE_CURRENT_DATA
+   * or is seeking". `readyState < 2` is also what a browser reports for normal
+   * re-buffering mid-playback, and seeking is what the loop itself causes by
+   * correcting drift every frame — so with an overlay video present the loop
+   * kept tripping over its own seeks, pausing every element, and the picture
+   * froze for a moment, again and again, until the clip ended.
+   *
+   * The rule now:
+   *   - a seek WE issued and whose `seeked` has not arrived: wait (bounded);
+   *   - a clip that has never shown a frame: wait, but do not pause the others;
+   *   - anything that has played and dipped below readyState 2: keep going. A
+   *     stale frame for a few milliseconds is invisible; a stall is not.
+   */
   videosAwaitingFrame() {
     const ids = /* @__PURE__ */ new Set();
     const sample = sampleTimeline(this.project, this.t);
@@ -5949,7 +6025,16 @@ var Engine = class {
       const rec = this.els.get(id);
       if (!rec || rec.videoBroken || !(rec.el instanceof HTMLVideoElement)) continue;
       this.requestVideoLoad(id);
-      if (rec.el.readyState < 2 || rec.el.seeking) pending.push(rec.el);
+      const el = rec.el;
+      if (el.readyState >= 2) rec.warm = true;
+      if (blocksPlayback({
+        readyState: el.readyState,
+        seeking: !!rec.seeking,
+        warm: !!rec.warm,
+        videoBroken: !!rec.videoBroken
+      })) {
+        pending.push(el);
+      }
     }
     return pending;
   }
@@ -6130,11 +6215,13 @@ var Engine = class {
       if (!this.exporting && this.videosAwaitingFrame().length) {
         if (!this.buffering) {
           this.setBuffering(true);
-          for (const [id, rec] of this.els) {
-            const el = rec.el;
-            if (el && !el.paused) el.pause?.();
-            if (rec.audioFallback && !rec.audioFallback.paused) rec.audioFallback.pause();
-            if (rec.bufSrc) this.stopBufSource(id);
+          if (this.allActiveVideosCold()) {
+            for (const [id, rec] of this.els) {
+              const el = rec.el;
+              if (el && !el.paused) el.pause?.();
+              if (rec.audioFallback && !rec.audioFallback.paused) rec.audioFallback.pause();
+              if (rec.bufSrc) this.stopBufSource(id);
+            }
           }
         }
         this.lastNow = now;
@@ -6149,8 +6236,15 @@ var Engine = class {
       const dt = Math.min(0.25, (now - this.lastNow) / 1e3);
       const dur = this.duration();
       this.lastNow = now;
-      this.t += dt;
-      if (this.t >= dur) {
+      const rate = Number.isFinite(this.playbackRate) ? Math.max(0.1, Math.min(8, this.playbackRate)) : 1;
+      this.t += dt * rate;
+      const region = this.loopRegion;
+      const regionEnd = region && region.b > region.a ? Math.min(region.b, dur) : null;
+      const regionStart = region ? Math.max(0, region.a) : 0;
+      if (regionEnd !== null && this.t >= regionEnd) {
+        this.t = regionStart;
+        this.syncElements(true);
+      } else if (this.t >= dur) {
         if (this.loop && dur > 0) {
           this.t = 0;
           this.syncElements(true);
@@ -6182,6 +6276,40 @@ var Engine = class {
     this.raf = requestAnimationFrame(step);
   }
   /**
+   * True when no active video can show a frame right now.
+   *
+   * Distinct from `videosAwaitingFrame().length > 0`: one element can be
+   * catching up while another is happily showing a frame, and in that case
+   * stopping the transport is the wrong call.
+   */
+  allActiveVideosCold() {
+    const sample = sampleTimeline(this.project, this.t);
+    const states = [];
+    for (const s of sample.main) {
+      const rec = this.els.get(s.clip.mediaId);
+      if (!rec || !(rec.el instanceof HTMLVideoElement)) continue;
+      states.push({
+        readyState: rec.el.readyState,
+        seeking: !!rec.seeking,
+        warm: !!rec.warm,
+        videoBroken: !!rec.videoBroken
+      });
+    }
+    for (const layer of sample.overlays) {
+      const track = this.project.tracks.find((tr) => tr.id === layer.trackId);
+      if (track?.hidden || layer.clip.kind !== "video" || !layer.clip.mediaId) continue;
+      const rec = this.els.get(layer.clip.mediaId);
+      if (!rec || !(rec.el instanceof HTMLVideoElement)) continue;
+      states.push({
+        readyState: rec.el.readyState,
+        seeking: !!rec.seeking,
+        warm: !!rec.warm,
+        videoBroken: !!rec.videoBroken
+      });
+    }
+    return shouldHardStop(states);
+  }
+  /**
    * Glue media elements to the timeline clock.
    * Reverse clips: the element is held paused and re-seeked to the mirrored
    * source position every frame (its audio is muted by the timeline gain).
@@ -6208,23 +6336,16 @@ var Engine = class {
         if (el instanceof HTMLVideoElement) this.requestVideoLoad(s.clip.mediaId);
         if (s.clip.freeze) {
           const at = s.clip.in + 1 / 60;
-          if (Math.abs(el.currentTime - at) > 0.02) {
-            try {
-              el.currentTime = Math.max(0, at);
-            } catch {
-            }
-          }
+          if (Math.abs(el.currentTime - at) > 0.02)
+            this.seekEl(rec ?? this.ensureMediaRec(s.clip.mediaId), s.clip.mediaId, at);
           el.volume = 0;
           if (!el.paused) el.pause();
           continue;
         }
         const local = s.sourceTime;
-        if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-          try {
-            el.currentTime = Math.max(0, local);
-          } catch {
-          }
-        }
+        const tolerance = hard ? 0.08 : this.playing ? 0.3 : 0.2;
+        if (Math.abs(el.currentTime - local) > tolerance)
+          this.seekEl(rec ?? this.ensureMediaRec(s.clip.mediaId), s.clip.mediaId, local);
         {
           const rate = s.playbackRate;
           const safe = Number.isFinite(rate) && rate > 0 ? Math.min(16, rate) : 1;
@@ -6262,12 +6383,9 @@ var Engine = class {
             void this.startBufferSource(c, local);
           } else {
             this.stopBufSource(c.mediaId);
-            if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-              try {
-                el.currentTime = Math.max(0, local);
-              } catch {
-              }
-            }
+            const tol = hard ? 0.08 : this.playing ? 0.3 : 0.2;
+            if (Math.abs(el.currentTime - local) > tol)
+              this.seekEl(this.ensureMediaRec(c.mediaId), c.mediaId, local);
             if (el.playbackRate !== 1) el.playbackRate = 1;
             el.volume = this.overlayAudioVolume(c, t) * this.duckFactor(t);
             if (this.playing && el.paused) void el.play().catch(() => void 0);
@@ -6284,12 +6402,9 @@ var Engine = class {
               const md = this.media.get(c.mediaId)?.duration ?? 0;
               if (md > 0.05) local %= md;
             }
-            if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-              try {
-                el.currentTime = Math.max(0, local);
-              } catch {
-              }
-            }
+            const tol = hard ? 0.08 : this.playing ? 0.3 : 0.2;
+            if (Math.abs(el.currentTime - local) > tol)
+              this.seekEl(this.ensureMediaRec(c.mediaId), c.mediaId, local);
             el.playbackRate = Math.max(0.05, Math.min(16, c.speed ?? 1));
             el.volume = 0;
             if (this.playing && el.paused) void el.play().catch(() => void 0);
