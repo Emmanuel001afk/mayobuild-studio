@@ -197,7 +197,15 @@ var TRANSITION_FAMILY = {
   wipeupsoft: "wipe",
   wipedownsoft: "wipe",
   zoom: "zoom",
-  blur: "zoom"
+  blur: "zoom",
+  flash: "trend",
+  spin: "trend",
+  glitch: "trend",
+  lightleak: "trend",
+  luma: "trend",
+  zoomblur: "trend",
+  whipl: "trend",
+  whipr: "trend"
 };
 function wipeDir(kind) {
   switch (kind) {
@@ -240,7 +248,19 @@ var TRANSITIONS = [
   { id: "wipeupsoft", name: "Soft wipe up" },
   { id: "wipedownsoft", name: "Soft wipe down" },
   { id: "zoom", name: "Zoom punch" },
-  { id: "blur", name: "Blur dissolve" }
+  { id: "blur", name: "Blur dissolve" },
+  // --- trending family ---------------------------------------------------
+  // These are the names creators search for. "Flash" is the beat-drop cut,
+  // "spin" and "glitch" are the two most-copied effects on Reels and TikTok,
+  // "luma" is the reveal everyone uses for transitions into a new scene.
+  { id: "flash", name: "Flash" },
+  { id: "spin", name: "Spin" },
+  { id: "glitch", name: "Glitch" },
+  { id: "lightleak", name: "Light leak" },
+  { id: "luma", name: "Luma wipe" },
+  { id: "zoomblur", name: "Smooth zoom" },
+  { id: "whipl", name: "Whip left" },
+  { id: "whipr", name: "Whip right" }
 ];
 function isDipTo(kind) {
   if (kind === "fadeblack") return "black";
@@ -276,7 +296,17 @@ var EFFECTS = [
   { id: "dolly-out", name: "Dolly out" },
   { id: "tilt-shift", name: "Tilt shift" },
   { id: "earthquake", name: "Earthquake" },
-  { id: "orbit", name: "Orbit" }
+  { id: "orbit", name: "Orbit" },
+  // --- third wave --------------------------------------------------------
+  { id: "motion-blur", name: "Motion blur" },
+  { id: "glow", name: "Glow" },
+  { id: "chroma", name: "Chromatic" },
+  { id: "light-rays", name: "Light rays" },
+  { id: "speed-push", name: "Speed push" },
+  { id: "drift-up", name: "Drift up" },
+  { id: "drift-down", name: "Drift down" },
+  { id: "beat-zoom", name: "Beat zoom" },
+  { id: "focus-in", name: "Focus in" }
 ];
 var EFFECT_FAMILY = {
   none: "camera",
@@ -306,7 +336,16 @@ var EFFECT_FAMILY = {
   "dolly-out": "camera",
   "tilt-shift": "retro",
   earthquake: "impact",
-  orbit: "camera"
+  orbit: "camera",
+  "motion-blur": "motion",
+  glow: "retro",
+  chroma: "retro",
+  "light-rays": "retro",
+  "speed-push": "camera",
+  "drift-up": "motion",
+  "drift-down": "motion",
+  "beat-zoom": "impact",
+  "focus-in": "camera"
 };
 var TEXT_ANIMS = [
   { id: "none", name: "None" },

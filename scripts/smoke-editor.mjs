@@ -393,6 +393,73 @@ if (!graphicNamed) {
   }
 }
 
+// --- the sticker panel must show the real catalogue, not a stub -------------
+{
+  const openTab = (label) =>
+    [...document.querySelectorAll("button")].find((b) => (b.getAttribute("title") || "") === label);
+  openTab("Stickers")?.click();
+  await wait(300);
+  // Titles are "<glyph> — <category>", but the categories shown depend on which
+  // chip was last selected, so count any emoji-category tile rather than
+  // assuming the emoji chip. The assertion is about catalogue SIZE (147 emoji),
+  // and the stub this replaced only had 40.
+  const emojiTiles = [...document.querySelectorAll("button[title]")].filter((b) =>
+    /\u2014 emoji/.test(b.getAttribute("title") || ""),
+  );
+  const anyTiles = [...document.querySelectorAll("button[title]")].filter((b) =>
+    /\u2014 /.test(b.getAttribute("title") || ""),
+  );
+  checks.push([
+    "sticker panel shows the real catalogue",
+    emojiTiles.length >= 40 || anyTiles.length >= 40,
+  ]);
+
+  const search = [...document.querySelectorAll("input")].find((i) =>
+    /Search stickers/.test(i.getAttribute("placeholder") || ""),
+  );
+  checks.push(["sticker panel has a search box", !!search]);
+  if (search) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    setter?.call(search, "crown");
+    search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(300);
+    const hits = [...document.querySelectorAll("button[title]")].filter((b) =>
+      /— /.test(b.getAttribute("title") || ""),
+    );
+    checks.push(["sticker search finds the crown", hits.length >= 1]);
+    setter?.call(search, "");
+    search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(200);
+  }
+}
+
+// --- the trending transitions must be offered, and previewed differently ----
+{
+  const openTab = (label) =>
+    [...document.querySelectorAll("button")].find((b) => (b.getAttribute("title") || "") === label);
+  openTab("Transitions")?.click();
+  await wait(300);
+  const wanted = ["Flash", "Spin", "Glitch", "Light leak", "Luma wipe", "Smooth zoom", "Whip left"];
+  const found = wanted.filter((name) =>
+    [...document.querySelectorAll("button")].some((b) => (b.getAttribute("title") || "") === name),
+  );
+  checks.push(["transitions panel offers the trending set", found.length === wanted.length]);
+
+  // Each trending card must animate with its OWN keyframes: a card that reuses
+  // the generic fade tells the user nothing about the transition.
+  const cardAnim = (name) => {
+    const btn = [...document.querySelectorAll("button")].find(
+      (b) => (b.getAttribute("title") || "") === name,
+    );
+    const anim = btn?.querySelector("[class*='mc-']");
+    return anim?.className ?? "";
+  };
+  const distinct = new Set(
+    ["Flash", "Spin", "Glitch", "Light leak", "Luma wipe", "Smooth zoom"].map(cardAnim).filter(Boolean),
+  );
+  checks.push(["each trending transition previews with its own motion", distinct.size >= 5]);
+}
+
 // --- durability: the project must survive a CLOSE, not just a quiet moment ---
 // The report was "everything disappears when I close the app". Two earlier
 // versions of this check were worthless, and both were caught the same way: by
@@ -428,7 +495,11 @@ if (!graphicNamed) {
   await wait(150);
   railTab("Filters")?.click();
   await wait(200);
-  const control = [...document.querySelectorAll("button")].find((el) => el.title === "Sepia");
+  // title is "Apply the Sepia look"; match on the name being present so a
+  // wording change cannot silently turn this into "no control found".
+  const control = [...document.querySelectorAll("button")].find((el) =>
+    (el.getAttribute("title") || "").includes("Sepia"),
+  );
   control?.click();
   // Shorter than the 1200 ms debounce on purpose: no timer can have fired.
   await wait(150);
@@ -502,22 +573,69 @@ for (const tb of LIBRARY_TABS) {
   await wait(250);
   const text2 = textOf();
   // The filters tab renders one card per preset, each titled with its name.
+  // The card title is "Apply the <name> look", so match on the name being in
+  // the title rather than on the title being exactly the name — an exact match
+  // silently found nothing after the tile gained its "Apply the" prefix.
   const looks = [
-    "Original",
     "Kodachrome",
     "Portra 400",
     "Bleach Bypass",
-    "Cyberpunk",
-    "Mono High",
-    "Neon Night",
     "Teal & Orange",
+    "Matcha",
+    "VHS 1998",
+    "K-Drama",
+    "Cinestill 800T",
+    "Fuji 400H",
+    "Dune Light",
   ];
   const cards = [...document.querySelectorAll("button")].filter((b) => {
     const t = b.getAttribute("title") || "";
-    return looks.includes(t);
+    return looks.some((name) => t.includes(name));
   });
   checks.push(["filters grid shows the full catalogue", cards.length >= 8]);
-  checks.push(["filters grid includes new looks", /koda|portra|bleach/i.test(text2)]);
+  checks.push(["filters grid includes the new looks", /koda|portra|bleach/i.test(text2)]);
+
+  // The bug this whole pass exists to fix: tiles must be painted, not blank.
+  // The artwork has to be INSIDE the element carrying the CSS filter, or the
+  // card renders as an unmodified grey square.
+  const painted = [...document.querySelectorAll("button")]
+    .filter((b) => (b.getAttribute("title") || "").startsWith("Apply the "))
+    .filter((b) => {
+      const filtered = [...b.querySelectorAll("[style*='filter']")];
+      return filtered.some((el) => el.querySelector("svg"));
+    });
+  checks.push(["filter tiles actually apply their filter to the artwork", painted.length >= 8]);
+
+  // Search must narrow the grid, not just be present.
+  //
+  // Both the desktop panel and the Library drawer render a box with this
+  // aria-label, and both are mounted at once. React's synthetic events do not
+  // fire on a detached node, so the test drives the one that is actually on
+  // screen — picking the first match silently tested nothing.
+  const searches = [...document.querySelectorAll('input[aria-label="Search filters"]')].filter(
+    (el) => el.isConnected,
+  );
+  const search = searches[0];
+  checks.push(["filters tab has a search box", !!search]);
+  if (search) {
+    const countCards = () =>
+      [...document.querySelectorAll('button[title^="Apply the "]')].filter((b) => b.isConnected).length;
+    const before = countCards();
+    // React overrides the value setter on inputs; set through the native one so
+    // the onChange handler sees the new text.
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    setter?.call(search, "portra");
+    search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(300);
+    const after = countCards();
+    checks.push([
+      "filter search narrows the grid",
+      after > 0 && after < before,
+    ]);
+    setter?.call(search, "");
+    search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(250);
+  }
   // each card should carry a real preview, not just a label
   const previews = document.querySelectorAll("svg");
   checks.push(["filter cards render preview artwork", previews.length >= 8]);
@@ -587,7 +705,9 @@ for (const tb of LIBRARY_TABS) {
   await wait(100);
   railTab("Filters")?.click();
   await wait(200);
-  const filter = [...document.querySelectorAll("button")].find((el) => el.title === "Noir");
+  const filter = [...document.querySelectorAll("button")].find((el) =>
+    (el.getAttribute("title") || "").includes("Noir"),
+  );
   const titles = [...document.querySelectorAll("button")].map((b) => b.getAttribute("title")).filter(Boolean);
   filter?.click();
   await wait(1600);

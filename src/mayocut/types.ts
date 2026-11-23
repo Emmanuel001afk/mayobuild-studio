@@ -80,10 +80,26 @@ export type TransitionKind =
   | "wipeupsoft"
   | "wipedownsoft"
   /** diagonal push: B enters from bottom-right, A exits top-left */
-  | "slide";
+  | "slide"
+  // --- the trending set ---------------------------------------------------
+  /** white flash between the clips: the beat-drop cut, no softness at all */
+  | "flash"
+  /** the outgoing frame whips around as the incoming one lands — spin trend */
+  | "spin"
+  /** digital tearing, chromatic fringes, scan judder */
+  | "glitch"
+  /** animated film burn: a warm organic edge sweeps the frame */
+  | "lightleak"
+  /** exposure/pixel-mix dissolve: the luma wipe everyone uses for reveals */
+  | "luma"
+  /** push in with motion blur then release — the \"smooth zoom\" transition */
+  | "zoomblur"
+  /** fast lateral whip with heavy blur, in both directions */
+  | "whipl"
+  | "whipr";
 
 /** Transition families used to group the picker into tabs. */
-export type TransitionFamily = "basic" | "slide" | "wipe" | "zoom";
+export type TransitionFamily = "basic" | "slide" | "wipe" | "zoom" | "trend";
 
 export const TRANSITION_FAMILY: Record<TransitionKind, TransitionFamily> = {
   none: "basic",
@@ -105,6 +121,14 @@ export const TRANSITION_FAMILY: Record<TransitionKind, TransitionFamily> = {
   wipedownsoft: "wipe",
   zoom: "zoom",
   blur: "zoom",
+  flash: "trend",
+  spin: "trend",
+  glitch: "trend",
+  lightleak: "trend",
+  luma: "trend",
+  zoomblur: "trend",
+  whipl: "trend",
+  whipr: "trend",
 };
 
 /** Hard-edged or feathered wipe direction, or null when not a wipe. */
@@ -153,6 +177,18 @@ export const TRANSITIONS: { id: TransitionKind; name: string }[] = [
   { id: "wipedownsoft", name: "Soft wipe down" },
   { id: "zoom", name: "Zoom punch" },
   { id: "blur", name: "Blur dissolve" },
+  // --- trending family ---------------------------------------------------
+  // These are the names creators search for. "Flash" is the beat-drop cut,
+  // "spin" and "glitch" are the two most-copied effects on Reels and TikTok,
+  // "luma" is the reveal everyone uses for transitions into a new scene.
+  { id: "flash", name: "Flash" },
+  { id: "spin", name: "Spin" },
+  { id: "glitch", name: "Glitch" },
+  { id: "lightleak", name: "Light leak" },
+  { id: "luma", name: "Luma wipe" },
+  { id: "zoomblur", name: "Smooth zoom" },
+  { id: "whipl", name: "Whip left" },
+  { id: "whipr", name: "Whip right" },
 ];
 
 export function isDipTo(kind: TransitionKind): "black" | "white" | null {
@@ -212,7 +248,25 @@ export type EffectId =
   | "dolly-out"
   | "tilt-shift"
   | "earthquake"
-  | "orbit";
+  | "orbit"
+  // --- third wave: the effects creators reach for by name ---------------
+  /** motion blur on movement, the single most-requested "make it smooth" fix */
+  | "motion-blur"
+  /** soft bloom over the highlights, for text and product shots */
+  | "glow"
+  /** chromatic aberration: RGB pulled apart at the frame edges */
+  | "chroma"
+  /** light rays through the frame, catches dust and windows */
+  | "light-rays"
+  /** slow push that accelerates — the "speed ramp" look without retiming */
+  | "speed-push"
+  /** gentle vertical drift, for photo-style slideshows */
+  | "drift-up"
+  | "drift-down"
+  /** hard crop-style zoom ring on a beat */
+  | "beat-zoom"
+  /** the frame settles from slightly out of focus */
+  | "focus-in";
 
 export const EFFECTS: { id: EffectId; name: string }[] = [
   { id: "none", name: "None" },
@@ -243,6 +297,16 @@ export const EFFECTS: { id: EffectId; name: string }[] = [
   { id: "tilt-shift", name: "Tilt shift" },
   { id: "earthquake", name: "Earthquake" },
   { id: "orbit", name: "Orbit" },
+  // --- third wave --------------------------------------------------------
+  { id: "motion-blur", name: "Motion blur" },
+  { id: "glow", name: "Glow" },
+  { id: "chroma", name: "Chromatic" },
+  { id: "light-rays", name: "Light rays" },
+  { id: "speed-push", name: "Speed push" },
+  { id: "drift-up", name: "Drift up" },
+  { id: "drift-down", name: "Drift down" },
+  { id: "beat-zoom", name: "Beat zoom" },
+  { id: "focus-in", name: "Focus in" },
 ];
 
 /** Effect grouping for the Effects tab. */
@@ -277,6 +341,15 @@ export const EFFECT_FAMILY: Record<EffectId, EffectFamily> = {
   "tilt-shift": "retro",
   earthquake: "impact",
   orbit: "camera",
+  "motion-blur": "motion",
+  glow: "retro",
+  chroma: "retro",
+  "light-rays": "retro",
+  "speed-push": "camera",
+  "drift-up": "motion",
+  "drift-down": "motion",
+  "beat-zoom": "impact",
+  "focus-in": "camera",
 };
 
 /**

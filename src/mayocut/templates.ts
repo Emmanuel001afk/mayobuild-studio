@@ -378,7 +378,7 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
       p.main = imgs.map((m, i) =>
         clip(m, {
           out: 3.2,
-          filter: ["warm", "golden", "cinema", "vintage", "soft"][i % 5],
+          filter: ["warm", "goldenhour", "cinema", "vintage", "soft"][i % 5],
           transitionIn: i === 0 ? "none" : "crossfade",
           transitionDur: 0.65,
           effect: i % 2 === 0 ? "kenburns" : "sway",

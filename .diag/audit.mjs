@@ -25,6 +25,7 @@ const SB = await import('./b-stickers.mjs');
 const FT = await import('./b-fonts.mjs');
 const PS = await import('./b-persistence.mjs');
 const PB = await import('./b-playback.mjs');
+const LK = await import('./b-looks.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
   const tr = T.emptyTracks();
@@ -601,9 +602,12 @@ await t("transition catalogue covers 5 families with unique ids", () => {
   const ids = T.TRANSITIONS.map((x) => x.id);
   assert.equal(new Set(ids).size, ids.length);
   const fams = new Set(ids.map((id) => T.TRANSITION_FAMILY[id]));
-  for (const f of ["basic", "slide", "wipe", "zoom"])
+  for (const f of ["basic", "slide", "wipe", "zoom", "trend"])
     assert.ok(fams.has(f), `missing family ${f}`);
-  assert.equal(ids.length, 19);
+  // a floor, not an exact count: the catalogue is expected to grow, and an
+  // exact number here fails on every addition while still passing if someone
+  // deletes a transition and bumps the constant.
+  assert.ok(ids.length >= 19, `only ${ids.length} transitions`);
 });
 await t("every transition has a family and a non-empty name", () => {
   for (const x of T.TRANSITIONS) {
@@ -2472,10 +2476,11 @@ await t('static catalogue ids are unique and every asset is tagged', () => {
 });
 await t('catalogue is emoji+graphic+shape+word, counts unchanged elsewhere', () => {
   assert.equal(SB.EMOJI_ASSETS.length + SB.GRAPHIC_ASSETS.length + SB.SHAPE_ASSETS.length + SB.WORD_ASSETS.length, SB.STATIC_STICKERS.length);
-  assert.ok(SB.EMOJI_ASSETS.length >= 50);
-  assert.equal(SB.GRAPHIC_ASSETS.length, 24);
-  assert.equal(SB.SHAPE_ASSETS.length, 12);
-  assert.equal(SB.WORD_ASSETS.length, 14);
+  // floors, for the same reason as the transitions above
+  assert.ok(SB.EMOJI_ASSETS.length >= 140, `only ${SB.EMOJI_ASSETS.length} emoji`);
+  assert.ok(SB.GRAPHIC_ASSETS.length >= 60, `only ${SB.GRAPHIC_ASSETS.length} graphics`);
+  assert.ok(SB.SHAPE_ASSETS.length >= 12, `only ${SB.SHAPE_ASSETS.length} shapes`);
+  assert.ok(SB.WORD_ASSETS.length >= 35, `only ${SB.WORD_ASSETS.length} words`);
 });
 
 
@@ -2728,6 +2733,365 @@ await t('storage advice never claims durability the browser did not grant', () =
   const notGranted = PS.storageAdvice(false);
   assert.ok(!/won't be cleared/.test(notGranted), 'must not promise persistence that was refused');
   assert.match(notGranted, /backup|open once more/i);
+});
+
+
+// ================= stage 10: the asset libraries =============================
+console.log('looks.ts — the colour catalogue');
+await t('every look has a unique id, a name and a family', () => {
+  const ids = LK.LOOKS.map((l) => l.id);
+  assert.equal(new Set(ids).size, ids.length, 'duplicate look id');
+  for (const l of LK.LOOKS) {
+    assert.ok(l.name && l.name.length > 1, `unnamed look ${l.id}`);
+    assert.ok(LK.LOOK_FAMILIES.includes(l.family), `${l.id} has unknown family ${l.family}`);
+  }
+  assert.ok(LK.LOOKS.length >= 50, `only ${LK.LOOKS.length} looks`);
+});
+await t('every look is reachable from a family chip', () => {
+  const seen = new Set();
+  for (const f of LK.LOOK_FAMILIES) for (const l of LK.looksIn(f)) seen.add(l.id);
+  for (const l of LK.LOOKS) assert.ok(seen.has(l.id), `${l.id} is in no family`);
+  assert.equal(LK.looksIn('all').length, LK.LOOKS.length);
+});
+await t('css is a valid filter stack for every look (no empty, no stray text)', () => {
+  for (const l of LK.LOOKS) {
+    assert.ok(l.css.trim().length > 0, `${l.id} has no css`);
+    // every function in the stack must be balanced and known to canvas
+    const fns = l.css.match(/([a-z-]+)\(/g) ?? [];
+    const allowed = ['saturate(', 'contrast(', 'brightness(', 'sepia(', 'grayscale(', 'hue-rotate(', 'blur(', 'opacity(', 'invert('];
+    for (const f of fns) assert.ok(allowed.includes(f), `${l.id} uses unsupported ${f}`);
+    const opens = (l.css.match(/\(/g) ?? []).length;
+    const closes = (l.css.match(/\)/g) ?? []).length;
+    assert.equal(opens, closes, `${l.id} has unbalanced css`);
+  }
+});
+await t('no duplicate look NAMES (two cards called "Moody" is a bug)', () => {
+  const names = LK.LOOKS.map((l) => l.name.toLowerCase());
+  assert.equal(new Set(names).size, names.length, 'duplicate display name: ' + names.filter((n, i) => names.indexOf(n) !== i));
+});
+await t('search finds the names people actually type', () => {
+  const cases = {
+    teal: 'tealorange',
+    portra: 'portra',
+    kodak: 'kodachrome',
+    vhs: 'vhs',
+    kdrama: 'kdrama',
+    'film stock': null,
+    noir: 'noir',
+    pink: 'aestheticpink',
+  };
+  for (const [q, expectId] of Object.entries(cases)) {
+    const hits = LK.searchLooks(q);
+    assert.ok(hits.length > 0, `search "${q}" found nothing`);
+    if (expectId) assert.ok(hits.some((h) => h.id === expectId), `search "${q}" missed ${expectId}`);
+  }
+  assert.equal(LK.searchLooks('').length, LK.LOOKS.length, 'empty query must return everything');
+  assert.equal(LK.searchLooks('zzzzz').length, 0);
+});
+await t('search is a conjunction, not a union', () => {
+  // "film stock" must only return looks tagged with BOTH words, otherwise a
+  // two-word search behaves like an OR and buries the right answer.
+  const both = LK.searchLooks('film stock');
+  const either = LK.LOOKS.filter((l) => /film|stock/.test(`${l.tags} ${l.name}`.toLowerCase()));
+  assert.ok(both.length > 0);
+  assert.ok(both.length < either.length, 'conjunction returned everything the union did');
+  for (const l of both) assert.match(`${l.tags} ${l.name}`.toLowerCase(), /film/);
+});
+await t('renamed ids still resolve, so saved projects keep their grade', () => {
+  // A project saved with filter "mono-high" must not silently become Original.
+  assert.equal(LK.resolveLookId('mono-high'), 'monohigh');
+  assert.equal(LK.resolveLookId('silvertone'), 'silver');
+  assert.equal(LK.resolveLookId('neon-night'), 'neonphoto');
+  assert.equal(LK.resolveLookId('golden'), 'goldenhour');
+  assert.equal(LK.resolveLookId('kodachrome'), 'kodachrome', 'current ids must pass through');
+  for (const legacy of Object.keys(LK.LEGACY_LOOK_IDS)) {
+    assert.ok(LK.lookFor(legacy), `legacy id ${legacy} resolves to nothing`);
+  }
+});
+await t('every legacy mapping points at a look that exists today', () => {
+  for (const [from, to] of Object.entries(LK.LEGACY_LOOK_IDS)) {
+    assert.ok(LK.LOOK_BY_ID.has(to), `${from} -> ${to}, which is not in the catalogue`);
+    assert.equal(LK.lookCss(from), LK.lookCss(to), `${from} does not render as ${to}`);
+  }
+});
+await t('engineering: the engine exposes the finish of the looks that have one', () => {
+  // The finish must survive the trip from the catalogue to the renderer.
+  const withFinish = LK.LOOKS.filter((l) => l.tint || l.grain || l.vignette || l.label);
+  assert.ok(withFinish.length >= 10, `only ${withFinish.length} looks have a finish`);
+  for (const l of withFinish) {
+    const f = E.finishFor(l.id);
+    assert.ok(f, `${l.id} has a finish in the catalogue but the engine returns none`);
+  }
+  assert.equal(E.finishFor('bw'), undefined, 'a look with no finish must return undefined');
+});
+await t('a rename keeps the finish: legacy id gets the new look finish too', () => {
+  const f = E.finishFor('neon-night');
+  assert.ok(f && f.tint, 'the renamed look lost its tint');
+});
+await t('presetCss agrees with the catalogue for every look', () => {
+  for (const l of LK.LOOKS) assert.equal(E.presetCss(l.id), l.css, `${l.id} css differs between catalogue and engine`);
+  assert.equal(E.presetCss('none'), '');
+  assert.equal(E.presetCss('not-a-real-look'), '', 'an unknown look must render as ungraded, not throw');
+});
+await t('tile and canvas read the SAME finish (the card cannot lie)', () => {
+  // The preview renders from the Look; the canvas renders from finishFor().
+  // If those ever diverge the tile is a mock-up, which is the bug being fixed.
+  for (const l of LK.LOOKS) {
+    const f = E.finishFor(l.id);
+    assert.equal(!!f?.tint, !!l.tint, `${l.id} tint disagreement`);
+    assert.equal(f?.grain ?? 0, l.grain ?? 0, `${l.id} grain disagreement`);
+    assert.equal(f?.vignette ?? 0, l.vignette ?? 0, `${l.id} vignette disagreement`);
+    assert.equal(f?.label, l.label, `${l.id} label disagreement`);
+  }
+});
+
+await t('every transition id has a real renderer (no silent fallthrough)', () => {
+  // The dangerous failure mode: add an id to TRANSITIONS, forget the engine, and
+  // the renderer falls through to the generic wipe — so the card promises a
+  // glitch and the export produces a rectangle reveal. Checked against the
+  // source because drawing a transition needs a real canvas.
+  const src = readFileSync(new URL('../src/mayocut/engine.ts', import.meta.url), 'utf8');
+  const from = src.indexOf('composeTransition(');
+  assert.ok(from > 0, 'composeTransition was renamed — update this test');
+  const body = src.slice(from);
+  const missing = [];
+  for (const tr of T.TRANSITIONS) {
+    // these are handled before the per-kind branches
+    if (['none', 'crossfade'].includes(tr.id)) continue;
+    if (T.isDipTo(tr.id)) continue;
+    const wipe = T.wipeDir(tr.id);
+    if (wipe && !wipe.soft) continue; // the hard-wipe branch
+    if (wipe && wipe.soft) {
+      // Soft wipes are NOT keyed by id: they branch on wipeDir() returning a
+      // direction with soft=true, which is what lets one code path serve all
+      // four. So the check is that the soft branch exists, not that each id is
+      // named — asserting on the id here was a false alarm.
+      assert.ok(
+        body.includes('soft?.soft') && body.includes('drawFeatheredWipe'),
+        'the feathered-wipe branch is gone; soft wipes would draw as hard ones',
+      );
+      continue;
+    }
+    if (!body.includes('"' + tr.id + '"')) missing.push(tr.id);
+  }
+  assert.equal(missing.length, 0, 'no renderer for: ' + missing.join(', '));
+});
+
+await t('the trending transitions each have their OWN branch, not a shared one', () => {
+  const src = readFileSync(new URL('../src/mayocut/engine.ts', import.meta.url), 'utf8');
+  const trending = T.TRANSITIONS.filter((tr) => T.TRANSITION_FAMILY[tr.id] === 'trend');
+  assert.ok(trending.length >= 8, `only ${trending.length} trending transitions`);
+  for (const tr of trending) {
+    const marker = `kind === "${tr.id}"`;
+    assert.ok(src.includes(marker), `${tr.id} has no dedicated branch in the engine`);
+  }
+});
+
+await t('paintFinish actually draws: tint, grain, vignette and the caption', () => {
+  // The catalogue test proves the DATA reaches the engine; this proves the
+  // engine turns that data into draw calls. A finishing pass that silently
+  // draws nothing would leave every "vintage" look looking modern.
+  const calls = [];
+  const ctx = {
+    globalCompositeOperation: 'source-over',
+    globalAlpha: 1,
+    fillStyle: '',
+    font: '',
+    textAlign: '',
+    textBaseline: '',
+    shadowColor: '',
+    shadowBlur: 0,
+    save() { calls.push('save'); },
+    restore() { calls.push('restore'); },
+    fillRect() { calls.push('fillRect:' + this.globalCompositeOperation); },
+    createRadialGradient() {
+      calls.push('radial');
+      return { addColorStop() {} };
+    },
+    createPattern() {
+      calls.push('pattern');
+      return {};
+    },
+    fillText(txt) { calls.push('text:' + txt); },
+  };
+  E.paintFinish(ctx, { tint: { color: '#ff0000', mode: 'overlay', alpha: 0.3 } }, 800, 450, 1);
+  assert.ok(calls.includes('fillRect:overlay'), 'tint did not blend in its own mode');
+
+  calls.length = 0;
+  E.paintFinish(ctx, { vignette: 0.5 }, 800, 450, 1);
+  assert.ok(calls.includes('radial'), 'vignette did not build a gradient');
+
+  calls.length = 0;
+  E.paintFinish(ctx, { label: '1998 PLAY' }, 800, 450, 1);
+  assert.ok(calls.some((c) => c.startsWith('text:1998 PLAY')), 'caption was not drawn');
+  assert.ok(calls.includes('save') && calls.includes('restore'), 'paint left the context unbalanced');
+});
+await t('the finish is WIRED INTO the main draw path, not just available', () => {
+  // A unit test on paintFinish proves it draws. It does not prove anyone calls
+  // it. Deleting the call from drawMainItem left every test green, which is the
+  // difference between "the feature exists" and "the feature is on".
+  const src = readFileSync(new URL('../src/mayocut/engine.ts', import.meta.url), 'utf8');
+  const start = src.indexOf('private drawMainItem(');
+  assert.ok(start > 0, 'drawMainItem moved — update this test');
+  const after = src.slice(start);
+  const stop = after.indexOf('\n  private ');
+  const body = stop > 0 ? after.slice(0, stop) : after;
+  assert.ok(body.includes('finishFor('), 'drawMainItem does not look up the look finish');
+  assert.ok(body.includes('paintFinish('), 'drawMainItem never paints the finish');
+});
+
+await t('paintFinish is a no-op for a look with no finish, and for alpha 0', () => {
+  let touched = 0;
+  const ctx = {
+    globalCompositeOperation: 'source-over',
+    globalAlpha: 1,
+    fillStyle: '',
+    save() { touched++; },
+    restore() { touched++; },
+    fillRect() { touched++; },
+    createRadialGradient() { touched++; return { addColorStop() {} }; },
+    createPattern() { touched++; return {}; },
+    fillText() { touched++; },
+  };
+  E.paintFinish(ctx, undefined, 100, 100, 1);
+  E.paintFinish(ctx, {}, 100, 100, 1);
+  E.paintFinish(ctx, { tint: { color: '#fff', mode: 'overlay', alpha: 1 } }, 100, 100, 0);
+  assert.equal(touched, 0, 'a look with no finish must not touch the context at all');
+});
+await t('grain is generated once and reused (deterministic between preview and export)', () => {
+  // Node has no document, so a null here means "cannot make a canvas", not
+  // "grain is broken". What must hold either way: the call is idempotent, so
+  // the preview and the export of the same project cannot show different grain.
+  const a = E.grainTexture();
+  const b = E.grainTexture();
+  assert.equal(a, b, 'grainTexture returned two different textures');
+  if (typeof document === 'undefined') {
+    assert.equal(a, null, 'without a document it must return null rather than throw');
+  } else {
+    assert.ok(a, 'a document exists but no grain texture was made');
+  }
+});
+await t('every effect id has a family and either a transform or a paint step', () => {
+  const src = readFileSync(new URL('../src/mayocut/engine.ts', import.meta.url), 'utf8');
+  const transformStart = src.indexOf('private effectTransform(');
+  assert.ok(transformStart > 0, 'effectTransform moved — update this test');
+  // it sits after drawMainItem, so cut at the next method that follows it
+  const after = src.slice(transformStart);
+  const stop = after.indexOf('\n  private ');
+  const transformBody = stop > 0 ? after.slice(0, stop) : after;
+  const paintBody = src.slice(src.indexOf('drawMainItem('));
+  const orphans = [];
+  for (const ef of T.EFFECTS) {
+    if (ef.id === 'none') continue;
+    const inTransform = transformBody.includes(`case "${ef.id}"`) || transformBody.includes(`case '${ef.id}'`);
+    const inPaint = paintBody.includes(`eff === "${ef.id}"`);
+    if (!inTransform && !inPaint) orphans.push(ef.id);
+  }
+  assert.equal(orphans.length, 0, 'effects with no implementation: ' + orphans.join(', '));
+});
+
+await t('the filter tile grain is a well-formed data URI (a broken one renders blank)', () => {
+  // The tile draws its grain from an inline SVG data URI. Markup that does not
+  // parse fails SILENTLY — the browser paints nothing — so this is the same
+  // class of bug as the blank tiles this pass exists to fix. Parsed, not trusted.
+  const src = readFileSync(new URL('../src/mayocut/components/Library.tsx', import.meta.url), 'utf8');
+  const marker = "data:image/svg+xml;utf8,";
+  const at = src.indexOf(marker);
+  assert.ok(at > 0, 'the tile grain data URI is gone — update this test');
+  // the JSX splices the strength in as a literal; settle that expression first
+  const raw = src.slice(at + marker.length, at + 400);
+  const settled = raw.replace(/'"+\s*\+\s*grain\.toFixed\(2\)\s*\+\s*"'/g, "'0.20'");
+  const END = "'/></svg>";
+  const cut = settled.indexOf(END);
+  assert.ok(cut > 0, 'the grain svg lost its closing tag');
+  const svg = settled.slice(0, cut + END.length);
+  assert.ok(svg.startsWith("<svg"), 'the data URI does not begin with <svg');
+  assert.ok(svg.endsWith("</svg>"), 'the data URI does not end with </svg>');
+  assert.match(svg, /<filter id='n'>/);
+  assert.match(svg, /<feTurbulence[^>]*\/>/, 'no turbulence primitive — the grain would be a flat tint');
+  assert.match(svg, /filter='url\(%23n\)'/, 'the rect does not reference the noise filter');
+  assert.match(svg, /opacity='0\.20'/, 'the strength expression did not settle into the markup');
+  const opens = (svg.match(/</g) ?? []).length;
+  const closes = (svg.match(/>/g) ?? []).length;
+  assert.equal(opens, closes, 'unbalanced tags in the grain svg');
+});
+
+console.log('sticks: the sticker catalogue');
+await t('the catalogue is genuinely large and covers every category', () => {
+  assert.ok(SB.EMOJI_ASSETS.length >= 140, `only ${SB.EMOJI_ASSETS.length} emoji`);
+  assert.ok(SB.GRAPHIC_ASSETS.length >= 60, `only ${SB.GRAPHIC_ASSETS.length} graphics`);
+  assert.ok(SB.WORD_ASSETS.length >= 35, `only ${SB.WORD_ASSETS.length} words`);
+  assert.ok(SB.STATIC_STICKERS.length >= 250, `only ${SB.STATIC_STICKERS.length} total`);
+  for (const c of SK.STICKER_CATEGORIES) {
+    if (c.id === 'video') continue; // owned by stock.ts
+    const n = SB.stickersIn(c.id).length;
+    assert.ok(n > 0, `category ${c.id} is empty`);
+  }
+});
+await t('no duplicate emoji glyphs (two identical tiles is a bug)', () => {
+  const g = SB.EMOJI_ASSETS.map((a) => a.glyph);
+  const dup = g.filter((x, i) => g.indexOf(x) !== i);
+  assert.equal(dup.length, 0, 'duplicate glyphs: ' + [...new Set(dup)].join(' '));
+});
+await t('every sticker id is unique across all categories', () => {
+  const ids = SB.STATIC_STICKERS.map((a) => a.id);
+  assert.equal(new Set(ids).size, ids.length);
+});
+await t('every sticker has searchable tags and a renderable glyph', () => {
+  for (const a of SB.STATIC_STICKERS) {
+    assert.ok(a.tags.length > 0, `${a.id} has no tags`);
+    assert.ok((a.glyph ?? '').length > 0, `${a.id} has no glyph`);
+    assert.ok(a.size > 0, `${a.id} has no size`);
+  }
+});
+await t('sticker search finds the words in the panel placeholder', () => {
+  for (const q of ['fire', 'crown', 'arrow', 'wow', 'heart']) {
+    assert.ok(SB.searchStickers(q).length > 0, `search "${q}" found nothing`);
+  }
+  assert.equal(SB.searchStickers('').length, SB.STATIC_STICKERS.length);
+});
+await t('graphics and words carry a colour; emoji do not', () => {
+  for (const a of SB.GRAPHIC_ASSETS) assert.match(a.color, /^#[0-9a-f]{6}$/i, `${a.id} colour ${a.color}`);
+  for (const a of SB.WORD_ASSETS) assert.match(a.color, /^#[0-9a-f]{6}$/i, `${a.id} colour ${a.color}`);
+  // an emoji takes the device's own colour font; forcing a colour only tints the
+  // ones that are drawn as outlines, so it must not be set
+  for (const a of SB.EMOJI_ASSETS) assert.equal(a.color, undefined, `${a.id} should not force a colour`);
+});
+
+console.log('types.ts — the new transitions and effects are wired end to end');
+await t('every transition has a family and a display name', () => {
+  for (const tr of T.TRANSITIONS) {
+    assert.ok(T.TRANSITION_FAMILY[tr.id], `${tr.id} has no family`);
+    assert.ok(tr.name && tr.name.length > 1, `${tr.id} has no name`);
+  }
+  assert.equal(T.TRANSITIONS.length, Object.keys(T.TRANSITION_FAMILY).length, 'a transition is in one list but not the other');
+});
+await t('the trending transitions exist and are grouped as trending', () => {
+  for (const id of ['flash', 'spin', 'glitch', 'lightleak', 'luma', 'zoomblur', 'whipl', 'whipr']) {
+    assert.ok(T.TRANSITIONS.some((t2) => t2.id === id), `${id} missing from TRANSITIONS`);
+    assert.equal(T.TRANSITION_FAMILY[id], 'trend', `${id} is not in the trend family`);
+  }
+});
+await t('a soft wipe is not also claimed as a dip or a direction', () => {
+  // these three helpers are consulted in sequence; overlap would make the
+  // renderer take the wrong branch and draw a different transition
+  for (const tr of T.TRANSITIONS) {
+    const dip = T.isDipTo(tr.id);
+    const wipe = T.wipeDir(tr.id);
+    assert.ok(!(dip && wipe), `${tr.id} is both a dip and a wipe`);
+  }
+});
+await t('every effect has a family and a display name', () => {
+  for (const ef of T.EFFECTS) {
+    assert.ok(T.EFFECT_FAMILY[ef.id], `${ef.id} has no family`);
+    assert.ok(ef.name && ef.name.length > 1, `${ef.id} has no name`);
+  }
+  assert.equal(T.EFFECTS.length, Object.keys(T.EFFECT_FAMILY).length, 'an effect is in one list but not the other');
+});
+await t('the named effects creators search for exist', () => {
+  for (const id of ['motion-blur', 'glow', 'chroma', 'light-rays', 'speed-push', 'beat-zoom', 'focus-in']) {
+    assert.ok(T.EFFECTS.some((e2) => e2.id === id), `${id} missing from EFFECTS`);
+  }
 });
 
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);

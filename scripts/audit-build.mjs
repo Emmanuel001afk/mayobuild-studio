@@ -31,6 +31,7 @@ const MODULES = [
   "fonts",
   "persistence",
   "playback",
+  "looks",
 ];
 
 for (const name of MODULES) {

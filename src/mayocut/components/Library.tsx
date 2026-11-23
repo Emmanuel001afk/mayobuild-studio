@@ -45,8 +45,23 @@ import {
   TRANSITION_FAMILY,
 } from "../types";
 import { FILTER_PRESETS } from "../engine";
+import {
+  LOOK_BY_ID,
+  LOOK_FAMILIES,
+  looksIn,
+  searchLooks,
+  type Look,
+  type LookFamily,
+} from "../looks";
 import { AUDIO_FX, AUDIO_FX_MAP, type AudioFxId } from "../audio-fx";
 import { STOCK_ASSETS, stockThumb } from "../stock";
+import { STATIC_STICKERS, searchStickers, stickersIn } from "../stickers";
+import {
+  STICKER_CATEGORIES,
+  patchFor,
+  type StickerAsset,
+  type StickerCategory,
+} from "../sticker-kinds";
 
 /** Every asset category CapCut's desktop library ships with. */
 export type LibraryTab =
@@ -72,65 +87,10 @@ const TABS: { id: LibraryTab; label: string; icon: typeof Film }[] = [
   { id: "captions", label: "Captions", icon: Captions },
 ];
 
-/** Emoji sticker set — instant, offline, no downloads. */
-export const STICKERS = [
-  "🔥",
-  "❤️",
-  "😂",
-  "😮",
-  "👀",
-  "👏",
-  "💯",
-  "✨",
-  "⚡",
-  "🎉",
-  "🚀",
-  "💰",
-  "📈",
-  "🏆",
-  "🎯",
-  "🍿",
-  "🥶",
-  "😍",
-  "🤯",
-  "👉",
-  "👆",
-  "✅",
-  "❌",
-  "⭐",
-  "🌊",
-  "🌙",
-  "☀️",
-  "🎵",
-  "🎬",
-  "📱",
-  "💬",
-  "🙌",
-  "💪",
-  "🧠",
-  "👑",
-  "🍕",
-  "🏖️",
-  "🎮",
-  "🛹",
-  "📸",
-];
-
-/** CapCut-style shape/label stickers drawn as text so they scale cleanly. */
-export const SHAPE_STICKERS: { id: string; label: string; patch: Partial<OverlayClip> }[] = [
-  {
-    id: "arrow",
-    label: "➜",
-    patch: { size: 200, color: "#f43f5e", anim: "bounce" },
-  },
-  { id: "star", label: "★", patch: { size: 190, color: "#fbbf24", anim: "pop" } },
-  { id: "check", label: "✔", patch: { size: 170, color: "#22c55e", anim: "zoom-in" } },
-  { id: "cross", label: "✘", patch: { size: 170, color: "#ef4444", anim: "zoom-in" } },
-  { id: "sparkle", label: "✧", patch: { size: 210, color: "#a78bfa", anim: "neon" } },
-  { id: "heart", label: "♥", patch: { size: 200, color: "#ec4899", anim: "bounce" } },
-  { id: "note", label: "♪", patch: { size: 190, color: "#38bdf8", anim: "swing" } },
-  { id: "flag", label: "⚑", patch: { size: 170, color: "#f97316", anim: "pop" } },
-];
+// The emoji and shape lists that used to live here are gone: they were a second,
+// smaller catalogue that had drifted from stickers.ts (40 emoji vs 147, no
+// graphics, no words). Two lists meant the Library and the editor disagreed
+// about what a sticker even was. Both read stickers.ts now.
 
 /**
  * Stock thumbnails are drawn once and kept in a module-level cache.
@@ -209,7 +169,23 @@ export function Library({
 }: Props) {
   const [tab, setTab] = useState<LibraryTab>("media");
   const [effectFam, setEffectFam] = useState<string>("all");
-  const [filterFam, setFilterFam] = useState<string>("all");
+  const [filterFam, setFilterFam] = useState<LookFamily | "all">("all");
+  const [stickerFam, setStickerFam] = useState<StickerCategory>("emoji");
+  const [stickerQuery, setStickerQuery] = useState("");
+
+  /**
+   * The sticker grid, from the real catalogue.
+   *
+   * This panel used to render a local 40-emoji array while the editor's own
+   * sticker panel rendered the 260-asset catalogue — two lists, one of which was
+   * a third the size and had no graphics or words in it at all. There is one
+   * catalogue now, and both panels read it.
+   */
+  const stickerHits = useMemo(() => {
+    if (stickerQuery.trim()) return searchStickers(stickerQuery).slice(0, 96);
+    return stickersIn(stickerFam);
+  }, [stickerFam, stickerQuery]);
+  const [filterQuery, setFilterQuery] = useState("");
   const [animFam, setAnimFam] = useState<string>("all");
   const uid = useId();
 
@@ -227,45 +203,20 @@ export function Library({
     [animFam],
   );
 
-  /** Filters grouped by the family they *look* like, for the tab strip. */
-  const filterFamilies = useMemo(() => {
-    const fam = (id: string) => {
-      if (["bw", "noir", "silver", "mono-high", "cyanotype"].includes(id)) return "mono";
-      if (["kodachrome", "portra", "vintage", "retro", "fifties", "sepia", "grunge"].includes(id))
-        return "film";
-      if (
-        ["tealorange", "golden", "sunset", "autumn", "warm", "cool", "arctic", "winter"].includes(
-          id,
-        )
-      )
-        return "warm-cool";
-      if (["cyberpunk", "neon-night", "infrared", "duotone", "night", "moody"].includes(id))
-        return "neon";
-      return "clean";
-    };
-    return ["all", "clean", "film", "warm-cool", "neon", "mono"].filter(
-      (f) => f === "all" || FILTER_PRESETS.some((p) => p.id !== "none" && fam(p.id) === f),
-    ) as string[];
-  }, []);
+  /**
+   * Filters grouped by the catalogue's own families.
+   *
+   * This used to be a hand-written id allowlist duplicated in two places, so any
+   * look added to FILTER_PRESETS without also being added here fell into "clean"
+   * — the new film stocks would all have appeared as social presets. The
+   * catalogue owns the grouping now.
+   */
+  const filterFamilies = useMemo(() => ["all", ...LOOK_FAMILIES] as (LookFamily | "all")[], []);
 
   const filters = useMemo(() => {
-    if (filterFam === "all") return FILTER_PRESETS.filter((p) => p.id !== "none");
-    const fam = (id: string) => {
-      if (["bw", "noir", "silver", "mono-high", "cyanotype"].includes(id)) return "mono";
-      if (["kodachrome", "portra", "vintage", "retro", "fifties", "sepia", "grunge"].includes(id))
-        return "film";
-      if (
-        ["tealorange", "golden", "sunset", "autumn", "warm", "cool", "arctic", "winter"].includes(
-          id,
-        )
-      )
-        return "warm-cool";
-      if (["cyberpunk", "neon-night", "infrared", "duotone", "night", "moody"].includes(id))
-        return "neon";
-      return "clean";
-    };
-    return FILTER_PRESETS.filter((p) => p.id !== "none" && fam(p.id) === filterFam);
-  }, [filterFam]);
+    const pool = filterQuery.trim() ? searchLooks(filterQuery) : looksIn(filterFam);
+    return pool.filter((l) => l.id !== "none");
+  }, [filterFam, filterQuery]);
 
   const activeFilter = mainClip?.filter ?? "none";
   const activeEffect = mainClip?.effect ?? "none";
@@ -601,39 +552,54 @@ export function Library({
         {/* ------------------------------------------------------- STICKERS */}
         {tab === "stickers" && (
           <>
-            <Label>Emoji</Label>
+            <input
+              value={stickerQuery}
+              onChange={(e) => setStickerQuery(e.target.value)}
+              placeholder="Search stickers — fire, crown, arrow, wow…"
+              aria-label="Search stickers"
+              className="w-full h-7 rounded border border-border bg-card px-2 text-[11px] placeholder:text-muted-foreground/70"
+            />
+            {!stickerQuery.trim() && (
+              <Pills
+                options={STICKER_CATEGORIES.map((c: { id: string; name: string }) => ({
+                  id: c.id,
+                  label: c.name,
+                }))}
+                value={stickerFam}
+                onChange={(v) => setStickerFam(v as StickerCategory)}
+              />
+            )}
+            {stickerQuery.trim() && (
+              <div className="text-[10px] text-muted-foreground">
+                {stickerHits.length} result{stickerHits.length === 1 ? "" : "s"} for “
+                {stickerQuery.trim()}”
+              </div>
+            )}
             <div className="grid grid-cols-8 gap-0.5">
-              {STICKERS.map((em) => (
+              {stickerHits.map((asset) => (
                 <button
-                  key={em}
-                  className="h-7 rounded hover:bg-slate-700 text-base leading-none"
-                  title={`Add ${em} as a sticker`}
-                  onClick={() => onAddSticker(em)}
+                  key={asset.id}
+                  className="h-8 rounded hover:bg-slate-700 flex items-center justify-center leading-none overflow-hidden"
+                  title={`${asset.glyph ?? ""} — ${asset.category}`}
+                  style={{
+                    color: asset.color,
+                    fontSize: asset.category === "text" ? 8 : 17,
+                    fontWeight: asset.category === "text" ? 800 : undefined,
+                  }}
+                  onClick={() => onAddSticker(asset.glyph ?? "", stickerPatch(asset))}
                 >
-                  {em}
+                  {asset.glyph}
                 </button>
               ))}
             </div>
-            <Label>Shapes & labels</Label>
-            <Grid cols={4}>
-              {SHAPE_STICKERS.map((s) => (
-                <Tile
-                  key={s.id}
-                  title={`Add the ${s.id} sticker`}
-                  onClick={() => onAddSticker(s.label, s.patch)}
-                >
-                  <div
-                    className="h-10 flex items-center justify-center text-xl"
-                    style={{ color: s.patch.color }}
-                  >
-                    {s.label}
-                  </div>
-                </Tile>
-              ))}
-            </Grid>
+            {stickerHits.length === 0 && (
+              <p className="text-[10px] text-muted-foreground">
+                Nothing matches “{stickerQuery}”. Try “fire”, “arrow”, “wow” or “heart”.
+              </p>
+            )}
             <div className="text-[10px] text-muted-foreground leading-snug">
-              Stickers are text layers, so they stay razor-sharp at any size and cost nothing to
-              render. Drop a PNG here to use it as an image overlay instead.
+              {STATIC_STICKERS.length} stickers, all drawn on your device — sharp at any size, no
+              downloads. Drop a PNG here to use it as an image overlay instead.
             </div>
           </>
         )}
@@ -723,12 +689,31 @@ export function Library({
         {/* -------------------------------------------------------- FILTERS */}
         {tab === "filters" && (
           <>
-            <Pills
-              options={filterFamilies.map((f) => ({ id: f, label: f === "all" ? "All" : f }))}
-              value={filterFam}
-              onChange={setFilterFam}
+            <input
+              value={filterQuery}
+              onChange={(e) => setFilterQuery(e.target.value)}
+              placeholder="Search looks — portra, teal, kdrama, vhs…"
+              aria-label="Search filters"
+              className="w-full h-7 rounded border border-border bg-card px-2 text-[11px] placeholder:text-muted-foreground/70"
             />
+            {!filterQuery.trim() && (
+              <Pills
+                options={filterFamilies.map((f) => ({
+                  id: f,
+                  label:
+                    f === "all" ? "All" : f === "mono" ? "B&W" : f[0].toUpperCase() + f.slice(1),
+                }))}
+                value={filterFam}
+                onChange={(v) => setFilterFam(v as LookFamily | "all")}
+              />
+            )}
             {!mainClip && hint}
+            {filterQuery.trim() && (
+              <div className="text-[10px] text-muted-foreground">
+                {filters.length} look{filters.length === 1 ? "" : "s"} for “{filterQuery.trim()}”
+                {filters.length === 0 && " — try “film”, “warm”, “vintage” or “neon”"}
+              </div>
+            )}
             <div className={mainClip ? "" : "opacity-55 pointer-events-none"}>
               <Grid cols={2}>
                 {filters.map((f) => (
@@ -738,7 +723,7 @@ export function Library({
                     title={`Apply the ${f.name} look`}
                     onClick={() => onApplyFilter(f.id)}
                   >
-                    <FilterPreview css={f.css} />
+                    <FilterPreview css={f.css} look={f} />
                     <div className="px-1 py-0.5 text-[10px] truncate">{f.name}</div>
                   </Tile>
                 ))}
@@ -844,24 +829,81 @@ function Pills({
   );
 }
 
-/** A real miniature of a colour look, so the grid reads like CapCut's. */
-export function FilterPreview({ css }: { css: string }) {
+/** How a sticker should land when tapped from this panel. */
+function stickerPatch(asset: StickerAsset): Partial<OverlayClip> {
+  const base = patchFor(asset);
+  return { ...base, color: asset.color ?? base.color };
+}
+
+/**
+ * A real miniature of a colour look.
+ *
+ * This used to be blank. The CSS filter was applied to an empty absolutely
+ * positioned div layered over the artwork, so every tile in the grid rendered as
+ * an unmodified grey square — the whole Filters tab looked like placeholders.
+ * The filter now wraps the picture itself.
+ *
+ * The finish (tint, grain, vignette, caption) is drawn from the SAME catalogue
+ * data the canvas uses, so the card is an honest preview rather than a hint.
+ */
+export function FilterPreview({ css, look }: { css: string; look?: Look }) {
   const uid = useId().replace(/[:]/g, "");
+  const grain = look?.grain ? Math.min(0.55, look.grain) : 0;
   return (
-    <div className="h-12 relative overflow-hidden">
-      <svg viewBox="0 0 40 30" className="w-full h-full" aria-hidden>
-        <defs>
-          <linearGradient id={`sky-${uid}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#7dd3fc" />
-            <stop offset="100%" stopColor="#fbbf24" />
-          </linearGradient>
-        </defs>
-        <rect width="40" height="30" fill={`url(#sky-${uid})`} />
-        <circle cx="30" cy="8" r="4" fill="#fff7ed" />
-        <path d="M0 22 L10 14 L18 21 L26 12 L40 22 L40 30 L0 30 Z" fill="#166534" />
-        <path d="M0 26 L12 20 L24 26 L40 19 L40 30 L0 30 Z" fill="#14532d" />
-      </svg>
-      <div className="absolute inset-0" style={{ filter: css || undefined }} />
+    <div className="h-12 relative overflow-hidden bg-slate-900">
+      <div className="absolute inset-0" style={{ filter: css || undefined }}>
+        <svg viewBox="0 0 40 30" className="w-full h-full" aria-hidden preserveAspectRatio="none">
+          <defs>
+            <linearGradient id={`sky-${uid}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#7dd3fc" />
+              <stop offset="100%" stopColor="#fbbf24" />
+            </linearGradient>
+          </defs>
+          <rect width="40" height="30" fill={`url(#sky-${uid})`} />
+          <circle cx="30" cy="8" r="4" fill="#fff7ed" />
+          {/* skin-tone and green foliage: the two things a colour look most
+              obviously changes, so the tile shows what the look does to them */}
+          <circle cx="13" cy="17" r="4.2" fill="#d9a07a" />
+          <rect x="13" y="21" width="9" height="9" rx="3" fill="#b06a4a" />
+          <path d="M0 22 L10 14 L18 21 L26 12 L40 22 L40 30 L0 30 Z" fill="#166534" />
+          <path d="M0 26 L12 20 L24 26 L40 19 L40 30 L0 30 Z" fill="#14532d" />
+        </svg>
+      </div>
+      {look?.tint && (
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundColor: look.tint.color,
+            opacity: look.tint.alpha,
+            mixBlendMode: look.tint.mode,
+          }}
+        />
+      )}
+      {grain > 0 && (
+        <div
+          className="absolute inset-0 pointer-events-none opacity-70"
+          style={{
+            backgroundImage:
+              "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/></filter><rect width='64' height='64' filter='url(%23n)' opacity='" +
+              grain.toFixed(2) +
+              "'/></svg>\")",
+            mixBlendMode: "overlay",
+          }}
+        />
+      )}
+      {look?.vignette ? (
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background: `radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,${(0.6 * look.vignette).toFixed(2)}) 100%)`,
+          }}
+        />
+      ) : null}
+      {look?.label && (
+        <div className="absolute bottom-0.5 right-1 text-[7px] font-semibold text-white/90 drop-shadow">
+          {look.label}
+        </div>
+      )}
     </div>
   );
 }
@@ -908,22 +950,36 @@ export function TransitionPreview({ kind, seed }: { kind: TransitionKind; seed: 
           : null;
   const horizontal = dir === "left" || dir === "right" || kind === "slide";
   const vertical = dir === "up" || dir === "down";
+  // The trending family each got a card that moves the way the engine moves,
+  // named after it, rather than falling through to the generic fade.
+  const trendAnim: Partial<Record<TransitionKind, string>> = {
+    flash: "mc-flash 1.3s ease-in-out infinite",
+    spin: "mc-spin 1.3s ease-in-out infinite",
+    glitch: "mc-glitch 0.9s steps(3, end) infinite",
+    lightleak: "mc-leak 1.5s ease-in-out infinite",
+    luma: "mc-luma 1.3s ease-in-out infinite",
+    zoomblur: "mc-zoomblur 1.3s ease-in-out infinite",
+    whipl: "mc-whip-x 1.1s ease-in-out infinite",
+    whipr: "mc-whip-x 1.1s ease-in-out infinite",
+  };
   const anim =
     kind === "none"
       ? ""
-      : fam === "slide"
-        ? kind === "slide"
-          ? "mc-diag 1.15s ease-in-out infinite"
-          : horizontal
-            ? "mc-slide-x 1.15s ease-in-out infinite"
-            : "mc-slide-y 1.15s ease-in-out infinite"
-        : fam === "wipe"
-          ? horizontal
-            ? "mc-wipe-x 1.2s ease-in-out infinite"
-            : "mc-wipe-y 1.2s ease-in-out infinite"
-          : fam === "zoom"
-            ? "mc-punch 1.2s ease-in-out infinite"
-            : "mc-fade 1.4s ease-in-out infinite";
+      : fam === "trend"
+        ? (trendAnim[kind] ?? "mc-fade 1.4s ease-in-out infinite")
+        : fam === "slide"
+          ? kind === "slide"
+            ? "mc-diag 1.15s ease-in-out infinite"
+            : horizontal
+              ? "mc-slide-x 1.15s ease-in-out infinite"
+              : "mc-slide-y 1.15s ease-in-out infinite"
+          : fam === "wipe"
+            ? horizontal
+              ? "mc-wipe-x 1.2s ease-in-out infinite"
+              : "mc-wipe-y 1.2s ease-in-out infinite"
+            : fam === "zoom"
+              ? "mc-punch 1.2s ease-in-out infinite"
+              : "mc-fade 1.4s ease-in-out infinite";
   // which way the incoming panel should slide in from
   const origin =
     dir === "left"
