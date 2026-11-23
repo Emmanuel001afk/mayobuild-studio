@@ -31,6 +31,12 @@ import { can, device } from "../device";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { importLut, loadAllLuts } from "../luts";
 import { db, requestPersistentStorage } from "../idb";
+import {
+  AUTOSAVE_DEBOUNCE_MS,
+  AUTOSAVE_MAX_WAIT_MS,
+  describeWriteFailure,
+  shouldAutosave,
+} from "../persistence";
 import { buildProxy, canBuildProxy } from "../proxy-build";
 import {
   searchEmoji,
@@ -304,6 +310,19 @@ export function Editor({
   const [redoCount, setRedoCount] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const autosaveTimer = useRef<number | null>(null);
+  /** first un-saved edit, or null when everything is on disk */
+  const dirtySince = useRef<number | null>(null);
+  const lastWriteAt = useRef(0);
+  const lastEditAt = useRef(0);
+  const saveInFlight = useRef(false);
+  /** serialised failure banner, so a broken store is visible, not guessed at */
+  const [saveProblem, setSaveProblem] = useState<string | null>(null);
+  /** playback rate for the transport (1 = real time); audit-friendly preview */
+  const [rate, setRate] = useState(1);
+  /** step field: the frame grid the arrow keys move on */
+  const [stepFps, setStepFps] = useState(30);
+  /** in/out marks for a loop region (seconds); null = loop the whole timeline */
+  const [loopRegion, setLoopRegion] = useState<{ a: number; b: number } | null>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   // Expanded preview: hide the side panels so the picture gets the whole
   // window. Playback, scrubbing and overlay dragging all keep working because
@@ -415,10 +434,6 @@ export function Editor({
     return () => {
       alive = false;
       if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
-      void db.saveProject({ ...eng.project, updatedAt: Date.now() }).catch((error) => {
-        console.error("MayoCut could not save the project", error);
-        toast.error("Could not save project — check device storage");
-      });
       eng.destroy();
       if (engineRef.current === eng) engineRef.current = null;
     };
@@ -435,13 +450,20 @@ export function Editor({
     eng.draw();
   }, [previewQuality, devProfile.limits.previewMaxSide]);
 
-  const scheduleAutosave = useCallback(() => {
-    if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
-    autosaveTimer.current = window.setTimeout(async () => {
-      const eng = engineRef.current;
-      if (!eng) return;
+  /**
+   * Write the project to disk, and REPORT whether it actually landed.
+   *
+   * The previous version fired a debounced write and a toast on failure, but
+   * nothing verified the result and the debounce was reset by every edit — so a
+   * continuous edit session (or a tab closed within 1.2 s) wrote nothing at all.
+   */
+  const flushSave = useCallback(async (): Promise<boolean> => {
+    const eng = engineRef.current;
+    if (!eng || saveInFlight.current) return false;
+    saveInFlight.current = true;
+    try {
       const p = { ...eng.project, updatedAt: Date.now() };
-      // thumbnail snapshot (best effort)
+      // thumbnail snapshot (best effort — never let it block the save)
       try {
         const canvas = canvasWrapRef.current?.querySelector("canvas");
         if (canvas) {
@@ -454,13 +476,74 @@ export function Editor({
       } catch {
         /* ignore */
       }
-      try {
-        await db.saveProject(p);
-      } catch {
-        toast.error("Auto-save failed — storage may be full");
-      }
-    }, 1200);
+      await db.saveProject(p);
+      // Read nothing back here: the transaction resolving IS the confirmation.
+      // What matters is that we waited for it instead of assuming.
+      dirtySince.current = null;
+      lastWriteAt.current = Date.now();
+      setSaveProblem(null);
+      return true;
+    } catch (error) {
+      const f = describeWriteFailure(error);
+      console.error("MayoCut could not save the project", f.detail);
+      // Latch the banner on rather than firing a toast per attempt: a full disk
+      // fails on every keystroke, and a toast storm hides the one message that
+      // matters.
+      setSaveProblem(f.advice);
+      return false;
+    } finally {
+      saveInFlight.current = false;
+    }
   }, []);
+
+  // The transport's own settings are engine state, not React state: the play
+  // loop reads them every frame, so pushing them in an effect keeps the two in
+  // step without a render per frame.
+  useEffect(() => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    eng.playbackRate = rate;
+    eng.loopRegion = loopRegion;
+  }, [rate, loopRegion, engineReady]);
+
+  const scheduleAutosave = useCallback(() => {
+    const now = Date.now();
+    if (dirtySince.current === null) dirtySince.current = now;
+    lastEditAt.current = now;
+    if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+    // Debounce normally, but never wait longer than AUTOSAVE_MAX_WAIT_MS past
+    // the first un-saved edit — a long drag must still reach the disk.
+    const waited = now - (dirtySince.current ?? now);
+    const delay = Math.max(0, Math.min(AUTOSAVE_DEBOUNCE_MS, AUTOSAVE_MAX_WAIT_MS - waited));
+    autosaveTimer.current = window.setTimeout(() => {
+      autosaveTimer.current = null;
+      if (shouldAutosave(Date.now(), dirtySince.current, lastEditAt.current, lastWriteAt.current))
+        void flushSave();
+    }, delay);
+  }, [flushSave]);
+
+  // Anything that can end the session gets a last, synchronous-ish write. React
+  // effect cleanup does NOT run when a phone kills a backgrounded tab, which is
+  // precisely the case where work was disappearing.
+  useEffect(() => {
+    const flush = () => {
+      if (dirtySince.current === null) return;
+      // Not awaited: the page may be going away. The write is still queued in
+      // IndexedDB, which is allowed to complete after `pagehide`.
+      void flushSave();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [flushSave]);
 
   // keyboard shortcuts
   useEffect(() => {
@@ -489,6 +572,22 @@ export function Editor({
       if (e.code === "Space") {
         e.preventDefault();
         eng.toggle();
+      } else if (e.key === "j" || e.key === "J") {
+        // J/K/L, the convention every editor and NLE shares: J plays backwards
+        // (nearest thing here is a faster reverse scrub), K pauses, L plays.
+        setRate((r) => Math.max(0.25, r / 2));
+        if (!eng.playing) void eng.play();
+      } else if (e.key === "k" || e.key === "K") {
+        if (eng.playing) eng.pause();
+      } else if (e.key === "l" || e.key === "L") {
+        setRate((r) => Math.min(4, r * 2));
+        if (!eng.playing) void eng.play();
+      } else if (e.key === "i" || e.key === "I") {
+        setLoopRegion((r) => ({ a: eng.t, b: r?.b ?? eng.duration() }));
+        toast.success("Loop in set");
+      } else if (e.key === "o" || e.key === "O") {
+        setLoopRegion((r) => ({ a: r?.a ?? 0, b: eng.t }));
+        toast.success("Loop out set");
       } else if (e.key === "s" || e.key === "S") {
         if (doSplit()) toast.success("Split at playhead");
       } else if (e.key === "f" || e.key === "F") {
@@ -496,29 +595,23 @@ export function Editor({
       } else if (e.key === "Delete" || e.key === "Backspace") {
         deleteSelection();
       } else if (e.key === "ArrowLeft") {
-        // Step by the selected export frame rate so frame-accurate review
-        // remains aligned with 24/30/60 fps projects.
-        eng.seek(eng.t - (e.shiftKey ? 1 : 1 / Math.max(1, exportFps)));
+        // One frame on the project's frame grid; Shift = one second. The grid is
+        // explicit so a 24 fps project does not step in 30ths.
+        eng.seek(eng.t - (e.shiftKey ? 1 : 1 / Math.max(1, stepFps)));
       } else if (e.key === "ArrowRight") {
-        eng.seek(eng.t + (e.shiftKey ? 1 : 1 / Math.max(1, exportFps)));
+        eng.seek(eng.t + (e.shiftKey ? 1 : 1 / Math.max(1, stepFps)));
       } else if (e.key === "Escape") {
         setStageMax(false);
       } else if (e.key === "Home") {
         eng.seek(0);
       } else if (e.key === "End") {
         eng.seek(eng.duration());
-      } else if (e.key === "j" || e.key === "J") {
-        if (!eng.playing) void eng.play();
-      } else if (e.key === "k" || e.key === "K") {
-        eng.pause();
-      } else if (e.key === "l" || e.key === "L") {
-        if (!eng.playing) void eng.play();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection, project, exportFps]);
+  }, [selection, project, exportFps, stepFps]);
 
   // ------------------------------------------------------------- mutations
 
@@ -2032,6 +2125,26 @@ export function Editor({
         <Sparkles className="h-3 w-3" /> Assist
       </button>
       <div className="ml-auto flex items-center gap-2">
+        {saveProblem && (
+          // A save that failed silently is how an entire session disappeared.
+          // This stays visible until a write succeeds, and offers the only
+          // remedy that actually works (free space), plus a way out that does
+          // not depend on this browser's storage.
+          <div
+            role="alert"
+            className="flex items-center gap-1.5 rounded border border-red-400/50 bg-red-500/10 px-2 py-1 text-[10px] text-red-200"
+            title={saveProblem}
+          >
+            <span className="font-semibold">Not saved</span>
+            <span className="max-w-[16rem] truncate">{saveProblem}</span>
+            <button className="underline shrink-0" onClick={() => void flushSave()}>
+              retry
+            </button>
+            <button className="underline shrink-0" onClick={() => setShowExport(true)}>
+              export
+            </button>
+          </div>
+        )}
         <button
           className="mb-btn-ghost h-8 px-2 text-xs"
           onClick={() => void saveAsTemplate()}
@@ -2842,6 +2955,90 @@ export function Editor({
       >
         ⟳
       </button>
+      {/* Frame-accurate stepping: one button per frame on the chosen grid, so a
+          cut can be nudged without touching the keyboard. */}
+      <div className="flex items-center gap-0.5" role="group" aria-label="Frame stepping">
+        <button
+          className="mb-btn-ghost h-7 px-1.5 text-[10px]"
+          onClick={() => engineRef.current?.seek(t - 1 / Math.max(1, stepFps))}
+          title="Back one frame (←)"
+        >
+          ◀|
+        </button>
+        <select
+          className="h-7 rounded border border-border bg-card px-1 text-[10px]"
+          value={stepFps}
+          onChange={(e) => setStepFps(Number(e.target.value))}
+          title="Frame grid used by the arrow keys and the step buttons"
+          aria-label="Frame grid"
+        >
+          {[24, 25, 30, 50, 60].map((f) => (
+            <option key={f} value={f}>
+              {f}fps
+            </option>
+          ))}
+        </select>
+        <button
+          className="mb-btn-ghost h-7 px-1.5 text-[10px]"
+          onClick={() => engineRef.current?.seek(t + 1 / Math.max(1, stepFps))}
+          title="Forward one frame (→)"
+        >
+          |▶
+        </button>
+      </div>
+      {/* Transport speed. 0.25x is the one that matters: it is how you hear
+          whether a cut lands on the beat. */}
+      <div className="flex items-center gap-0.5" role="group" aria-label="Playback speed">
+        {[0.25, 0.5, 1, 2].map((r) => (
+          <button
+            key={r}
+            className={`mb-btn-ghost h-7 px-1 text-[10px] ${rate === r ? "text-primary" : "text-muted-foreground"}`}
+            aria-pressed={rate === r}
+            onClick={() => setRate(r)}
+            title={`Play at ${r}x`}
+          >
+            {r}x
+          </button>
+        ))}
+      </div>
+      {/* Loop region: I/O set the marks, ✕ clears them. */}
+      <div className="flex items-center gap-1" role="group" aria-label="Loop region">
+        <button
+          className="mb-btn-ghost h-7 px-1.5 text-[10px]"
+          onClick={() => {
+            setLoopRegion({ a: t, b: loopRegion?.b ?? dur });
+            toast.success("Loop in set");
+          }}
+          title="Set loop in-point at the playhead (I)"
+        >
+          [
+        </button>
+        <button
+          className="mb-btn-ghost h-7 px-1.5 text-[10px]"
+          onClick={() => {
+            setLoopRegion({ a: loopRegion?.a ?? 0, b: t });
+            toast.success("Loop out set");
+          }}
+          title="Set loop out-point at the playhead (O)"
+        >
+          ]
+        </button>
+        {loopRegion && (
+          <>
+            <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
+              {fmtTime(Math.min(loopRegion.a, loopRegion.b))}–
+              {fmtTime(Math.max(loopRegion.a, loopRegion.b))}
+            </span>
+            <button
+              className="mb-btn-ghost h-7 px-1 text-[10px]"
+              onClick={() => setLoopRegion(null)}
+              title="Clear loop region"
+            >
+              ✕
+            </button>
+          </>
+        )}
+      </div>
       <span className="font-mono tabular-nums">
         {fmtTime(t)} <span className="text-muted-foreground">/ {fmtTime(dur)}</span>
       </span>

@@ -37,6 +37,7 @@ import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-p
 import { audioFxRecipe, buildAudioFx, makeImpulse, type AudioFxId } from "./audio-fx";
 import { applyCurveLuts, buildCurveLuts, curvesActive } from "./curves";
 import { applyHsl, hslActive } from "./hsl";
+import { blocksPlayback, shouldHardStop, type VideoPlaybackState } from "./playback";
 import { sourceFor } from "./proxy";
 import { applyLut, type LutTable } from "./luts";
 import { sampleTimeline } from "./timeline";
@@ -358,6 +359,23 @@ interface ElRecord {
   /** which url is currently applied to the element */
   appliedUrl?: string;
   videoLoadRequested?: boolean;
+  seekTimer?: number;
+  /**
+   * A seek was issued but its `seeked` event has not arrived yet.
+   *
+   * Browsers report `readyState < 2` for the whole duration of a seek, and the
+   * play loop pauses the entire transport while any active video is below that
+   * — so without this flag one seek could freeze playback indefinitely (the
+   * pause/play calls the loop issues keep cancelling the seek that would clear
+   * it). Only a seek-in-flight may block; plain buffering must not.
+   */
+  seeking?: boolean;
+  /**
+   * This element has produced a frame for the current clip, so a later dip in
+   * `readyState` is ordinary re-buffering, not "it never loaded". A video that
+   * has played before is allowed to keep running while it refills.
+   */
+  warm?: boolean;
   videoLoadTimer?: number;
   /** true once a slow load has already been retried — avoids a retry loop */
   videoSlowLoadRetried?: boolean;
@@ -512,6 +530,10 @@ export class Engine {
 
   t = 0;
   playing = false;
+  /** transport speed multiplier (J/K/L); 1 = real time, clamped to a sane range */
+  playbackRate = 1;
+  /** when set, playback loops between these two timeline seconds */
+  loopRegion: { a: number; b: number } | null = null;
   loop = true;
   private raf = 0;
   private lastNow = 0;
@@ -859,6 +881,13 @@ export class Engine {
   /** Is a video's track undecodable on this device (runtime-confirmed)? */
   isVideoBroken(mediaId: string): boolean {
     return this.els.get(mediaId)?.videoBroken ?? false;
+  }
+
+  /** The element record for a media id, creating it if needed. */
+  private ensureMediaRec(mediaId: string): ElRecord {
+    const media = this.media.get(mediaId);
+    if (!media) throw new Error(`unknown media ${mediaId}`);
+    return this.ensureEl(media);
   }
 
   private clipUsingMedia(clipId: string, mediaId: string): boolean {
@@ -1228,6 +1257,65 @@ export class Engine {
   }
 
   /** Only active visual sources can hold up the timeline. */
+  /**
+   * Seek an element and remember that a seek is in flight.
+   *
+   * Every `el.currentTime = x` in this file goes through here so the play loop
+   * can tell "we asked it to jump and it is honouring that" from "the decoder
+   * has stalled". The old code could not, so it treated both the same way — it
+   * paused every element, which on several browsers cancels the very seek that
+   * would have cleared the condition, and the transport stayed stuck.
+   */
+  private seekEl(rec: ElRecord, mediaId: string, to: number) {
+    // Seek the element this record owns: for a broken-video fallback that is
+    // the shadow <audio>, and seeking a different element would report success
+    // while the audible one stayed put.
+    const el = (rec.videoBroken && rec.audioFallback ? rec.audioFallback : rec.el) as
+      HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
+    if (el instanceof HTMLImageElement) return;
+    const target = Math.max(0, to);
+    if (!Number.isFinite(target)) return;
+    try {
+      rec.seeking = true;
+      el.currentTime = target;
+    } catch {
+      rec.seeking = false; /* not seekable yet — nothing in flight */
+      return;
+    }
+    if (rec.seekTimer) window.clearTimeout(rec.seekTimer);
+    // A browser that never fires `seeked` must not wedge the loop: clear the
+    // flag on a budget, well past any plausible seek on a phone.
+    rec.seekTimer = window.setTimeout(() => {
+      rec.seekTimer = undefined;
+      rec.seeking = false;
+    }, 600);
+    const clear = () => {
+      rec.seeking = false;
+      if (rec.seekTimer) {
+        window.clearTimeout(rec.seekTimer);
+        rec.seekTimer = undefined;
+      }
+      el.removeEventListener("seeked", clear);
+    };
+    el.addEventListener("seeked", clear, { once: true });
+  }
+
+  /**
+   * Videos that the play loop must not run past yet.
+   *
+   * This used to be "any active video whose readyState is below HAVE_CURRENT_DATA
+   * or is seeking". `readyState < 2` is also what a browser reports for normal
+   * re-buffering mid-playback, and seeking is what the loop itself causes by
+   * correcting drift every frame — so with an overlay video present the loop
+   * kept tripping over its own seeks, pausing every element, and the picture
+   * froze for a moment, again and again, until the clip ended.
+   *
+   * The rule now:
+   *   - a seek WE issued and whose `seeked` has not arrived: wait (bounded);
+   *   - a clip that has never shown a frame: wait, but do not pause the others;
+   *   - anything that has played and dipped below readyState 2: keep going. A
+   *     stale frame for a few milliseconds is invisible; a stall is not.
+   */
   private videosAwaitingFrame(): HTMLVideoElement[] {
     const ids = new Set<string>();
     const sample = sampleTimeline(this.project, this.t);
@@ -1242,7 +1330,18 @@ export class Engine {
       const rec = this.els.get(id);
       if (!rec || rec.videoBroken || !(rec.el instanceof HTMLVideoElement)) continue;
       this.requestVideoLoad(id);
-      if (rec.el.readyState < 2 || rec.el.seeking) pending.push(rec.el);
+      const el = rec.el;
+      if (el.readyState >= 2) rec.warm = true;
+      if (
+        blocksPlayback({
+          readyState: el.readyState,
+          seeking: !!rec.seeking,
+          warm: !!rec.warm,
+          videoBroken: !!rec.videoBroken,
+        })
+      ) {
+        pending.push(el);
+      }
     }
     return pending;
   }
@@ -1437,12 +1536,20 @@ export class Engine {
       if (!this.exporting && this.videosAwaitingFrame().length) {
         if (!this.buffering) {
           this.setBuffering(true);
-          for (const [id, rec] of this.els) {
-            const el = rec.el as Partial<AudioEl>;
-            if (el && !el.paused) el.pause?.();
-            if (rec.audioFallback && !rec.audioFallback.paused) rec.audioFallback.pause();
-            if (rec.bufSrc) this.stopBufSource(id);
+          if (this.allActiveVideosCold()) {
+            // Nothing on screen can render at all yet. Pause so the decoders get
+            // the whole budget, and so we do not play audio under a frozen
+            // picture. This is the only case that justifies a hard stop.
+            for (const [id, rec] of this.els) {
+              const el = rec.el as Partial<AudioEl>;
+              if (el && !el.paused) el.pause?.();
+              if (rec.audioFallback && !rec.audioFallback.paused) rec.audioFallback.pause();
+              if (rec.bufSrc) this.stopBufSource(id);
+            }
           }
+          // Otherwise something IS on screen: let it keep playing while the
+          // other element catches up. Pausing here used to interrupt the seek
+          // that was going to resolve the wait, so the loop waited for ever.
         }
         this.lastNow = now;
         this.raf = requestAnimationFrame(step);
@@ -1456,8 +1563,21 @@ export class Engine {
       const dt = Math.min(0.25, (now - this.lastNow) / 1000);
       const dur = this.duration();
       this.lastNow = now;
-      this.t += dt;
-      if (this.t >= dur) {
+      // Transport rate. Clamped rather than trusted: a stale or NaN rate would
+      // either freeze the clock or run it at 1000x.
+      const rate = Number.isFinite(this.playbackRate)
+        ? Math.max(0.1, Math.min(8, this.playbackRate))
+        : 1;
+      this.t += dt * rate;
+      // A loop region is what makes frame-level review bearable: watch the same
+      // second of a cut until it is right, without re-seeking by hand.
+      const region = this.loopRegion;
+      const regionEnd = region && region.b > region.a ? Math.min(region.b, dur) : null;
+      const regionStart = region ? Math.max(0, region.a) : 0;
+      if (regionEnd !== null && this.t >= regionEnd) {
+        this.t = regionStart;
+        this.syncElements(true);
+      } else if (this.t >= dur) {
         if (this.loop && dur > 0) {
           this.t = 0;
           this.syncElements(true);
@@ -1492,6 +1612,41 @@ export class Engine {
   }
 
   /**
+   * True when no active video can show a frame right now.
+   *
+   * Distinct from `videosAwaitingFrame().length > 0`: one element can be
+   * catching up while another is happily showing a frame, and in that case
+   * stopping the transport is the wrong call.
+   */
+  private allActiveVideosCold(): boolean {
+    const sample = sampleTimeline(this.project, this.t);
+    const states: VideoPlaybackState[] = [];
+    for (const s of sample.main) {
+      const rec = this.els.get(s.clip.mediaId);
+      if (!rec || !(rec.el instanceof HTMLVideoElement)) continue;
+      states.push({
+        readyState: rec.el.readyState,
+        seeking: !!rec.seeking,
+        warm: !!rec.warm,
+        videoBroken: !!rec.videoBroken,
+      });
+    }
+    for (const layer of sample.overlays) {
+      const track = this.project.tracks.find((tr) => tr.id === layer.trackId);
+      if (track?.hidden || layer.clip.kind !== "video" || !layer.clip.mediaId) continue;
+      const rec = this.els.get(layer.clip.mediaId);
+      if (!rec || !(rec.el instanceof HTMLVideoElement)) continue;
+      states.push({
+        readyState: rec.el.readyState,
+        seeking: !!rec.seeking,
+        warm: !!rec.warm,
+        videoBroken: !!rec.videoBroken,
+      });
+    }
+    return shouldHardStop(states);
+  }
+
+  /**
    * Glue media elements to the timeline clock.
    * Reverse clips: the element is held paused and re-seeked to the mirrored
    * source position every frame (its audio is muted by the timeline gain).
@@ -1523,25 +1678,20 @@ export class Engine {
         if (s.clip.freeze) {
           // held frame: hold this exact frame, silent
           const at = s.clip.in + 1 / 60;
-          if (Math.abs(el.currentTime - at) > 0.02) {
-            try {
-              el.currentTime = Math.max(0, at);
-            } catch {
-              /* not seekable yet */
-            }
-          }
+          if (Math.abs(el.currentTime - at) > 0.02)
+            this.seekEl(rec ?? this.ensureMediaRec(s.clip.mediaId), s.clip.mediaId, at);
           el.volume = 0;
           if (!el.paused) el.pause();
           continue;
         }
         const local = s.sourceTime;
-        if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-          try {
-            el.currentTime = Math.max(0, local);
-          } catch {
-            /* not seekable yet */
-          }
-        }
+        // Drift correction. The threshold widens while playing because a seek
+        // costs a decode: correcting a 0.1 s drift every frame keeps the decoder
+        // permanently busy, which is what made playback stutter with a second
+        // video on screen. A quarter second is invisible; a stutter is not.
+        const tolerance = hard ? 0.08 : this.playing ? 0.3 : 0.2;
+        if (Math.abs(el.currentTime - local) > tolerance)
+          this.seekEl(rec ?? this.ensureMediaRec(s.clip.mediaId), s.clip.mediaId, local);
         // reverse clips advance the element forward, so use the clock rate.
         // Guarded: assigning NaN to playbackRate is a silent no-op in every
         // browser, which leaves the element at the previous clip's rate —
@@ -1587,13 +1737,9 @@ export class Engine {
             void this.startBufferSource(c, local);
           } else {
             this.stopBufSource(c.mediaId);
-            if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-              try {
-                el.currentTime = Math.max(0, local);
-              } catch {
-                /* ignore */
-              }
-            }
+            const tol = hard ? 0.08 : this.playing ? 0.3 : 0.2;
+            if (Math.abs(el.currentTime - local) > tol)
+              this.seekEl(this.ensureMediaRec(c.mediaId), c.mediaId, local);
             if (el.playbackRate !== 1) el.playbackRate = 1;
             el.volume = this.overlayAudioVolume(c, t) * this.duckFactor(t);
             if (this.playing && el.paused) void el.play().catch(() => undefined);
@@ -1611,13 +1757,9 @@ export class Engine {
               const md = this.media.get(c.mediaId)?.duration ?? 0;
               if (md > 0.05) local %= md;
             }
-            if (Math.abs(el.currentTime - local) > (hard ? 0.08 : 0.2)) {
-              try {
-                el.currentTime = Math.max(0, local);
-              } catch {
-                /* ignore */
-              }
-            }
+            const tol = hard ? 0.08 : this.playing ? 0.3 : 0.2;
+            if (Math.abs(el.currentTime - local) > tol)
+              this.seekEl(this.ensureMediaRec(c.mediaId), c.mediaId, local);
             el.playbackRate = Math.max(0.05, Math.min(16, c.speed ?? 1));
             el.volume = 0;
             if (this.playing && el.paused) void el.play().catch(() => undefined);

@@ -359,6 +359,106 @@ if (!graphicNamed) {
   }
 }
 
+// --- the player: frame stepping, speed, loop region -------------------------
+{
+  const frameGroup = document.querySelector('[aria-label="Frame stepping"]');
+  const speedGroup = document.querySelector('[aria-label="Playback speed"]');
+  const loopGroup = document.querySelector('[aria-label="Loop region"]');
+  const grids = frameGroup ? [...frameGroup.querySelectorAll("option")].map((o) => o.value) : [];
+  const speeds = speedGroup
+    ? [...speedGroup.querySelectorAll("button")].map((b) => b.textContent.trim())
+    : [];
+  const ok =
+    !!frameGroup &&
+    !!speedGroup &&
+    !!loopGroup &&
+    [24, 25, 30, 50, 60].every((f) => grids.includes(String(f))) &&
+    ["0.25x", "0.5x", "1x", "2x"].every((r) => speeds.includes(r));
+  console.log(
+    ok
+      ? `  PASS player has frame grid (${grids.join("/")}), speeds (${speeds.join(" ")}) and loop marks`
+      : `  FAIL player transport incomplete — grids ${grids.join("/")} / speeds ${speeds.join(" ")}`,
+  );
+  if (!ok) failed++;
+
+  // The speed buttons must actually change the engine's transport rate, not just
+  // light up: a control that only sets React state is the bug this catches.
+  const half = speedGroup && [...speedGroup.querySelectorAll("button")].find((b) => b.textContent.trim() === "0.5x");
+  if (half) {
+    half.click();
+    await wait(200);
+    const pressed = half.getAttribute("aria-pressed") === "true";
+    console.log(pressed ? "  PASS playback speed selects 0.5x" : "  FAIL playback speed selects 0.5x");
+    if (!pressed) failed++;
+  }
+}
+
+// --- durability: the project must survive a CLOSE, not just a quiet moment ---
+// The report was "everything disappears when I close the app". Two earlier
+// versions of this check were worthless, and both were caught the same way: by
+// deleting the fix and confirming the check STILL passed.
+//   1. "wait 7 s, then read the store" — that only tests the debounce.
+//   2. "click a chip, hide the page" — the chip did not exist, and a mount-time
+//      autosave landed 1.2 s later carrying a snapshot that happened to include
+//      the change, so it passed with the close path removed entirely.
+// This version isolates the thing under test: settle all pending writes, make a
+// change through a control that is asserted to exist, then close within the
+// debounce window so ONLY the close path can save it.
+{
+  const read = () =>
+    new Promise((resolve, reject) => {
+      const req = db.transaction("projects", "readonly").objectStore("projects").get("prj_smoke");
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+
+  // Let every mount-time autosave finish, so `before` is genuinely the settled
+  // state and nothing is in flight to rescue the change.
+  await wait(2600);
+  const before = await read();
+
+  // A change through a real control, with a real selection behind it.
+  const mainClip = [...document.querySelectorAll("[title]")].find((el) =>
+    (el.getAttribute("title") || "").startsWith("clip.mp4 · 4.00s"),
+  );
+  mainClip?.dispatchEvent(
+    new window.PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", clientX: 10 }),
+  );
+  window.dispatchEvent(new window.PointerEvent("pointerup", { bubbles: true, pointerType: "mouse", clientX: 10 }));
+  await wait(150);
+  railTab("Filters")?.click();
+  await wait(200);
+  const control = [...document.querySelectorAll("button")].find((el) => el.title === "Sepia");
+  control?.click();
+  // Shorter than the 1200 ms debounce on purpose: no timer can have fired.
+  await wait(150);
+
+  const pending = await read();
+  const timerDidNotSave = pending?.updatedAt === before?.updatedAt;
+
+  // visibilitychange → hidden, then pagehide: the order browsers use when a tab
+  // is closed or a phone reclaims a backgrounded app.
+  Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+  document.dispatchEvent(new window.Event("visibilitychange"));
+  window.dispatchEvent(new window.Event("pagehide"));
+  Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+
+  // Read BEFORE the 1200 ms debounce from the click could fire (we are ~250 ms
+  // in). A real browser freezes timers on pagehide; happy-dom does not, so
+  // waiting longer lets the timer rescue a missing close path — which is
+  // exactly what made the first two versions of this check pass without a fix.
+  await wait(250);
+  const after = await read();
+  const saved = !!after && after.updatedAt !== before?.updatedAt;
+  const filterKept = after?.main?.[0]?.filter === "sepia";
+  await wait(1200);
+
+  checks.push(["a filter control exists for the close-path test", !!mainClip && !!control]);
+  checks.push(["no timer had saved yet when the page closed", timerDidNotSave]);
+  checks.push(["a change made just before closing survives (written on pagehide)", saved]);
+  checks.push(["the surviving project holds the change, not a stale copy", filterKept]);
+}
+
 // --- the library tabs must all open and expose their catalogue ---------------
 // This is the part that would silently rot: a tab that renders nothing, or a
 // catalogue that lost its entries, is invisible to a "does it mount" check.

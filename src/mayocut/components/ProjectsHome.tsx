@@ -32,7 +32,8 @@ import {
   validatePack,
 } from "../assist";
 import { device } from "../device";
-import { db, requestPersistentStorage } from "../idb";
+import { db, requestPersistentStorage, storageUsage } from "../idb";
+import { describeWriteFailure, fitsBudget } from "../persistence";
 import {
   ASPECT_ORDER,
   ASPECTS,
@@ -142,16 +143,51 @@ export function ProjectsHome({ desktop, nav }: { desktop?: boolean; nav: HomeNav
       }
       // Ask the browser to protect the local library from automatic eviction.
       void navigator.storage?.persist?.().catch(() => false);
+
+      // Check the budget BEFORE copying. Discovering a full disk at the end of
+      // a two-minute copy of a 2 GB clip is the worst possible moment, and the
+      // half-written state is confusing.
+      const need = accepted.reduce((n, f) => n + f.size, 0);
+      const usage = await storageUsage();
+      const fit = fitsBudget(need, usage);
+      if (!fit.ok) {
+        toast.error(fit.reason, { description: "Delete a project or export, then import again." });
+        return;
+      }
+
       const items = await importFiles(accepted);
+      const failures: string[] = [];
       for (const item of items) {
         const { sourceFile, ...rec } = item;
-        await db.putMedia(rec, sourceFile);
+        try {
+          // This await is the whole point: the write must succeed before the
+          // item is announced as imported. Previously a rejected write was
+          // logged and the media disappeared on the next load, with a success
+          // toast shown in between.
+          await db.putMedia(rec, sourceFile);
+        } catch (error) {
+          const f = describeWriteFailure(error);
+          console.error("MayoCut could not store", rec.name, f.detail);
+          failures.push(`${rec.name} (${f.kind === "quota" ? "no space" : "write failed"})`);
+        }
       }
-      toast.success(`${items.length} item${items.length > 1 ? "s" : ""} added to your library`);
+      const stored = items.length - failures.length;
+      if (failures.length) {
+        toast.error(
+          `${failures.length} file${failures.length > 1 ? "s" : ""} could not be saved on this device`,
+          {
+            description: `${failures.slice(0, 3).join(", ")}${failures.length > 3 ? "…" : ""}. Free some space and try again.`,
+          },
+        );
+      }
+      if (stored > 0) {
+        toast.success(`${stored} item${stored > 1 ? "s" : ""} saved on this device`);
+      }
       await refresh();
     } catch (e) {
+      const f = describeWriteFailure(e);
       console.error(e);
-      toast.error("Import failed — storage may be full");
+      toast.error("Import failed", { description: f.advice });
     } finally {
       setBusyImport(false);
       if (fileRef.current) fileRef.current.value = "";

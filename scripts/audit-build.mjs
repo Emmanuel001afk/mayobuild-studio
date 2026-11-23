@@ -29,6 +29,8 @@ const MODULES = [
   "sticker-kinds",
   "stickers",
   "fonts",
+  "persistence",
+  "playback",
 ];
 
 for (const name of MODULES) {
