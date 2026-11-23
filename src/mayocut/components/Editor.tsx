@@ -56,6 +56,7 @@ import {
 } from "../sticker-kinds";
 import { ANIMATED_STICKER_IDS, searchStickers, stickersIn } from "../stickers";
 import { Engine, FILTER_PRESETS, exportBlocker, mp4Supported, pickMime } from "../engine";
+import { LOOK_FAMILIES, looksIn, searchLooks, type LookFamily } from "../looks";
 import {
   ASPECTS,
   DEFAULT_ADJUST,
@@ -1661,6 +1662,13 @@ export function Editor({
 
   // CapCut keeps Emoji and Stickers apart, and so do we — see sticker-kinds.ts
   // for why the distinction is real rather than cosmetic.
+  const [filterFam, setFilterFam] = useState<LookFamily | "all">("all");
+  const [filterQuery, setFilterQuery] = useState("");
+  /** The look grid: catalogue-ordered, searchable, family-filtered. */
+  const editorFilterList = useMemo(() => {
+    const pool = filterQuery.trim() ? searchLooks(filterQuery) : looksIn(filterFam);
+    return pool.map((look) => ({ id: look.id, name: look.name, css: look.css, look }));
+  }, [filterFam, filterQuery]);
   const [stickerCategory, setStickerCategory] = useState<StickerCategory>("emoji");
   const [stickerQuery, setStickerQuery] = useState("");
   const stickerItems = useMemo(() => {
@@ -2694,22 +2702,63 @@ export function Editor({
           </div>
         )}
         {workspaceTab === "filters" && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2 grid grid-cols-2 gap-1.5 content-start">
-            {FILTER_PRESETS.map((filter) => (
-              <button
-                key={filter.id}
-                className={`flex flex-col overflow-hidden border rounded text-[10px] text-left ${
-                  selectedMainClip?.filter === filter.id
-                    ? "border-primary bg-primary/10"
-                    : "border-border hover:border-primary"
-                }`}
-                onClick={() => applyMainFilter(filter.id)}
-                title={filter.name}
-              >
-                <FilterPreview css={filter.css} />
-                <span className="px-1 py-0.5 truncate">{filter.name}</span>
-              </button>
-            ))}
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 flex flex-col gap-1.5">
+            {/*
+              This is the panel people actually use on a laptop, and it had the
+              same blank-tile bug as the Library: FilterPreview was called with
+              no look, and its CSS filter was applied to an empty overlay. The
+              pass to "make filters a visible preview" has to reach here first.
+            */}
+            <input
+              value={filterQuery}
+              onChange={(e) => setFilterQuery(e.target.value)}
+              placeholder="Search looks — portra, teal, kdrama…"
+              aria-label="Search filters"
+              className="w-full h-7 shrink-0 rounded border border-border bg-card px-2 text-[11px] placeholder:text-muted-foreground/70"
+            />
+            {!filterQuery.trim() && (
+              <div className="flex flex-wrap gap-1 shrink-0">
+                {(["all", ...LOOK_FAMILIES] as (LookFamily | "all")[]).map((f) => (
+                  <button
+                    key={f}
+                    className={`px-1.5 h-5 rounded text-[10px] border ${
+                      filterFam === f
+                        ? "border-primary text-primary bg-primary/10"
+                        : "border-border text-muted-foreground hover:border-primary"
+                    }`}
+                    onClick={() => setFilterFam(f)}
+                  >
+                    {f === "all" ? "All" : f === "mono" ? "B&W" : f[0].toUpperCase() + f.slice(1)}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-1.5 content-start">
+              {editorFilterList.map((filter) => (
+                <button
+                  key={filter.id}
+                  className={`flex flex-col overflow-hidden border rounded text-[10px] text-left ${
+                    selectedMainClip?.filter === filter.id
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:border-primary"
+                  }`}
+                  onClick={() => applyMainFilter(filter.id)}
+                  title={`Apply the ${filter.name} look`}
+                >
+                  <FilterPreview css={filter.css} look={filter.look} />
+                  <span className="px-1 py-0.5 truncate">{filter.name}</span>
+                </button>
+              ))}
+            </div>
+            {editorFilterList.length === 0 && (
+              <p className="text-[10px] text-muted-foreground">
+                Nothing matches “{filterQuery.trim()}”. Try “film”, “warm”, “vintage” or “neon”.
+              </p>
+            )}
+            <div className="text-[10px] text-muted-foreground shrink-0">
+              {editorFilterList.length} look{editorFilterList.length === 1 ? "" : "s"}
+              {selectedMainClip ? " · tap to apply to the selected clip" : " · select a clip first"}
+            </div>
           </div>
         )}
         {workspaceTab === "transitions" && (

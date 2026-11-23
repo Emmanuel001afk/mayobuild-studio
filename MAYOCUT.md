@@ -661,6 +661,93 @@ saved yet* when the page closed, and reads back before the debounce could fire �
 it fails when the `pagehide` listener is removed, which is the only property
 worth having in such a test.
 
+### Bigger libraries, and previews that tell the truth (Stage 3i)
+
+The brief was "increase the stickers, make the filters a visible preview, more
+emoji, and the same for effects and transitions — look up what people actually
+use, not something plain".
+
+**The filters were blank.** Not plain — blank. `FilterPreview` applied the CSS
+filter to an empty absolutely-positioned div layered *over* the artwork, so every
+tile in the grid rendered as an unmodified grey square. The one thing the request
+asked for was the one thing that was broken. The filter now wraps the picture,
+and the picture shows skin tones and foliage, because those are what a colour
+look actually changes.
+
+**Filters: 42 → 54 looks, organised by what people search for.** The catalogue
+moved to `looks.ts` and grew the looks that dominate the picks: Matcha, Dune
+Light, the 2016 throwback, Dreamy Glow, Velocity, Green × Noise, Neon Photo,
+Clean Girl, K-Drama, and film stocks by name — Portra 400, Fuji 400H, Cinestill
+800T, Kodachrome, Bleach Bypass, Teal & Orange, Super 8, VHS 1998. There is a
+search box that matches tags as well as names ("teal", "kdrama", "vhs").
+
+Crucially a look is now more than a CSS filter. The ones that read as *finished*
+carry a finish layer: a blend-mode tint a filter stack cannot reach, monochrome
+grain (generated once, tiled, deterministic so preview and export agree), a
+vignette, and for the tape/instant looks a burnt-in caption. The preview tile
+renders that same data, and a test asserts tile and canvas agree — so the card
+cannot show something the clip will not get.
+
+**Renaming ids would have deleted people's grades.** Some ids changed
+(`mono-high` → `monohigh`, `neon-night` → `neonphoto`, `golden` → `goldenhour`).
+A saved project keeps its `filter` string; if no look answers to it, the clip
+silently renders as Original. That is data loss dressed as a cosmetic rename, so
+`LEGACY_LOOK_IDS` + `resolveLookId` map every old id onto the look that replaced
+it, and both `presetCss` and `finishFor` resolve through it.
+
+**Stickers: 93 → 267, and there was a whole second catalogue.** The editor's own
+sticker panel already read `stickers.ts`; the Library panel rendered a local
+40-emoji array with no graphics and no words. Two lists, one a third the size,
+disagreeing about what a sticker is. Both read one catalogue now.
+
+| | before | after |
+| --- | --- | --- |
+| emoji | 43 | 147 |
+| graphics | 24 | 68 |
+| word stickers | 14 | 40 |
+| shapes | 12 | 12 |
+| **total** | **93** | **267** |
+
+All drawn from Unicode and primitives — no bundled art, no licence, no CDN, and
+razor-sharp at any size because they are text layers.
+
+**Transitions: 19 → 27, with a trending family that has its own renderers.** The
+research says the most-copied transitions are flash cuts, glitch, spin, light
+leaks, smooth/luma reveals and whip pans. Eight were added, and each is a
+dedicated branch in `composeTransition` rather than falling through to the wipe —
+because a card that promises a glitch and exports a rectangle reveal is worse
+than not offering it. Each also got its own preview animation instead of the
+shared fade.
+
+**Effects: 27 → 36.** Added the ones creators ask for by name: Motion blur (a
+smear along travel, not a soft-focus blur), Glow, Chromatic, Light rays, Speed
+push, Beat zoom, Focus in, Drift up/down.
+
+**What this cost.** Entry bundle 6,357,679 → 6,378,879 bytes (+0.3%) for 12 new
+looks, 8 transitions, 9 effects and 174 stickers. Full-grade render time is
+unchanged within noise (26.7 ms), because the finish layer only runs for looks
+that declare one and the grain pattern is cached per context.
+
+**Verification, and the two tests that were lying.** Audit 328 assertions, 0
+failures; smoke-editor 71 checks; fixture-bench 27/0. Twelve mutations were
+introduced and caught — but only after two gaps were closed:
+
+- Deleting the `paintFinish` call from `drawMainItem` left every test green. The
+  unit test proved `paintFinish` draws; nothing proved anyone *called* it. There
+  is now a wiring assertion. "The feature exists" and "the feature is on" are
+  different claims.
+- The smoke test found filter cards by exact title, so when the card title became
+  "Apply the <name> look" it silently matched nothing and I nearly "fixed" it by
+  loosening a threshold. It also drove the first `input[aria-label="Search
+  filters"]` it found, which was in a detached, never-rendered panel — a test of
+  nothing. Both now target the connected element.
+
+Honest limits: there is no browser in this environment, so nothing was verified
+by looking at it. The tiles are asserted structurally (the artwork is inside the
+filtered element, the data URI parses, the preview animations differ per card),
+not pixel by pixel. Thresholds that were exact counts are now floors, so the
+catalogue can keep growing without the suite crying wolf.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert

@@ -4424,6 +4424,454 @@ function resolveComposition(project, t) {
   };
 }
 
+// src/mayocut/looks.ts
+var LOOKS = [
+  // ---------------------------------------------------------------- trending
+  {
+    id: "matcha",
+    name: "Matcha",
+    family: "trending",
+    css: "saturate(1.25) hue-rotate(-12deg) brightness(1.04) contrast(1.05)",
+    tint: { color: "#4b6b3a", mode: "soft-light", alpha: 0.22 },
+    fade: 0.12,
+    tags: "matcha green tea viral trend oil painting aesthetic"
+  },
+  {
+    id: "dune",
+    name: "Dune Light",
+    family: "trending",
+    css: "sepia(0.3) saturate(1.15) contrast(1.1) brightness(1.03)",
+    tint: { color: "#c29a63", mode: "soft-light", alpha: 0.28 },
+    grain: 0.1,
+    tags: "dune light sand desert beige viral trending warm"
+  },
+  {
+    id: "2016",
+    name: "2016 Filter",
+    family: "trending",
+    css: "saturate(0.9) contrast(0.95) brightness(1.1) sepia(0.12)",
+    fade: 0.3,
+    grain: 0.06,
+    tags: "2016 filter throwback tumblr soft nostalgic trend"
+  },
+  {
+    id: "glow",
+    name: "Dreamy Glow",
+    family: "trending",
+    css: "brightness(1.12) saturate(1.2) contrast(0.95) blur(0.4px)",
+    tint: { color: "#ffd6e7", mode: "screen", alpha: 0.12 },
+    tags: "dreamy glow bloom soft skin beauty trend"
+  },
+  {
+    id: "velocity",
+    name: "Velocity",
+    family: "trending",
+    css: "contrast(1.35) saturate(1.4) brightness(0.96)",
+    tint: { color: "#0e2233", mode: "multiply", alpha: 0.18 },
+    tags: "velocity edit dark contrast hype beat drop trend"
+  },
+  {
+    id: "greennoise",
+    name: "Green x Noise",
+    family: "trending",
+    css: "hue-rotate(-20deg) saturate(1.3) contrast(1.12) brightness(0.98)",
+    grain: 0.24,
+    tags: "green filter noise grain viral tiktok trend"
+  },
+  {
+    id: "neonphoto",
+    name: "Neon Photo",
+    family: "trending",
+    css: "hue-rotate(200deg) saturate(2.1) contrast(1.25) brightness(0.94)",
+    tint: { color: "#7c3aed", mode: "screen", alpha: 0.16 },
+    tags: "neon photo purple pfp trend cyber glow"
+  },
+  {
+    id: "aestheticpink",
+    name: "Aesthetic Love",
+    family: "trending",
+    css: "saturate(1.2) brightness(1.1) contrast(0.92) hue-rotate(-8deg)",
+    tint: { color: "#ff9ec7", mode: "soft-light", alpha: 0.24 },
+    fade: 0.2,
+    tags: "aesthetic love pink cute soft girl trend"
+  },
+  // -------------------------------------------------------------------- film
+  {
+    id: "tealorange",
+    name: "Teal & Orange",
+    family: "film",
+    css: "contrast(1.14) saturate(1.35) sepia(0.14) hue-rotate(-14deg)",
+    tint: { color: "#0d5a6b", mode: "soft-light", alpha: 0.18 },
+    tags: "teal orange blockbuster hollywood cinematic colour grade"
+  },
+  {
+    id: "kodachrome",
+    name: "Kodachrome",
+    family: "film",
+    css: "saturate(1.3) contrast(1.12) sepia(0.1) brightness(1.03)",
+    grain: 0.08,
+    tags: "kodachrome kodak film stock slide 1960s"
+  },
+  {
+    id: "portra",
+    name: "Portra 400",
+    family: "film",
+    css: "saturate(0.95) contrast(0.96) brightness(1.06) sepia(0.12)",
+    tint: { color: "#f6d7b8", mode: "soft-light", alpha: 0.16 },
+    grain: 0.1,
+    tags: "portra 400 kodak portrait skin wedding film stock"
+  },
+  {
+    id: "fuji",
+    name: "Fuji 400H",
+    family: "film",
+    css: "saturate(0.92) contrast(0.98) brightness(1.05) hue-rotate(6deg)",
+    tint: { color: "#bcd9c9", mode: "soft-light", alpha: 0.18 },
+    grain: 0.09,
+    tags: "fuji superia 400h green pastel japanese film stock"
+  },
+  {
+    id: "cinestill",
+    name: "Cinestill 800T",
+    family: "film",
+    css: "contrast(1.08) saturate(1.15) brightness(0.98) hue-rotate(14deg)",
+    tint: { color: "#1b4f8a", mode: "screen", alpha: 0.14 },
+    grain: 0.12,
+    tags: "cinestill 800t tungsten night blue halation film"
+  },
+  {
+    id: "bleach",
+    name: "Bleach Bypass",
+    family: "film",
+    css: "saturate(0.45) contrast(1.42) brightness(1.05)",
+    tags: "bleach bypass silver retention war desaturated"
+  },
+  {
+    id: "technicolor",
+    name: "Technicolor",
+    family: "film",
+    css: "saturate(1.6) contrast(1.2) hue-rotate(-4deg)",
+    tags: "technicolor three strip saturated musical classic"
+  },
+  {
+    id: "cinema",
+    name: "Cinema",
+    family: "film",
+    css: "contrast(1.18) saturate(1.12) brightness(0.97)",
+    tags: "cinema cinematic movie film neutral"
+  },
+  {
+    id: "dramatic",
+    name: "Dramatic",
+    family: "film",
+    css: "contrast(1.38) saturate(1.22) brightness(0.94)",
+    tags: "dramatic high contrast strong punch"
+  },
+  {
+    id: "fifties",
+    name: "Fifties",
+    family: "film",
+    css: "sepia(0.3) saturate(0.9) contrast(0.95) brightness(1.08) hue-rotate(-10deg)",
+    grain: 0.12,
+    tags: "fifties 50s nostalgic old hollywood"
+  },
+  // ------------------------------------------------------------------ social
+  {
+    id: "cleangirl",
+    name: "Clean Girl",
+    family: "social",
+    css: "brightness(1.08) saturate(1.02) contrast(0.98)",
+    tint: { color: "#fff4e8", mode: "soft-light", alpha: 0.14 },
+    tags: "clean girl minimal bright skin skincare beige"
+  },
+  {
+    id: "kdrama",
+    name: "K-Drama",
+    family: "social",
+    css: "brightness(1.1) contrast(0.94) saturate(1.08) hue-rotate(-4deg)",
+    tint: { color: "#ffe6ef", mode: "screen", alpha: 0.1 },
+    fade: 0.16,
+    tags: "kdrama korean bright soft pastel romance drama"
+  },
+  {
+    id: "goldenhour",
+    name: "Golden Hour",
+    family: "social",
+    css: "sepia(0.32) saturate(1.4) brightness(1.06) contrast(1.03)",
+    tags: "golden hour sunset warm glow travel portrait"
+  },
+  {
+    id: "sunset",
+    name: "Sunset",
+    family: "social",
+    css: "sepia(0.3) saturate(1.5) hue-rotate(-18deg) brightness(1.06)",
+    tags: "sunset orange pink sky summer"
+  },
+  {
+    id: "pastel",
+    name: "Pastel",
+    family: "social",
+    css: "brightness(1.09) saturate(1.25) contrast(0.88) hue-rotate(6deg)",
+    fade: 0.18,
+    tags: "pastel soft light cute cutesy"
+  },
+  {
+    id: "summer",
+    name: "Summer",
+    family: "social",
+    css: "saturate(1.35) brightness(1.07) contrast(1.02) hue-rotate(-6deg)",
+    tags: "summer beach holiday sun bright vacation"
+  },
+  {
+    id: "vivid",
+    name: "Vivid",
+    family: "social",
+    css: "saturate(1.4) contrast(1.1)",
+    tags: "vivid pop punchy bright colours"
+  },
+  {
+    id: "punch",
+    name: "Punch",
+    family: "social",
+    css: "contrast(1.28) saturate(1.45)",
+    tags: "punch strong bold social feed"
+  },
+  {
+    id: "clean",
+    name: "Clean",
+    family: "social",
+    css: "brightness(1.04) contrast(1.04) saturate(1.05)",
+    tags: "clean natural neutral true to life"
+  },
+  // -------------------------------------------------------------------- mood
+  {
+    id: "moody",
+    name: "Moody",
+    family: "mood",
+    css: "contrast(1.26) brightness(0.88) saturate(0.82)",
+    tags: "moody dark desaturated sad cinematic"
+  },
+  {
+    id: "darkmood",
+    name: "Dark & Moody",
+    family: "mood",
+    css: "brightness(0.82) contrast(1.3) saturate(0.85)",
+    vignette: 0.3,
+    tags: "dark moody low key shadow thriller"
+  },
+  {
+    id: "night",
+    name: "Night",
+    family: "mood",
+    css: "hue-rotate(12deg) saturate(1.08) brightness(0.9) contrast(1.12)",
+    tint: { color: "#12224a", mode: "multiply", alpha: 0.2 },
+    tags: "night blue dark city evening"
+  },
+  {
+    id: "cyberpunk",
+    name: "Cyberpunk",
+    family: "mood",
+    css: "contrast(1.3) saturate(1.6) hue-rotate(-25deg) brightness(0.95)",
+    tint: { color: "#ff2e88", mode: "screen", alpha: 0.14 },
+    tags: "cyberpunk neon magenta future sci fi"
+  },
+  {
+    id: "arctic",
+    name: "Arctic",
+    family: "mood",
+    css: "hue-rotate(-18deg) saturate(1.2) brightness(1.08) contrast(1.05)",
+    tint: { color: "#cfe8ff", mode: "soft-light", alpha: 0.2 },
+    tags: "arctic cold blue ice winter cool"
+  },
+  {
+    id: "winter",
+    name: "Winter",
+    family: "mood",
+    css: "hue-rotate(8deg) saturate(0.88) brightness(1.06) contrast(1.05)",
+    tags: "winter snow pale cool frost"
+  },
+  {
+    id: "autumn",
+    name: "Autumn",
+    family: "mood",
+    css: "sepia(0.22) saturate(1.35) hue-rotate(-12deg) brightness(1.02)",
+    tags: "autumn fall leaves orange warm"
+  },
+  {
+    id: "infrared",
+    name: "Infrared",
+    family: "mood",
+    css: "hue-rotate(155deg) saturate(1.7) contrast(1.15)",
+    tags: "infrared false colour surreal aerochrome"
+  },
+  {
+    id: "duotone",
+    name: "Duotone",
+    family: "mood",
+    css: "grayscale(1) contrast(1.25) sepia(0.4) hue-rotate(180deg) saturate(1.6)",
+    tags: "duotone two colour poster graphic"
+  },
+  // -------------------------------------------------------------------- mono
+  {
+    id: "bw",
+    name: "B&W",
+    family: "mono",
+    css: "grayscale(1)",
+    tags: "black white mono grey grayscale"
+  },
+  {
+    id: "noir",
+    name: "Noir",
+    family: "mono",
+    css: "grayscale(1) contrast(1.35) brightness(0.95)",
+    vignette: 0.35,
+    grain: 0.1,
+    tags: "noir black white hard shadow detective"
+  },
+  {
+    id: "monohigh",
+    name: "Mono High",
+    family: "mono",
+    css: "grayscale(1) contrast(1.55) brightness(1.08)",
+    tags: "mono high contrast punchy black white"
+  },
+  {
+    id: "silver",
+    name: "Silver",
+    family: "mono",
+    css: "grayscale(0.85) contrast(1.2) brightness(1.04)",
+    tags: "silver desaturated subtle metallic"
+  },
+  {
+    id: "cyanotype",
+    name: "Cyanotype",
+    family: "mono",
+    css: "grayscale(1) sepia(1) hue-rotate(160deg) saturate(1.8) contrast(1.1)",
+    tags: "cyanotype blue print photographic"
+  },
+  // ------------------------------------------------------------------- vivid
+  {
+    id: "warm",
+    name: "Warm",
+    family: "vivid",
+    css: "sepia(0.25) saturate(1.25) brightness(1.05)",
+    tags: "warm cozy orange heat"
+  },
+  {
+    id: "cool",
+    name: "Cool",
+    family: "vivid",
+    css: "hue-rotate(-8deg) saturate(1.15) brightness(1.02)",
+    tags: "cool blue cold calm"
+  },
+  {
+    id: "clarity",
+    name: "Clarity",
+    family: "vivid",
+    css: "contrast(1.14) saturate(1.1) brightness(1.02)",
+    tags: "clarity sharp crisp detail"
+  },
+  {
+    id: "soft",
+    name: "Soft",
+    family: "vivid",
+    css: "brightness(1.08) saturate(1.06) blur(0.4px)",
+    tags: "soft gentle blur dreamy"
+  },
+  {
+    id: "dreamy",
+    name: "Dreamy",
+    family: "vivid",
+    css: "brightness(1.12) saturate(1.18) blur(0.6px)",
+    tags: "dreamy hazy blur soft focus"
+  },
+  // ------------------------------------------------------------------- retro
+  {
+    id: "vintage",
+    name: "Vintage",
+    family: "retro",
+    css: "sepia(0.4) contrast(1.05) brightness(1.06) saturate(0.85)",
+    grain: 0.16,
+    fade: 0.14,
+    tags: "vintage old retro faded antique"
+  },
+  {
+    id: "retro",
+    name: "Retro Film",
+    family: "retro",
+    css: "sepia(0.45) contrast(1.1) saturate(1.25) brightness(1.02) hue-rotate(-6deg)",
+    grain: 0.14,
+    tags: "retro film 70s 80s analog"
+  },
+  {
+    id: "faded",
+    name: "Faded",
+    family: "retro",
+    css: "contrast(0.9) brightness(1.07) saturate(0.72) sepia(0.16)",
+    fade: 0.34,
+    tags: "faded matte washed out low contrast"
+  },
+  {
+    id: "grunge",
+    name: "Grunge",
+    family: "retro",
+    css: "contrast(1.35) saturate(0.7) brightness(0.92) sepia(0.2)",
+    grain: 0.22,
+    vignette: 0.3,
+    tags: "grunge dirty gritty texture rock"
+  },
+  {
+    id: "sepia",
+    name: "Sepia",
+    family: "retro",
+    css: "sepia(0.85) contrast(1.05) brightness(1.02)",
+    tags: "sepia brown old photo"
+  },
+  {
+    id: "vhs",
+    name: "VHS 1998",
+    family: "retro",
+    css: "saturate(1.2) contrast(1.12) brightness(1.02) hue-rotate(-4deg)",
+    grain: 0.3,
+    tint: { color: "#2bd1c4", mode: "screen", alpha: 0.08 },
+    label: "1998 PLAY",
+    tags: "vhs 90s video tape camcorder retro glitch"
+  },
+  {
+    id: "polaroid",
+    name: "Polaroid",
+    family: "retro",
+    css: "saturate(0.9) contrast(1.08) brightness(1.08) sepia(0.2)",
+    grain: 0.14,
+    fade: 0.22,
+    label: "SX-70",
+    tags: "polaroid instant photo print square white border"
+  },
+  {
+    id: "super8",
+    name: "Super 8",
+    family: "retro",
+    css: "sepia(0.28) saturate(1.1) contrast(1.12) brightness(1.02)",
+    grain: 0.26,
+    vignette: 0.4,
+    tags: "super 8 home movie 8mm grain nostalgic"
+  }
+];
+var LEGACY_LOOK_IDS = {
+  "mono-high": "monohigh",
+  silvertone: "silver",
+  "neon-night": "neonphoto",
+  golden: "goldenhour",
+  // shipped in the first catalogue, superseded by the film stock it imitated
+  kodak: "kodachrome",
+  orange_teal: "tealorange",
+  "orange-teal": "tealorange"
+};
+function resolveLookId(id) {
+  return LEGACY_LOOK_IDS[id] ?? id;
+}
+var LOOK_BY_ID = new Map(LOOKS.map((l) => [l.id, l]));
+
 // src/mayocut/export-plan.ts
 function pixelRatio(a, b) {
   const pa = Math.max(1, a.width * a.height);
@@ -5073,117 +5521,107 @@ function decodeGifFrames(blob) {
 }
 var FILTER_PRESETS = [
   { id: "none", name: "Original", css: "" },
-  { id: "vivid", name: "Vivid", css: "saturate(1.4) contrast(1.1)" },
-  { id: "warm", name: "Warm", css: "sepia(0.25) saturate(1.25) brightness(1.05)" },
-  { id: "cool", name: "Cool", css: "hue-rotate(-8deg) saturate(1.15) brightness(1.02)" },
-  { id: "bw", name: "B&W", css: "grayscale(1)" },
-  { id: "noir", name: "Noir", css: "grayscale(1) contrast(1.35) brightness(0.95)" },
-  {
-    id: "vintage",
-    name: "Vintage",
-    css: "sepia(0.4) contrast(1.05) brightness(1.06) saturate(0.85)"
-  },
-  { id: "cinema", name: "Cinema", css: "contrast(1.18) saturate(1.12) brightness(0.97)" },
-  { id: "soft", name: "Soft", css: "brightness(1.08) saturate(1.06) blur(0.4px)" },
-  { id: "punch", name: "Punch", css: "contrast(1.28) saturate(1.45)" },
-  {
-    id: "tealorange",
-    name: "Teal & Orange",
-    css: "contrast(1.1) saturate(1.35) sepia(0.14) hue-rotate(-14deg)"
-  },
-  {
-    id: "golden",
-    name: "Golden Hour",
-    css: "sepia(0.32) saturate(1.4) brightness(1.06) contrast(1.03)"
-  },
-  { id: "faded", name: "Faded", css: "contrast(0.9) brightness(1.07) saturate(0.72) sepia(0.16)" },
-  { id: "dreamy", name: "Dreamy", css: "brightness(1.12) saturate(1.18) blur(0.6px)" },
-  { id: "moody", name: "Moody", css: "contrast(1.26) brightness(0.88) saturate(0.82)" },
-  {
-    id: "pastel",
-    name: "Pastel",
-    css: "brightness(1.09) saturate(1.25) contrast(0.88) hue-rotate(6deg)"
-  },
-  { id: "dramatic", name: "Dramatic", css: "contrast(1.38) saturate(1.22) brightness(0.94)" },
-  {
-    id: "night",
-    name: "Night",
-    css: "hue-rotate(12deg) saturate(1.08) brightness(0.9) contrast(1.12)"
-  },
-  {
-    id: "retro",
-    name: "Retro Film",
-    css: "sepia(0.45) contrast(1.1) saturate(1.25) brightness(1.02) hue-rotate(-6deg)"
-  },
-  // --- second wave: film stocks, moods and social looks -------------------
-  {
-    id: "kodachrome",
-    name: "Kodachrome",
-    css: "saturate(1.3) contrast(1.12) sepia(0.1) brightness(1.03)"
-  },
-  {
-    id: "portra",
-    name: "Portra 400",
-    css: "saturate(0.95) contrast(0.96) brightness(1.06) sepia(0.12)"
-  },
-  { id: "technicolor", name: "Technicolor", css: "saturate(1.6) contrast(1.2) hue-rotate(-4deg)" },
-  { id: "bleach", name: "Bleach Bypass", css: "saturate(0.45) contrast(1.42) brightness(1.05)" },
-  { id: "sepia", name: "Sepia", css: "sepia(0.85) contrast(1.05) brightness(1.02)" },
-  {
-    id: "cyanotype",
-    name: "Cyanotype",
-    css: "grayscale(1) sepia(1) hue-rotate(160deg) saturate(1.8) contrast(1.1)"
-  },
-  { id: "infrared", name: "Infrared", css: "hue-rotate(155deg) saturate(1.7) contrast(1.15)" },
-  {
-    id: "duotone",
-    name: "Duotone",
-    css: "grayscale(1) contrast(1.25) sepia(0.4) hue-rotate(180deg) saturate(1.6)"
-  },
-  {
-    id: "fifties",
-    name: "Fifties",
-    css: "sepia(0.3) saturate(0.9) contrast(0.95) brightness(1.08) hue-rotate(-10deg)"
-  },
-  { id: "grunge", name: "Grunge", css: "contrast(1.35) saturate(0.7) brightness(0.92) sepia(0.2)" },
-  {
-    id: "arctic",
-    name: "Arctic",
-    css: "hue-rotate(-18deg) saturate(1.2) brightness(1.08) contrast(1.05)"
-  },
-  {
-    id: "sunset",
-    name: "Sunset",
-    css: "sepia(0.3) saturate(1.5) hue-rotate(-18deg) brightness(1.06)"
-  },
-  {
-    id: "cyberpunk",
-    name: "Cyberpunk",
-    css: "contrast(1.3) saturate(1.6) hue-rotate(-25deg) brightness(0.95)"
-  },
-  { id: "darkmood", name: "Dark & Moody", css: "brightness(0.82) contrast(1.3) saturate(0.85)" },
-  { id: "clean", name: "Clean", css: "brightness(1.04) contrast(1.04) saturate(1.05)" },
-  { id: "clarity", name: "Clarity", css: "contrast(1.14) saturate(1.1) brightness(1.02)" },
-  { id: "silvertone", name: "Silver", css: "grayscale(0.85) contrast(1.2) brightness(1.04)" },
-  {
-    id: "winter",
-    name: "Winter",
-    css: "hue-rotate(8deg) saturate(0.88) brightness(1.06) contrast(1.05)"
-  },
-  {
-    id: "autumn",
-    name: "Autumn",
-    css: "sepia(0.22) saturate(1.35) hue-rotate(-12deg) brightness(1.02)"
-  },
-  { id: "mono-high", name: "Mono High", css: "grayscale(1) contrast(1.55) brightness(1.08)" },
-  {
-    id: "neon-night",
-    name: "Neon Night",
-    css: "hue-rotate(200deg) saturate(2) contrast(1.25) brightness(0.92)"
-  }
+  ...LOOKS.map((l) => ({ id: l.id, name: l.name, css: l.css }))
 ];
+var grainTile = null;
+var grainPatterns = /* @__PURE__ */ new WeakMap();
+function grainTexture() {
+  if (grainTile) return grainTile;
+  if (typeof document === "undefined") return null;
+  const size = 96;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const g = c.getContext("2d");
+  if (!g) return null;
+  const img = g.createImageData(size, size);
+  let seed = 2654435769;
+  for (let i = 0; i < img.data.length; i += 4) {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    seed >>>= 0;
+    const v = seed & 255;
+    img.data[i] = v;
+    img.data[i + 1] = v;
+    img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  grainTile = c;
+  return c;
+}
+function paintFinish(ctx, look, W, H, alpha = 1) {
+  if (!look || alpha <= 0) return;
+  const prevOp = ctx.globalCompositeOperation;
+  const prevAlpha = ctx.globalAlpha;
+  if (look.tint) {
+    ctx.save();
+    ctx.globalCompositeOperation = look.tint.mode;
+    ctx.globalAlpha = prevAlpha * look.tint.alpha * alpha;
+    ctx.fillStyle = look.tint.color;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  if (look.vignette && look.vignette > 0) {
+    ctx.save();
+    const r = Math.hypot(W, H) / 2;
+    const grad = ctx.createRadialGradient(W / 2, H / 2, r * 0.45, W / 2, H / 2, r);
+    grad.addColorStop(0, "rgba(0,0,0,0)");
+    grad.addColorStop(1, `rgba(0,0,0,${(0.62 * look.vignette * alpha).toFixed(3)})`);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  if (look.grain && look.grain > 0) {
+    const tile = grainTexture();
+    if (tile) {
+      ctx.save();
+      ctx.globalCompositeOperation = "overlay";
+      ctx.globalAlpha = prevAlpha * Math.min(0.9, look.grain) * alpha;
+      let pat = grainPatterns.get(ctx);
+      if (!pat) {
+        const made = ctx.createPattern(tile, "repeat");
+        if (made) {
+          pat = made;
+          grainPatterns.set(ctx, made);
+        }
+      }
+      if (pat) {
+        ctx.fillStyle = pat;
+        ctx.fillRect(0, 0, W, H);
+      }
+      ctx.restore();
+    }
+  }
+  if (look.label) {
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = prevAlpha * 0.85 * alpha;
+    const size = Math.max(10, Math.round(H * 0.038));
+    ctx.font = `600 ${size}px "Helvetica Neue", Arial, sans-serif`;
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.shadowColor = "rgba(0,0,0,0.6)";
+    ctx.shadowBlur = size * 0.35;
+    ctx.textAlign = "right";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(look.label, W - size * 0.6, H - size * 0.5);
+    ctx.restore();
+  }
+  ctx.globalCompositeOperation = prevOp;
+  ctx.globalAlpha = prevAlpha;
+}
+function finishFor(filterId) {
+  const look = LOOK_BY_ID.get(resolveLookId(filterId));
+  if (!look) return void 0;
+  const { tint, grain, vignette, label } = look;
+  if (!tint && !grain && !vignette && !label) return void 0;
+  return { tint, grain, vignette, label };
+}
 function presetCss(id) {
-  return FILTER_PRESETS.find((p) => p.id === id)?.css ?? "";
+  const real = resolveLookId(id);
+  return FILTER_PRESETS.find((p) => p.id === real)?.css ?? "";
 }
 function buildFilterCss(clip) {
   const parts = [presetCss(clip.filter)];
@@ -6825,6 +7263,137 @@ var Engine = class {
       this.drawMainItem(ctx, b, clamp012(k * 1.15), W, H, t, 0, 1.18 - 0.18 * k);
       return;
     }
+    if (kind === "flash") {
+      const peak = Math.pow(Math.sin(Math.PI * k), 2);
+      if (k < 0.5) this.drawMainItem(ctx, a, 1, W, H, t);
+      else this.drawMainItem(ctx, b, 1, W, H, t);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = Math.min(1, peak * 1.15);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+      return;
+    }
+    if (kind === "spin") {
+      const ease = k * k * (3 - 2 * k);
+      this.drawMainItem(ctx, a, 1, W, H, t);
+      const rot = (1 - ease) * Math.PI * 0.5;
+      const sc = 0.7 + 0.3 * ease;
+      ctx.save();
+      ctx.globalAlpha = clamp012(ease * 1.6);
+      ctx.translate(W / 2, H / 2);
+      ctx.rotate(rot);
+      ctx.scale(sc, sc);
+      ctx.translate(-W / 2, -H / 2);
+      this.drawMainItem(ctx, b, 1, W, H, t);
+      ctx.restore();
+      return;
+    }
+    if (kind === "glitch") {
+      this.drawMainItem(ctx, b, Math.min(1, k * 1.4), W, H, t);
+      ctx.save();
+      const bands = 9;
+      const seed = Math.sin(k * 61.7) * 1e3;
+      for (let i = 0; i < bands; i++) {
+        const f = (i / bands + seed % 1 * 0.05) % 1;
+        const bh = H / bands;
+        const jitter = (Math.sin(seed + i * 2.3) * 0.5 + 0.5) * 0.5;
+        if (jitter < 0.55) continue;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, f * H, W, bh);
+        ctx.clip();
+        const dx = Math.sin(seed * (i + 1)) * W * 0.08 * Math.sin(Math.PI * k);
+        ctx.translate(dx, 0);
+        this.drawMainItem(ctx, a, 0.9, W, H, t);
+        ctx.restore();
+      }
+      const fringe = Math.sin(Math.PI * k);
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = 0.14 * fringe;
+      ctx.fillStyle = "#ff0044";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#00e5ff";
+      ctx.globalAlpha = 0.1 * fringe;
+      ctx.fillRect(W * 0.012, 0, W, H);
+      ctx.restore();
+      return;
+    }
+    if (kind === "lightleak") {
+      this.drawMainItem(ctx, a, 1 - k * 0.6, W, H, t);
+      this.drawMainItem(ctx, b, k, W, H, t);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const cx = W * (-0.25 + 1.5 * k);
+      const r = Math.hypot(W, H) * (0.55 + 0.15 * Math.sin(Math.PI * k));
+      const grad = ctx.createRadialGradient(cx, H * 0.5, r * 0.05, cx, H * 0.5, r);
+      const a0 = Math.sin(Math.PI * k);
+      grad.addColorStop(0, `rgba(255,214,140,${(0.55 * a0).toFixed(3)})`);
+      grad.addColorStop(0.45, `rgba(255,120,60,${(0.28 * a0).toFixed(3)})`);
+      grad.addColorStop(1, "rgba(120,20,0,0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+      return;
+    }
+    if (kind === "luma") {
+      this.drawMainItem(ctx, a, 1, W, H, t);
+      const scale = Math.min(1, 720 / Math.max(W, H));
+      const bw = Math.max(2, Math.round(W * scale));
+      const bh = Math.max(2, Math.round(H * scale));
+      const buf = document.createElement("canvas");
+      buf.width = bw;
+      buf.height = bh;
+      const bctx = buf.getContext("2d");
+      if (!bctx) {
+        this.drawMainItem(ctx, b, clamp012(k * 1.2), W, H, t);
+        return;
+      }
+      bctx.scale(bw / W, bh / H);
+      this.drawMainItem(bctx, b, 1, W, H, t);
+      bctx.setTransform(1, 0, 0, 1, 0, 0);
+      const edge = -0.3 + 1.6 * clamp012(k);
+      const shoulder = 0.35;
+      bctx.globalCompositeOperation = "destination-in";
+      const g = bctx.createLinearGradient(0, 0, bw, 0);
+      const A0 = (v) => `rgba(0,0,0,${v})`;
+      g.addColorStop(0, A0(clamp012(edge) > 0 ? 1 : 0));
+      g.addColorStop(clamp012(edge), A0(clamp012(edge) > 0 ? 1 : 0));
+      g.addColorStop(clamp012(edge + shoulder), A0(clamp012(edge + shoulder) >= 1 ? 0 : 1));
+      g.addColorStop(1, A0(clamp012(edge + shoulder) >= 1 ? 0 : 1));
+      bctx.fillStyle = g;
+      bctx.fillRect(0, 0, bw, bh);
+      bctx.globalCompositeOperation = "source-over";
+      ctx.drawImage(buf, 0, 0, W, H);
+      return;
+    }
+    if (kind === "zoomblur") {
+      const blurPx = Math.sin(Math.PI * k) * Math.max(4, H * 0.022);
+      this.drawMainItem(ctx, a, 1, W, H, t, blurPx * 0.6, 1 + 0.3 * k);
+      this.drawMainItem(ctx, b, clamp012(k * 1.2), W, H, t, blurPx, 1.3 - 0.3 * k);
+      return;
+    }
+    if (kind === "whipl" || kind === "whipr") {
+      const dir = kind === "whipl" ? -1 : 1;
+      const blurPx = Math.sin(Math.PI * k) * Math.max(5, W * 0.03);
+      const travel = W * 0.35 * k * dir;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.clip();
+      ctx.translate(travel, 0);
+      this.drawMainItem(ctx, a, 1, W, H, t, blurPx);
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.clip();
+      ctx.translate(travel - W * 0.35 * dir, 0);
+      this.drawMainItem(ctx, b, 1, W, H, t, blurPx);
+      ctx.restore();
+      return;
+    }
     const e = k;
     const soft = wipeDir(kind);
     if (soft?.soft) {
@@ -7008,6 +7577,59 @@ var Engine = class {
         ctx.globalAlpha = a;
       }
     }
+    if (eff === "glow") {
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = a * (0.28 + 0.06 * Math.sin(localT * 2.2));
+      ctx.filter = `blur(${Math.max(3, H * 0.02).toFixed(1)}px) brightness(1.15)`;
+      ctx.drawImage(el, 0, 0, W, H);
+      ctx.restore();
+    }
+    if (eff === "chroma") {
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      const off = Math.max(1, W * 4e-3);
+      ctx.globalAlpha = a * 0.35;
+      ctx.filter = "sepia(1) saturate(6) hue-rotate(-40deg)";
+      ctx.drawImage(el, -off, 0, W, H);
+      ctx.filter = "sepia(1) saturate(6) hue-rotate(160deg)";
+      ctx.drawImage(el, off, 0, W, H);
+      ctx.restore();
+    }
+    if (eff === "light-rays") {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const flicker = 0.55 + 0.12 * Math.sin(localT * 1.3) + 0.06 * Math.sin(localT * 3.1);
+      const gx = W * (0.15 + 0.1 * Math.sin(localT * 0.4));
+      const grad = ctx.createLinearGradient(gx, 0, gx + W * 0.5, H);
+      grad.addColorStop(0, `rgba(255,240,200,${(0.16 * flicker * a).toFixed(3)})`);
+      grad.addColorStop(0.5, `rgba(255,220,160,${(0.07 * flicker * a).toFixed(3)})`);
+      grad.addColorStop(1, "rgba(255,200,120,0)");
+      ctx.fillStyle = grad;
+      for (let i = 0; i < 4; i++) {
+        const x = gx + i * W * 0.09;
+        ctx.save();
+        ctx.translate(x, 0);
+        ctx.rotate(0.18 + i * 0.02);
+        ctx.fillRect(0, -H, W * (0.05 + i * 0.012), H * 3);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+    if (eff === "motion-blur") {
+      const trail = Math.max(2, Math.round(W * 0.02));
+      ctx.save();
+      ctx.globalAlpha = a * 0.22;
+      for (let i = 1; i <= 3; i++) {
+        ctx.globalAlpha = a * (0.2 / i);
+        ctx.drawImage(el, -i * trail, 0, W, H);
+        ctx.drawImage(el, i * trail, 0, W, H);
+      }
+      ctx.restore();
+      ctx.globalAlpha = a;
+    }
+    const finish = finishFor(c.filter);
+    if (finish) paintFinish(ctx, finish, W, H, a);
     if (eff === "vhs") {
       ctx.globalAlpha = a * 0.5;
       const pat = this.vhsPatternLazy;
@@ -7142,6 +7764,36 @@ var Engine = class {
         r.scale = 1.12;
         break;
       }
+      // --- third wave: transform part of the effect --------------------
+      // Each of these also has a paint step in drawMainItem; this half only
+      // decides where the frame sits. Splitting them keeps the transform
+      // function free of canvas work, which is what lets the audit test it.
+      case "speed-push": {
+        const k2 = clamp012(localT / Math.max(1e-3, dur));
+        r.scale = 1 + 0.16 * k2 * k2;
+        break;
+      }
+      case "beat-zoom": {
+        const beat = localT % 0.5 / 0.5;
+        r.scale = 1 + 0.09 * Math.pow(1 - beat, 3);
+        break;
+      }
+      case "drift-up":
+        r.ty = -0.06 * (localT / Math.max(1e-3, dur)) * H;
+        r.scale = 1.08;
+        break;
+      case "drift-down":
+        r.ty = 0.06 * (localT / Math.max(1e-3, dur)) * H;
+        r.scale = 1.08;
+        break;
+      case "focus-in": {
+        const k2 = clamp012(localT / 0.6);
+        r.scale = 1.03 - 0.03 * k2;
+        break;
+      }
+      case "chroma":
+        r.scale = 1.01 + 0.01 * Math.sin(localT * 1.7);
+        break;
       default:
         break;
     }
@@ -9338,7 +9990,10 @@ export {
   animAt,
   buildFilterCss,
   exportBlocker,
+  finishFor,
+  grainTexture,
   mp4Supported,
+  paintFinish,
   pickMime,
   presetCss
 };

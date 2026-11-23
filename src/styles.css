@@ -215,6 +215,46 @@
   50% { opacity: 1; }
 }
 
+/* --- trending transition previews ---------------------------------------
+   One keyframe per new transition, named after what the engine draws. A card
+   that animates the same way as every other card tells the user nothing, which
+   is why these are not reusing mc-fade. */
+@keyframes mc-flash {
+  0%, 40%, 100% { opacity: 0.1; }
+  50% { opacity: 1; filter: brightness(1.9); }
+}
+@keyframes mc-spin {
+  0% { transform: rotate(-90deg) scale(0.7); opacity: 0.15; }
+  60% { transform: rotate(0deg) scale(1); opacity: 1; }
+  100% { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+@keyframes mc-glitch {
+  0%, 100% { transform: translateX(0); filter: none; }
+  20% { transform: translateX(-3px); filter: hue-rotate(30deg) saturate(1.6); }
+  35% { transform: translateX(4px); filter: hue-rotate(-40deg); }
+  50% { transform: translateX(-1px) skewX(6deg); filter: saturate(2); }
+  65% { transform: translateX(2px); filter: none; }
+}
+@keyframes mc-leak {
+  0% { opacity: 0; transform: translateX(-60%); }
+  50% { opacity: 0.95; }
+  100% { opacity: 0; transform: translateX(60%); }
+}
+@keyframes mc-luma {
+  0% { clip-path: inset(0 100% 0 0); filter: brightness(1.35); }
+  60%, 100% { clip-path: inset(0 0 0 0); filter: brightness(1); }
+}
+@keyframes mc-whip-x {
+  0% { transform: translateX(38%) scaleX(1.15); filter: blur(3px); opacity: 0.4; }
+  55% { transform: translateX(0) scaleX(1); filter: blur(0.4px); opacity: 1; }
+  100% { transform: translateX(-38%) scaleX(1.15); filter: blur(3px); opacity: 0.4; }
+}
+@keyframes mc-zoomblur {
+  0% { transform: scale(1.35); filter: blur(3px); opacity: 0.3; }
+  55% { transform: scale(1); filter: blur(0.3px); opacity: 1; }
+  100% { transform: scale(1.35); filter: blur(3px); opacity: 0.3; }
+}
+
 /* hide scrollbars on the library tab strip without losing scrollability */
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }

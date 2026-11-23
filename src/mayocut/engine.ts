@@ -33,6 +33,7 @@ import {
   freezeClipFrom,
 } from "./types";
 import { resolveComposition } from "./timeline-resolver";
+import { LOOK_BY_ID, LOOKS, resolveLookId, type LookFinish } from "./looks";
 import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-plan";
 import { audioFxRecipe, buildAudioFx, makeImpulse, type AudioFxId } from "./audio-fx";
 import { applyCurveLuts, buildCurveLuts, curvesActive } from "./curves";
@@ -79,120 +80,163 @@ function decodeGifFrames(blob: Blob): Promise<{ frames: CanvasImageSource[]; fps
 // ---------------------------------------------------------------------------
 // Filter presets (rendered via canvas ctx.filter)
 // ---------------------------------------------------------------------------
+/**
+ * The colour looks, as the rest of the app expects them.
+ *
+ * The catalogue lives in looks.ts now (with the finish layer that makes a look
+ * read as finished). This array is the flat list the picker, the inspector and
+ * the templates consume, so nothing else had to change when the catalogue grew.
+ */
 export const FILTER_PRESETS: { id: string; name: string; css: string }[] = [
   { id: "none", name: "Original", css: "" },
-  { id: "vivid", name: "Vivid", css: "saturate(1.4) contrast(1.1)" },
-  { id: "warm", name: "Warm", css: "sepia(0.25) saturate(1.25) brightness(1.05)" },
-  { id: "cool", name: "Cool", css: "hue-rotate(-8deg) saturate(1.15) brightness(1.02)" },
-  { id: "bw", name: "B&W", css: "grayscale(1)" },
-  { id: "noir", name: "Noir", css: "grayscale(1) contrast(1.35) brightness(0.95)" },
-  {
-    id: "vintage",
-    name: "Vintage",
-    css: "sepia(0.4) contrast(1.05) brightness(1.06) saturate(0.85)",
-  },
-  { id: "cinema", name: "Cinema", css: "contrast(1.18) saturate(1.12) brightness(0.97)" },
-  { id: "soft", name: "Soft", css: "brightness(1.08) saturate(1.06) blur(0.4px)" },
-  { id: "punch", name: "Punch", css: "contrast(1.28) saturate(1.45)" },
-  {
-    id: "tealorange",
-    name: "Teal & Orange",
-    css: "contrast(1.1) saturate(1.35) sepia(0.14) hue-rotate(-14deg)",
-  },
-  {
-    id: "golden",
-    name: "Golden Hour",
-    css: "sepia(0.32) saturate(1.4) brightness(1.06) contrast(1.03)",
-  },
-  { id: "faded", name: "Faded", css: "contrast(0.9) brightness(1.07) saturate(0.72) sepia(0.16)" },
-  { id: "dreamy", name: "Dreamy", css: "brightness(1.12) saturate(1.18) blur(0.6px)" },
-  { id: "moody", name: "Moody", css: "contrast(1.26) brightness(0.88) saturate(0.82)" },
-  {
-    id: "pastel",
-    name: "Pastel",
-    css: "brightness(1.09) saturate(1.25) contrast(0.88) hue-rotate(6deg)",
-  },
-  { id: "dramatic", name: "Dramatic", css: "contrast(1.38) saturate(1.22) brightness(0.94)" },
-  {
-    id: "night",
-    name: "Night",
-    css: "hue-rotate(12deg) saturate(1.08) brightness(0.9) contrast(1.12)",
-  },
-  {
-    id: "retro",
-    name: "Retro Film",
-    css: "sepia(0.45) contrast(1.1) saturate(1.25) brightness(1.02) hue-rotate(-6deg)",
-  },
-  // --- second wave: film stocks, moods and social looks -------------------
-  {
-    id: "kodachrome",
-    name: "Kodachrome",
-    css: "saturate(1.3) contrast(1.12) sepia(0.1) brightness(1.03)",
-  },
-  {
-    id: "portra",
-    name: "Portra 400",
-    css: "saturate(0.95) contrast(0.96) brightness(1.06) sepia(0.12)",
-  },
-  { id: "technicolor", name: "Technicolor", css: "saturate(1.6) contrast(1.2) hue-rotate(-4deg)" },
-  { id: "bleach", name: "Bleach Bypass", css: "saturate(0.45) contrast(1.42) brightness(1.05)" },
-  { id: "sepia", name: "Sepia", css: "sepia(0.85) contrast(1.05) brightness(1.02)" },
-  {
-    id: "cyanotype",
-    name: "Cyanotype",
-    css: "grayscale(1) sepia(1) hue-rotate(160deg) saturate(1.8) contrast(1.1)",
-  },
-  { id: "infrared", name: "Infrared", css: "hue-rotate(155deg) saturate(1.7) contrast(1.15)" },
-  {
-    id: "duotone",
-    name: "Duotone",
-    css: "grayscale(1) contrast(1.25) sepia(0.4) hue-rotate(180deg) saturate(1.6)",
-  },
-  {
-    id: "fifties",
-    name: "Fifties",
-    css: "sepia(0.3) saturate(0.9) contrast(0.95) brightness(1.08) hue-rotate(-10deg)",
-  },
-  { id: "grunge", name: "Grunge", css: "contrast(1.35) saturate(0.7) brightness(0.92) sepia(0.2)" },
-  {
-    id: "arctic",
-    name: "Arctic",
-    css: "hue-rotate(-18deg) saturate(1.2) brightness(1.08) contrast(1.05)",
-  },
-  {
-    id: "sunset",
-    name: "Sunset",
-    css: "sepia(0.3) saturate(1.5) hue-rotate(-18deg) brightness(1.06)",
-  },
-  {
-    id: "cyberpunk",
-    name: "Cyberpunk",
-    css: "contrast(1.3) saturate(1.6) hue-rotate(-25deg) brightness(0.95)",
-  },
-  { id: "darkmood", name: "Dark & Moody", css: "brightness(0.82) contrast(1.3) saturate(0.85)" },
-  { id: "clean", name: "Clean", css: "brightness(1.04) contrast(1.04) saturate(1.05)" },
-  { id: "clarity", name: "Clarity", css: "contrast(1.14) saturate(1.1) brightness(1.02)" },
-  { id: "silvertone", name: "Silver", css: "grayscale(0.85) contrast(1.2) brightness(1.04)" },
-  {
-    id: "winter",
-    name: "Winter",
-    css: "hue-rotate(8deg) saturate(0.88) brightness(1.06) contrast(1.05)",
-  },
-  {
-    id: "autumn",
-    name: "Autumn",
-    css: "sepia(0.22) saturate(1.35) hue-rotate(-12deg) brightness(1.02)",
-  },
-  { id: "mono-high", name: "Mono High", css: "grayscale(1) contrast(1.55) brightness(1.08)" },
-  {
-    id: "neon-night",
-    name: "Neon Night",
-    css: "hue-rotate(200deg) saturate(2) contrast(1.25) brightness(0.92)",
-  },
+  ...LOOKS.map((l) => ({ id: l.id, name: l.name, css: l.css })),
 ];
 
+/**
+ * A tile of monochrome grain, generated once and reused.
+ *
+ * Grain is what separates "vintage" from "washed out": real film has clumped,
+ * uneven silver, and a flat grey overlay reads as fog. Generated at 96x96 and
+ * tiled — big enough that the repeat is not obvious at preview size, small
+ * enough to cost one canvas fill.
+ *
+ * Seeded by a fixed constant so the same project always looks the same: a
+ * re-export must match the preview, and noise that changes every call would
+ * make "did the grade change?" impossible to answer.
+ */
+let grainTile: HTMLCanvasElement | null = null;
+/**
+ * Patterns are owned by the context that created them, so the cache has to be
+ * per-context. Without this the grain pattern was rebuilt on every draw of every
+ * grained clip — small, but it was allocation churn in the one place the preview
+ * cannot afford it.
+ */
+const grainPatterns = new WeakMap<CanvasRenderingContext2D, CanvasPattern>();
+export function grainTexture(): HTMLCanvasElement | null {
+  if (grainTile) return grainTile;
+  if (typeof document === "undefined") return null;
+  const size = 96;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const g = c.getContext("2d");
+  if (!g) return null;
+  const img = g.createImageData(size, size);
+  // xorshift, so the pattern is deterministic across engines and runs.
+  let seed = 0x9e3779b9;
+  for (let i = 0; i < img.data.length; i += 4) {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    seed >>>= 0;
+    const v = seed & 0xff;
+    img.data[i] = v;
+    img.data[i + 1] = v;
+    img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  grainTile = c;
+  return c;
+}
+
+/**
+ * Paint a look's finish (tint, grain, vignette, caption) over the frame.
+ *
+ * Kept separate from the CSS filter because these are not expressible as filter
+ * functions: a tint needs a blend mode, grain needs a texture, a vignette needs
+ * a radial gradient, a caption needs glyphs. All of it is drawn inside the
+ * caller's save/restore, and all of it is skipped when `scale` is 0, so the
+ * export path pays only for the looks that actually use it.
+ */
+export function paintFinish(
+  ctx: CanvasRenderingContext2D,
+  look: LookFinish | undefined,
+  W: number,
+  H: number,
+  alpha = 1,
+) {
+  if (!look || alpha <= 0) return;
+  const prevOp = ctx.globalCompositeOperation;
+  const prevAlpha = ctx.globalAlpha;
+
+  if (look.tint) {
+    ctx.save();
+    ctx.globalCompositeOperation = look.tint.mode;
+    ctx.globalAlpha = prevAlpha * look.tint.alpha * alpha;
+    ctx.fillStyle = look.tint.color;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  if (look.vignette && look.vignette > 0) {
+    ctx.save();
+    const r = Math.hypot(W, H) / 2;
+    const grad = ctx.createRadialGradient(W / 2, H / 2, r * 0.45, W / 2, H / 2, r);
+    grad.addColorStop(0, "rgba(0,0,0,0)");
+    grad.addColorStop(1, `rgba(0,0,0,${(0.62 * look.vignette * alpha).toFixed(3)})`);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  if (look.grain && look.grain > 0) {
+    const tile = grainTexture();
+    if (tile) {
+      ctx.save();
+      // overlay keeps midtones intact and only roughens the edges of brightness,
+      // which is how film grain actually behaves
+      ctx.globalCompositeOperation = "overlay";
+      ctx.globalAlpha = prevAlpha * Math.min(0.9, look.grain) * alpha;
+      let pat = grainPatterns.get(ctx);
+      if (!pat) {
+        const made = ctx.createPattern(tile, "repeat");
+        if (made) {
+          pat = made;
+          grainPatterns.set(ctx, made);
+        }
+      }
+      if (pat) {
+        ctx.fillStyle = pat;
+        ctx.fillRect(0, 0, W, H);
+      }
+      ctx.restore();
+    }
+  }
+
+  if (look.label) {
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = prevAlpha * 0.85 * alpha;
+    const size = Math.max(10, Math.round(H * 0.038));
+    ctx.font = `600 ${size}px "Helvetica Neue", Arial, sans-serif`;
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.shadowColor = "rgba(0,0,0,0.6)";
+    ctx.shadowBlur = size * 0.35;
+    ctx.textAlign = "right";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(look.label, W - size * 0.6, H - size * 0.5);
+    ctx.restore();
+  }
+
+  ctx.globalCompositeOperation = prevOp;
+  ctx.globalAlpha = prevAlpha;
+}
+
+/** The finish for a filter id, or undefined when the look has none. */
+export function finishFor(filterId: string): LookFinish | undefined {
+  const look = LOOK_BY_ID.get(resolveLookId(filterId));
+  if (!look) return undefined;
+  const { tint, grain, vignette, label } = look;
+  if (!tint && !grain && !vignette && !label) return undefined;
+  return { tint, grain, vignette, label };
+}
+
 export function presetCss(id: string): string {
-  return FILTER_PRESETS.find((p) => p.id === id)?.css ?? "";
+  // resolveLookId keeps a renamed look attached to the projects that use it
+  const real = resolveLookId(id);
+  return FILTER_PRESETS.find((p) => p.id === real)?.css ?? "";
 }
 
 export function buildFilterCss(clip: MainClip): string {
@@ -2247,6 +2291,174 @@ export class Engine {
       return;
     }
 
+    // ---------------------------------------------------------- trending set
+    // Each of these is a distinct look, not a variant of the wipe code below:
+    // a flash is a light event, a spin is a rotation, a glitch is a tear. They
+    // are implemented as their own branches because falling through to the
+    // wipe path would silently give the user a rectangle reveal under a name
+    // that promised something else.
+
+    if (kind === "flash") {
+      // Beat-drop cut: the outgoing frame is already gone by the halfway point,
+      // which is why it reads as a hit rather than a fade. The white peak is
+      // narrow on purpose — a wide one looks like a mistake.
+      const peak = Math.pow(Math.sin(Math.PI * k), 2);
+      if (k < 0.5) this.drawMainItem(ctx, a, 1, W, H, t);
+      else this.drawMainItem(ctx, b, 1, W, H, t);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = Math.min(1, peak * 1.15);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+      return;
+    }
+
+    if (kind === "spin") {
+      // Both frames rotate through the cut. A is fully opaque underneath, so
+      // the corner gaps that a rotation leaves are never visible.
+      const ease = k * k * (3 - 2 * k);
+      this.drawMainItem(ctx, a, 1, W, H, t);
+      const rot = (1 - ease) * Math.PI * 0.5;
+      const sc = 0.7 + 0.3 * ease;
+      ctx.save();
+      ctx.globalAlpha = clamp01(ease * 1.6);
+      ctx.translate(W / 2, H / 2);
+      ctx.rotate(rot);
+      ctx.scale(sc, sc);
+      ctx.translate(-W / 2, -H / 2);
+      this.drawMainItem(ctx, b, 1, W, H, t);
+      ctx.restore();
+      return;
+    }
+
+    if (kind === "glitch") {
+      // Digital tear. Deterministic on k so the preview and the export agree:
+      // a random judder would make the exported cut differ from what was
+      // approved on screen.
+      this.drawMainItem(ctx, b, Math.min(1, k * 1.4), W, H, t);
+      ctx.save();
+      const bands = 9;
+      const seed = Math.sin(k * 61.7) * 1000;
+      for (let i = 0; i < bands; i++) {
+        const f = (i / bands + (seed % 1) * 0.05) % 1;
+        const bh = H / bands;
+        const jitter = (Math.sin(seed + i * 2.3) * 0.5 + 0.5) * 0.5;
+        if (jitter < 0.55) continue;
+        // a slice of the OUTGOING frame, displaced sideways
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, f * H, W, bh);
+        ctx.clip();
+        const dx = Math.sin(seed * (i + 1)) * W * 0.08 * Math.sin(Math.PI * k);
+        ctx.translate(dx, 0);
+        this.drawMainItem(ctx, a, 0.9, W, H, t);
+        ctx.restore();
+      }
+      // chromatic fringe: two thin offset colour washes that pulse with k
+      const fringe = Math.sin(Math.PI * k);
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = 0.14 * fringe;
+      ctx.fillStyle = "#ff0044";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#00e5ff";
+      ctx.globalAlpha = 0.1 * fringe;
+      ctx.fillRect(W * 0.012, 0, W, H);
+      ctx.restore();
+      return;
+    }
+
+    if (kind === "lightleak") {
+      // Organic film burn: a warm radial edge travels across, over a plain
+      // crossfade. The leak is additive so it brightens rather than tints.
+      this.drawMainItem(ctx, a, 1 - k * 0.6, W, H, t);
+      this.drawMainItem(ctx, b, k, W, H, t);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const cx = W * (-0.25 + 1.5 * k);
+      const r = Math.hypot(W, H) * (0.55 + 0.15 * Math.sin(Math.PI * k));
+      const grad = ctx.createRadialGradient(cx, H * 0.5, r * 0.05, cx, H * 0.5, r);
+      const a0 = Math.sin(Math.PI * k);
+      grad.addColorStop(0, `rgba(255,214,140,${(0.55 * a0).toFixed(3)})`);
+      grad.addColorStop(0.45, `rgba(255,120,60,${(0.28 * a0).toFixed(3)})`);
+      grad.addColorStop(1, "rgba(120,20,0,0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+      return;
+    }
+
+    if (kind === "luma") {
+      // Luma-keyed dissolve: a soft luminance band sweeps across and B comes
+      // through it. B is rendered into a half-res buffer and masked with a
+      // gradient, the same way the feathered wipe works — a resampled edge is
+      // invisible behind a soft falloff, and the buffer keeps it phone-friendly.
+      this.drawMainItem(ctx, a, 1, W, H, t);
+      const scale = Math.min(1, 720 / Math.max(W, H));
+      const bw = Math.max(2, Math.round(W * scale));
+      const bh = Math.max(2, Math.round(H * scale));
+      const buf = document.createElement("canvas");
+      buf.width = bw;
+      buf.height = bh;
+      const bctx = buf.getContext("2d");
+      if (!bctx) {
+        this.drawMainItem(ctx, b, clamp01(k * 1.2), W, H, t);
+        return;
+      }
+      bctx.scale(bw / W, bh / H);
+      this.drawMainItem(bctx, b, 1, W, H, t);
+      bctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      // The band travels left to right with a generous soft shoulder, which is
+      // what makes it read as an exposure change rather than a hard wipe.
+      const edge = -0.3 + 1.6 * clamp01(k);
+      const shoulder = 0.35;
+      bctx.globalCompositeOperation = "destination-in";
+      const g = bctx.createLinearGradient(0, 0, bw, 0);
+      const A0 = (v: number) => `rgba(0,0,0,${v})`;
+      g.addColorStop(0, A0(clamp01(edge) > 0 ? 1 : 0));
+      g.addColorStop(clamp01(edge), A0(clamp01(edge) > 0 ? 1 : 0));
+      g.addColorStop(clamp01(edge + shoulder), A0(clamp01(edge + shoulder) >= 1 ? 0 : 1));
+      g.addColorStop(1, A0(clamp01(edge + shoulder) >= 1 ? 0 : 1));
+      bctx.fillStyle = g;
+      bctx.fillRect(0, 0, bw, bh);
+      bctx.globalCompositeOperation = "source-over";
+      ctx.drawImage(buf, 0, 0, W, H);
+      return;
+    }
+
+    if (kind === "zoomblur") {
+      // Push in with blur, release. The blur peaks where the scale changes
+      // fastest, so the motion reads as acceleration rather than a wobble.
+      const blurPx = Math.sin(Math.PI * k) * Math.max(4, H * 0.022);
+      this.drawMainItem(ctx, a, 1, W, H, t, blurPx * 0.6, 1 + 0.3 * k);
+      this.drawMainItem(ctx, b, clamp01(k * 1.2), W, H, t, blurPx, 1.3 - 0.3 * k);
+      return;
+    }
+
+    if (kind === "whipl" || kind === "whipr") {
+      // Heavy lateral blur with a short travel: the fast cut between two shots
+      // that feels like a camera whip. A is thrown out, B arrives, both smeared.
+      const dir = kind === "whipl" ? -1 : 1;
+      const blurPx = Math.sin(Math.PI * k) * Math.max(5, W * 0.03);
+      const travel = W * 0.35 * k * dir;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.clip();
+      ctx.translate(travel, 0);
+      this.drawMainItem(ctx, a, 1, W, H, t, blurPx);
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.clip();
+      ctx.translate(travel - W * 0.35 * dir, 0);
+      this.drawMainItem(ctx, b, 1, W, H, t, blurPx);
+      ctx.restore();
+      return;
+    }
+
     // --- geometric transitions: draw A, then mask B in ---
     const e = k; // linear is what an edit feels like; keep it frame-accurate
     const soft = wipeDir(kind);
@@ -2488,6 +2700,72 @@ export class Engine {
         ctx.globalAlpha = a;
       }
     }
+    // --- third wave: paint part of the effect ------------------------------
+    // Motion blur is drawn as a stack of offset copies of the frame so far:
+    // a smear along the direction of travel. It is done with drawImage of the
+    // already-painted canvas rather than a filter because ctx.filter blur is
+    // uniform in all directions and reads as "soft focus", not movement.
+    if (eff === "glow") {
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = a * (0.28 + 0.06 * Math.sin(localT * 2.2));
+      ctx.filter = `blur(${Math.max(3, H * 0.02).toFixed(1)}px) brightness(1.15)`;
+      ctx.drawImage(el, 0, 0, W, H);
+      ctx.restore();
+    }
+    if (eff === "chroma") {
+      // RGB pulled apart at the edges, strongest at the frame border
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      const off = Math.max(1, W * 0.004);
+      ctx.globalAlpha = a * 0.35;
+      ctx.filter = "sepia(1) saturate(6) hue-rotate(-40deg)";
+      ctx.drawImage(el, -off, 0, W, H);
+      ctx.filter = "sepia(1) saturate(6) hue-rotate(160deg)";
+      ctx.drawImage(el, off, 0, W, H);
+      ctx.restore();
+    }
+    if (eff === "light-rays") {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const flicker = 0.55 + 0.12 * Math.sin(localT * 1.3) + 0.06 * Math.sin(localT * 3.1);
+      const gx = W * (0.15 + 0.1 * Math.sin(localT * 0.4));
+      const grad = ctx.createLinearGradient(gx, 0, gx + W * 0.5, H);
+      grad.addColorStop(0, `rgba(255,240,200,${(0.16 * flicker * a).toFixed(3)})`);
+      grad.addColorStop(0.5, `rgba(255,220,160,${(0.07 * flicker * a).toFixed(3)})`);
+      grad.addColorStop(1, "rgba(255,200,120,0)");
+      ctx.fillStyle = grad;
+      for (let i = 0; i < 4; i++) {
+        const x = gx + i * W * 0.09;
+        ctx.save();
+        ctx.translate(x, 0);
+        ctx.rotate(0.18 + i * 0.02);
+        ctx.fillRect(0, -H, W * (0.05 + i * 0.012), H * 3);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+    if (eff === "motion-blur") {
+      // smear the current frame along x. Trail length is fixed in pixels so the
+      // look does not change with the export resolution.
+      const trail = Math.max(2, Math.round(W * 0.02));
+      ctx.save();
+      ctx.globalAlpha = a * 0.22;
+      for (let i = 1; i <= 3; i++) {
+        ctx.globalAlpha = a * (0.2 / i);
+        ctx.drawImage(el, -i * trail, 0, W, H);
+        ctx.drawImage(el, i * trail, 0, W, H);
+      }
+      ctx.restore();
+      ctx.globalAlpha = a;
+    }
+
+    // The look's finish layer: tint, grain, vignette and any burnt-in caption.
+    // Drawn after the picture and before the effect overlays, so the caption a
+    // look carries sits under a flash rather than being erased by it.
+    const finish = finishFor(c.filter);
+    if (finish) paintFinish(ctx, finish, W, H, a);
+
     if (eff === "vhs") {
       ctx.globalAlpha = a * 0.5;
       const pat = this.vhsPatternLazy;
@@ -2641,6 +2919,40 @@ export class Engine {
         r.scale = 1.12;
         break;
       }
+      // --- third wave: transform part of the effect --------------------
+      // Each of these also has a paint step in drawMainItem; this half only
+      // decides where the frame sits. Splitting them keeps the transform
+      // function free of canvas work, which is what lets the audit test it.
+      case "speed-push": {
+        // accelerating push: a slow start that ramps, which reads as a speed
+        // ramp without retiming the source (retiming would drop audio sync)
+        const k2 = clamp01(localT / Math.max(0.001, dur));
+        r.scale = 1 + 0.16 * k2 * k2;
+        break;
+      }
+      case "beat-zoom": {
+        // a punch on the beat: fast in, slow settle, repeats every 0.5s
+        const beat = (localT % 0.5) / 0.5;
+        r.scale = 1 + 0.09 * Math.pow(1 - beat, 3);
+        break;
+      }
+      case "drift-up":
+        r.ty = -0.06 * (localT / Math.max(0.001, dur)) * H;
+        r.scale = 1.08;
+        break;
+      case "drift-down":
+        r.ty = 0.06 * (localT / Math.max(0.001, dur)) * H;
+        r.scale = 1.08;
+        break;
+      case "focus-in": {
+        const k2 = clamp01(localT / 0.6);
+        r.scale = 1.03 - 0.03 * k2;
+        break;
+      }
+      case "chroma":
+        // a slow breathing zoom under the RGB split so the frame is not static
+        r.scale = 1.01 + 0.01 * Math.sin(localT * 1.7);
+        break;
       default:
         break;
     }
