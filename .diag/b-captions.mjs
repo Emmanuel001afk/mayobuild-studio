@@ -29618,7 +29618,167 @@ var init_transformers = __esm({
   }
 });
 
+// src/mayocut/fonts.ts
+var FONT_CATALOGUE = [
+  // ---- clean / captions -----------------------------------------------------
+  {
+    id: "system",
+    name: "Modern (default)",
+    css: '"Inter", "Segoe UI", system-ui, sans-serif',
+    note: "Clean UI sans \u2014 the safe default",
+    kind: "sans"
+  },
+  {
+    id: "helvetica",
+    name: "Helvetica / Nimbus",
+    css: '"Helvetica Neue", Helvetica, "Nimbus Sans", Arial, sans-serif',
+    note: "Neutral Swiss sans, slightly tighter than Modern",
+    kind: "sans"
+  },
+  {
+    id: "grotesk",
+    name: "Grotesk",
+    css: '"Arial", "Liberation Sans", "Helvetica Neue", sans-serif',
+    note: "Plain, wide, extremely legible at small sizes",
+    kind: "sans"
+  },
+  {
+    id: "geometric",
+    name: "Geometric",
+    css: '"Futura", "Century Gothic", "Avenir Next", "Trebuchet MS", sans-serif',
+    note: "Round geometry \u2014 good for titles, weak for body",
+    kind: "sans"
+  },
+  {
+    id: "humanist",
+    name: "Humanist",
+    css: '"Optima", "Candara", "Gill Sans", "Segoe UI", sans-serif',
+    note: "Softer strokes, reads well over busy footage",
+    kind: "sans"
+  },
+  {
+    id: "book",
+    name: "Book",
+    css: '"Verdana", "DejaVu Sans", "Segoe UI", sans-serif',
+    note: "Wide and heavy \u2014 the most readable over video",
+    kind: "sans"
+  },
+  {
+    id: "condensed",
+    name: "Condensed",
+    css: '"Arial Narrow", "Roboto Condensed", "Liberation Sans Narrow", sans-serif',
+    note: "Narrow \u2014 fits long lines and stacked captions",
+    kind: "sans"
+  },
+  // ---- loud / display -------------------------------------------------------
+  {
+    id: "impact",
+    name: "Impact (loud)",
+    css: 'Impact, "Arial Black", "Haettenschweiler", sans-serif',
+    note: "Meme/poster weight; pairs with a thick stroke",
+    kind: "display"
+  },
+  {
+    id: "black",
+    name: "Black",
+    css: '"Arial Black", "Segoe UI Black", "Impact", sans-serif',
+    note: "Very heavy sans for hook text",
+    kind: "display"
+  },
+  {
+    id: "poster",
+    name: "Poster",
+    css: '"Trebuchet MS", "Tahoma", "DejaVu Sans", sans-serif',
+    note: "Friendly and slightly condensed",
+    kind: "display"
+  },
+  // ---- serif ---------------------------------------------------------------
+  {
+    id: "serif",
+    name: "Classic serif",
+    css: 'Georgia, "Times New Roman", "Liberation Serif", serif',
+    note: "Editorial serif; the default for quotes",
+    kind: "serif"
+  },
+  {
+    id: "garamond",
+    name: "Garamond",
+    css: '"EB Garamond", Garamond, "Apple Garamond", "Georgia", serif',
+    note: "Bookish and elegant \u2014 small caps look great",
+    kind: "serif"
+  },
+  {
+    id: "slab",
+    name: "Slab",
+    css: 'Rockwell, "Roboto Slab", "DejaVu Serif", serif',
+    note: "Blocky serif; strong over footage",
+    kind: "serif"
+  },
+  {
+    id: "elegant",
+    name: "Elegant",
+    css: '"Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", serif',
+    note: "Warm old-style; wedding and travel edits",
+    kind: "serif"
+  },
+  {
+    id: "didone",
+    name: "Didone",
+    css: '"Didot", "Bodoni MT", "Baskerville", "Playfair Display", serif',
+    note: "High-contrast fashion type \u2014 large sizes only",
+    kind: "serif"
+  },
+  // ---- mono / typewriter ----------------------------------------------------
+  {
+    id: "mono",
+    name: "Typewriter mono",
+    css: '"SF Mono", ui-monospace, "Roboto Mono", "DejaVu Sans Mono", monospace',
+    note: "Code/terminal feel; good for data and jokes",
+    kind: "mono"
+  },
+  {
+    id: "courier",
+    name: "Courier",
+    css: '"Courier New", Courier, "Nimbus Mono PS", monospace',
+    note: "Script/typewriter look with a thin weight",
+    kind: "mono"
+  },
+  // ---- script / casual ------------------------------------------------------
+  {
+    id: "script",
+    name: "Script (handwritten)",
+    css: '"Brush Script MT", "Segoe Script", "Bradley Hand", cursive',
+    note: "Handwritten \u2014 use sparingly and large",
+    kind: "script"
+  },
+  {
+    id: "rounded",
+    name: "Rounded (casual)",
+    css: '"Comic Sans MS", "Comic Neue", "Chalkboard SE", cursive',
+    note: "Informal and warm",
+    kind: "script"
+  },
+  {
+    id: "marker",
+    name: "Marker",
+    css: '"Marker Felt", "Comic Sans MS", "Segoe Print", cursive',
+    note: "Notebook/marker annotation style",
+    kind: "script"
+  },
+  {
+    id: "fancy",
+    name: "Fancy (blackletter)",
+    css: '"Old English Text MT", "UnifrakturMaguntia", "Cinzel Decorative", serif',
+    note: "Blackletter; decorative only, never body text",
+    kind: "display"
+  }
+];
+var BY_ID = new Map(FONT_CATALOGUE.map((f) => [f.id, f]));
+
 // src/mayocut/types.ts
+var FONTS = FONT_CATALOGUE.map(
+  ({ id, name: name2, css }) => ({ id, name: name2, css })
+);
 var clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 function speedCurveOf(c) {
   const raw = c.curve;

@@ -22,6 +22,7 @@ const ST = await import('./b-stock.mjs');
 const HSL = await import('./b-hsl.mjs');
 const SK = await import('./b-sticker-kinds.mjs');
 const SB = await import('./b-stickers.mjs');
+const FT = await import('./b-fonts.mjs');
 console.log('types.ts');
 await t('emptyTracks = 3 fixed tracks', () => {
   const tr = T.emptyTracks();
@@ -2473,6 +2474,147 @@ await t('catalogue is emoji+graphic+shape+word, counts unchanged elsewhere', () 
   assert.equal(SB.GRAPHIC_ASSETS.length, 24);
   assert.equal(SB.SHAPE_ASSETS.length, 12);
   assert.equal(SB.WORD_ASSETS.length, 14);
+});
+
+
+// ================= stage 8: fonts, and a fast grade =================
+console.log('fonts.ts');
+await t('the catalogue is bigger and every face has a real fallback', () => {
+  assert.ok(FT.FONT_CATALOGUE.length >= 20, `only ${FT.FONT_CATALOGUE.length} fonts`);
+  for (const f of FT.FONT_CATALOGUE) {
+    assert.ok(f.css.length > 0, `${f.id} has no stack`);
+    // A stack that does not end in a generic family renders as Times in some
+    // browser somewhere. That is the bug this asserts against.
+    assert.ok(/,\s*(sans-serif|serif|monospace|cursive|system-ui)\s*$/.test(f.css), `${f.id} lacks a generic tail: ${f.css}`);
+    assert.ok(f.name && f.note, `${f.id} needs a name and a note`);
+  }
+});
+await t('font ids are unique (a duplicate would shadow a face silently)', () => {
+  const ids = FT.FONT_CATALOGUE.map((f) => f.id);
+  assert.equal(new Set(ids).size, ids.length);
+});
+await t('resolveFontCss finds built-ins', () => {
+  assert.match(FT.resolveFontCss('serif'), /Georgia/);
+  assert.match(FT.resolveFontCss('impact'), /Impact/);
+});
+await t('an IMPORTED font resolves to its own family, not the default', () => {
+  // This is the bug that shipped: the canvas only knew the built-in stacks, so
+  // every imported font rendered as system-ui while the label said otherwise.
+  const imported = [{ id: 'mc-my-font-ab12', family: 'mc-my-font-ab12', name: 'My Font' }];
+  const css = FT.resolveFontCss('mc-my-font-ab12', imported);
+  assert.match(css, /"mc-my-font-ab12"/, `imported font did not resolve: ${css}`);
+  assert.ok(!css.startsWith('"Inter"'), 'imported font fell back to the default stack');
+});
+await t('an unknown id still yields a usable stack', () => {
+  const css = FT.resolveFontCss('does-not-exist');
+  assert.match(css, /sans-serif/);
+});
+await t('fontName reports imported names, and falls back to the id', () => {
+  const imported = [{ id: 'mc-x', family: 'mc-x', name: 'Xylophone Sans' }];
+  assert.equal(FT.fontName('mc-x', imported), 'Xylophone Sans');
+  assert.equal(FT.fontName('nope'), 'nope');
+  assert.equal(FT.fontName('serif'), 'Classic serif');
+});
+await t('FONTS re-export matches the catalogue (canvas and picker cannot disagree)', () => {
+  assert.equal(T.FONTS.length, FT.FONT_CATALOGUE.length);
+  for (let i = 0; i < FT.FONT_CATALOGUE.length; i++) {
+    assert.equal(T.FONTS[i].id, FT.FONT_CATALOGUE[i].id);
+    assert.equal(T.FONTS[i].css, FT.FONT_CATALOGUE[i].css);
+  }
+});
+
+console.log('hsl.ts (performance rewrite must stay pixel-identical)');
+await t('applyHsl matches a straightforward per-pixel reference implementation', () => {
+  // The fast path exists because the original took ~280 ms/frame. Speed is only
+  // acceptable if the RESULT is unchanged, so this compares against a plain,
+  // obviously-correct implementation written straight from the maths.
+  function reference(d, set) {
+    const bands = HSL.HSL_BANDS.filter((b) => {
+      const a = set[b.id];
+      return a && ((a.h ?? 0) !== 0 || (a.s ?? 0) !== 0 || (a.l ?? 0) !== 0);
+    });
+    for (let i = 0; i < d.length; i += 4) {
+      const { h, s, l } = HSL.rgbToHsl(d[i], d[i + 1], d[i + 2]);
+      if (s < 0.02) continue;
+      let dH = 0, sMul = 0, dL = 0, total = 0;
+      for (const b of bands) {
+        const a = set[b.id];
+        const w = HSL.bandWeight(h, b.id);
+        if (w <= 0) continue;
+        dH += ((a.h ?? 0) / 100) * 30 * w;
+        sMul += (a.s ?? 0) / 100 * w;
+        dL += ((a.l ?? 0) / 100) * 0.35 * w;
+        total += w;
+      }
+      if (total === 0) continue;
+      const out = HSL.hslToRgb(h + dH, Math.max(0, Math.min(1, s * (1 + sMul))), Math.max(0, Math.min(1, l + dL)));
+      d[i] = Math.max(0, Math.min(255, out.r));
+      d[i + 1] = Math.max(0, Math.min(255, out.g));
+      d[i + 2] = Math.max(0, Math.min(255, out.b));
+    }
+  }
+  const sets = {
+    one: { red: { h: 4, s: 10, l: 0 } },
+    four: { red: { h: 4, s: 10, l: 0 }, yellow: { h: 0, s: 0, l: 3 }, green: { h: -5, s: 0, l: 0 }, blue: { h: 2, s: 8, l: 0 } },
+    extreme: { red: { h: 100, s: 100, l: 100 }, magenta: { h: -100, s: -100, l: -100 }, cyan: { h: 30, s: -50, l: 20 } },
+  };
+  const n = 6000;
+  for (const [name, set] of Object.entries(sets)) {
+    const a = new Uint8ClampedArray(n * 4);
+    for (let i = 0; i < a.length; i += 4) {
+      a[i] = (i * 7) % 256;
+      a[i + 1] = (i * 13) % 256;
+      a[i + 2] = (i * 29) % 256;
+      a[i + 3] = 255;
+    }
+    const b = new Uint8ClampedArray(a);
+    reference(a, set);
+    HSL.applyHsl(b, set);
+    let worst = 0;
+    for (let i = 0; i < a.length; i++) worst = Math.max(worst, Math.abs(a[i] - b[i]));
+    assert.ok(worst <= 1, `${name}: fast path differs from reference by ${worst}/255`);
+  }
+});
+await t('the fast path still skips greys, NEAR-greys and identity sets', () => {
+  // Pure grey is caught by the "no chroma at all" check, so a pure-grey-only
+  // test passes even with the saturation guard deleted. A near-grey pixel is
+  // the case the guard actually exists for: it has a measurable hue, so without
+  // the s < 0.02 check an extreme adjustment would tint skin-tone shadows and
+  // neutral walls.
+  const grey = new Uint8ClampedArray([128, 128, 128, 255, 10, 10, 10, 255]);
+  const copy = new Uint8ClampedArray(grey);
+  HSL.applyHsl(grey, { red: { h: 50, s: 50, l: 50 } });
+  assert.deepEqual([...grey], [...copy], 'grey pixels must not be touched');
+
+  const nearGrey = new Uint8ClampedArray([128, 130, 128, 255]);
+  const keepNear = new Uint8ClampedArray(nearGrey);
+  HSL.applyHsl(nearGrey, { red: { h: 100, s: 100, l: 100 }, green: { h: 100, s: 100, l: 100 } });
+  assert.deepEqual([...nearGrey], [...keepNear], 'near-grey pixels must not be touched');
+
+  const identity = new Uint8ClampedArray([200, 40, 40, 255]);
+  const keep = new Uint8ClampedArray(identity);
+  HSL.applyHsl(identity, { red: { h: 0, s: 0, l: 0 } });
+  assert.deepEqual([...identity], [...keep]);
+});
+await t('the HSL pass stays fast enough to preview in real time', () => {
+  // A guard against this quietly regressing. The original implementation took
+  // ~280 ms for one band on a 1280x720 buffer (~4 fps); the rewrite is ~20 ms.
+  // The threshold is deliberately loose — this must not fail on a slow CI box —
+  // but it does fail if the per-pixel object allocation ever comes back.
+  const W = 1280, H2 = 720;
+  const d = new Uint8ClampedArray(W * H2 * 4);
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = (i >> 2) % 256;
+    d[i + 1] = ((i >> 4) * 3) % 256;
+    d[i + 2] = ((i >> 6) * 7) % 256;
+    d[i + 3] = 255;
+  }
+  const set = { red: { h: 4, s: 10, l: 0 }, blue: { h: 2, s: 8, l: 0 } };
+  HSL.applyHsl(d, set); // warm up the JIT
+  const t0 = Date.now();
+  HSL.applyHsl(d, set);
+  const ms = Date.now() - t0;
+  assert.ok(ms < 120, `HSL took ${ms} ms for one 720p frame (budget 120 ms)`);
 });
 
 console.log(`\nAUDIT: ${passed} passed, ${failed} failed`);

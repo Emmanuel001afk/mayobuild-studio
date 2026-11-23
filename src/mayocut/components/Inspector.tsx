@@ -3,6 +3,7 @@ import { CurveEditor } from "./CurveEditor";
 import { CURVE_PRESETS, curvesActive, normalisePoints, type CurvePoint } from "../curves";
 import { searchEmoji } from "../stock";
 import { defaultAnimFor, defaultSizeFor, isEmojiOverlay, overlayLabel } from "../sticker-kinds";
+import { FONT_CATALOGUE, fontName } from "../fonts";
 import { HSL_BANDS, hslActive, type HslAdjust, type HslBand } from "../hsl";
 
 type Channel = "rgb" | "r" | "g" | "b";
@@ -28,6 +29,7 @@ import {
   ASPECTS,
   EFFECTS,
   FONTS,
+  fontCss,
   SPEED_PRESETS,
   TEXT_ANIMS,
   TEXT_PRESETS,
@@ -1188,23 +1190,11 @@ export function Inspector(p: Props) {
                 onChange={(v) => p.onPatchOverlay(trackId, { y: v })}
               />
             </div>
-            <div className="text-xs mt-2 mb-1">Font</div>
-            <select
-              className="w-full bg-slate-900 border border-border rounded px-2 py-1.5 text-xs"
-              value={over.font ?? "system"}
-              onChange={(e) => p.onPatchOverlay(trackId, { font: e.target.value })}
-            >
-              {FONTS.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-              {(p.projectFonts ?? []).map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name} (imported)
-                </option>
-              ))}
-            </select>
+            <FontPicker
+              value={over.font}
+              imported={p.projectFonts}
+              onPick={(id) => p.onPatchOverlay(trackId, { font: id })}
+            />
             {p.onImportFont && (
               <label className="block text-[10px] text-muted-foreground mt-1">
                 Import a font (.ttf / .otf / .woff)…
@@ -2185,6 +2175,98 @@ function Slider({
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-full accent-cyan-400"
       />
+    </div>
+  );
+}
+
+/**
+ * Font picker.
+ *
+ * A <select> can list font names but cannot SHOW them, which is the only thing
+ * that matters when choosing a face — "Condensed" tells you nothing until you
+ * see the letters. Each row renders in its own family, so the list is the
+ * preview. Imported fonts appear in the same list, labelled, and preview in
+ * their own face too (they are real FontFaces by the time they get here).
+ */
+function FontPicker({
+  value,
+  imported,
+  onPick,
+}: {
+  value?: string;
+  imported?: { id: string; family: string; name: string }[];
+  onPick: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const current = fontName(value, imported);
+  const preview = "Aa Bb 123";
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between text-xs mb-1">
+        <span>Font</span>
+        <button
+          className="text-[10px] text-cyan-300 hover:underline"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? "hide list" : `change (${FONT_CATALOGUE.length})`}
+        </button>
+      </div>
+      <button
+        className="w-full flex items-center justify-between gap-2 bg-slate-900 border border-border rounded px-2 py-1.5 text-left"
+        aria-label="Font"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="truncate" style={{ fontFamily: fontCss(value, imported) }}>
+          {current}
+        </span>
+        <span className="text-muted-foreground text-[10px] shrink-0">{open ? "▴" : "▾"}</span>
+      </button>
+      {open && (
+        <div className="mt-1 max-h-56 overflow-y-auto border border-border rounded divide-y divide-border/60">
+          {FONT_CATALOGUE.map((f) => (
+            <button
+              key={f.id}
+              className={`w-full text-left px-2 py-1.5 hover:bg-slate-800 ${
+                (value ?? "system") === f.id ? "bg-cyan-400/10" : ""
+              }`}
+              onClick={() => {
+                onPick(f.id);
+                setOpen(false);
+              }}
+              title={f.note}
+            >
+              <div className="text-sm leading-tight truncate" style={{ fontFamily: f.css }}>
+                {f.sample ?? preview}
+              </div>
+              <div className="text-[9px] text-muted-foreground truncate">
+                {f.name} · {f.note}
+              </div>
+            </button>
+          ))}
+          {(imported ?? []).map((f) => (
+            <button
+              key={f.id}
+              className={`w-full text-left px-2 py-1.5 hover:bg-slate-800 ${
+                value === f.id ? "bg-cyan-400/10" : ""
+              }`}
+              onClick={() => {
+                onPick(f.id);
+                setOpen(false);
+              }}
+            >
+              <div
+                className="text-sm leading-tight truncate"
+                style={{ fontFamily: `"${f.family}", ${FONTS[0].css}` }}
+              >
+                {preview}
+              </div>
+              <div className="text-[9px] text-muted-foreground truncate">{f.name} · imported</div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -325,6 +325,40 @@ if (!graphicNamed) {
   failed++;
 }
 
+// --- the font picker shows faces, not just names ----------------------------
+// A <select> cannot preview a font, which is the only thing that matters when
+// choosing one. The picker must open, list every face, and render each row in
+// its own family.
+{
+  const fontBtn = [...document.querySelectorAll('button[aria-label="Font"]')][0];
+  if (fontBtn) {
+    fontBtn.click();
+    await wait(250);
+    const rows = [...document.querySelectorAll('button')].filter((b) =>
+      /· imported$|· [A-Z]/.test((b.textContent || "").trim()),
+    );
+    const sampleRows = [...document.querySelectorAll("button")].filter((b) =>
+      /Aa Bb 123/.test(b.textContent || ""),
+    );
+    const styled = sampleRows.filter((b) => {
+      const el = b.querySelector("div");
+      return !!el && (el.getAttribute("style") || "").includes("font-family");
+    });
+    const ok = sampleRows.length >= 20 && styled.length === sampleRows.length;
+    console.log(
+      ok
+        ? `  PASS font picker previews every face (${sampleRows.length} rows, all styled)`
+        : `  FAIL font picker previews every face (${sampleRows.length} rows, ${styled.length} styled)`,
+    );
+    if (!ok) failed++;
+    fontBtn.click();
+    await wait(150);
+  } else {
+    console.log("  FAIL font picker missing");
+    failed++;
+  }
+}
+
 // --- the library tabs must all open and expose their catalogue ---------------
 // This is the part that would silently rot: a tab that renders nothing, or a
 // catalogue that lost its entries, is invisible to a "does it mount" check.

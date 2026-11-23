@@ -28,6 +28,7 @@ const MODULES = [
   "hsl",
   "sticker-kinds",
   "stickers",
+  "fonts",
 ];
 
 for (const name of MODULES) {

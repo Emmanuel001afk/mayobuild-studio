@@ -106,13 +106,98 @@ function applyHslPixel(r, g, b, set) {
     b: Math.max(0, Math.min(255, out.b))
   };
 }
+function activeBands(set) {
+  const out = [];
+  for (const band of HSL_BANDS) {
+    const adj = set[band.id];
+    if (!adj) continue;
+    const h = adj.h ?? 0;
+    const s = adj.s ?? 0;
+    const l = adj.l ?? 0;
+    if (h === 0 && s === 0 && l === 0) continue;
+    out.push({
+      center: band.center,
+      hue: h / 100 * 30,
+      // ±100 → ±30°, so a band cannot swallow its neighbour
+      sat: s / 100,
+      lum: l / 100 * 0.35
+      // ±100 → ±0.35 luminance
+    });
+  }
+  return out;
+}
 function applyHsl(d, set) {
-  if (!hslActive(set)) return;
+  const bands = activeBands(set);
+  if (bands.length === 0) return;
+  const nb = bands.length;
+  const centers = new Float32Array(nb);
+  const hues = new Float32Array(nb);
+  const sats = new Float32Array(nb);
+  const lums = new Float32Array(nb);
+  for (let b = 0; b < nb; b++) {
+    centers[b] = bands[b].center;
+    hues[b] = bands[b].hue;
+    sats[b] = bands[b].sat;
+    lums[b] = bands[b].lum;
+  }
   for (let i = 0; i < d.length; i += 4) {
-    const out = applyHslPixel(d[i], d[i + 1], d[i + 2], set);
-    d[i] = out.r;
-    d[i + 1] = out.g;
-    d[i + 2] = out.b;
+    const r = d[i];
+    const g = d[i + 1];
+    const b2 = d[i + 2];
+    const rn = r / 255;
+    const gn = g / 255;
+    const bn = b2 / 255;
+    const max = rn > gn ? rn > bn ? rn : bn : gn > bn ? gn : bn;
+    const min = rn < gn ? rn < bn ? rn : bn : gn < bn ? gn : bn;
+    const l = (max + min) / 2;
+    const delta = max - min;
+    if (delta < 1e-9) continue;
+    const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+    if (s < 0.02) continue;
+    let h;
+    if (max === rn) h = ((gn - bn) / delta + (gn < bn ? 6 : 0)) * 60;
+    else if (max === gn) h = ((bn - rn) / delta + 2) * 60;
+    else h = ((rn - gn) / delta + 4) * 60;
+    let dH = 0;
+    let sMul = 0;
+    let dL = 0;
+    let total = 0;
+    for (let bi = 0; bi < nb; bi++) {
+      let dd = h - centers[bi];
+      if (dd < 0) dd = -dd;
+      if (dd > 180) dd = 360 - dd;
+      if (dd >= 30) continue;
+      const w = 1 - dd / 30;
+      dH += hues[bi] * w;
+      sMul += sats[bi] * w;
+      dL += lums[bi] * w;
+      total += w;
+    }
+    if (total === 0) continue;
+    const sOut = s * (1 + sMul);
+    const lOut = l + dL;
+    const ss = sOut < 0 ? 0 : sOut > 1 ? 1 : sOut;
+    const ll = lOut < 0 ? 0 : lOut > 1 ? 1 : lOut;
+    const hh = ((h + dH) % 360 + 360) % 360 / 360;
+    if (ss <= 0) {
+      const v = ll * 255;
+      d[i] = v;
+      d[i + 1] = v;
+      d[i + 2] = v;
+      continue;
+    }
+    const q = ll < 0.5 ? ll * (1 + ss) : ll + ss - ll * ss;
+    const p = 2 * ll - q;
+    let t = hh + 1 / 3;
+    if (t < 0) t += 1;
+    else if (t > 1) t -= 1;
+    d[i] = (t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p) * 255;
+    t = hh;
+    d[i + 1] = (t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p) * 255;
+    t = hh - 1 / 3;
+    if (t < 0) t += 1;
+    else if (t > 1) t -= 1;
+    d[i + 2] = (t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p) * 255;
   }
 }
 export {
