@@ -352,6 +352,14 @@ current stack, which uses only the platform's own decoders).
 - The ducking curve is sampled at 60 Hz like the rest of the mix, which is
   finer than any audible fade but is not sample-accurate. A 250 ms ramp is
   smooth; a 5 ms one would not be.
+- The per-pixel colour grade is still CPU JavaScript. It is 3–12× faster than it
+  was (Stage 3g), but a stack of HSL + vignette + sharpen still costs ~37 ms for
+  a 720p frame on this machine, which is over a 30 fps budget before drawing. A
+  WebGL shader is the real answer and is not written.
+- Interaction latency has not been measured on real hardware. The numbers in
+  Stage 3g come from Node and happy-dom, which have no rasterisation and no real
+  layout, so they are useful for finding and proving hot paths, not for
+  predicting a device.
 - The stock set is twelve generated assets, not a provider catalogue. It is
   deliberately small because it must work with no network; a real stock
   provider would be a licence and a download, not a code change.
@@ -532,6 +540,62 @@ MediaRecorder proxy has been built, and no export has been encoded. The bench
 checks container parsing and policy against real files; decoding remains the
 browser's job and remains unverified here.
 
+### Fonts, and making the preview actually play (Stage 3g)
+
+**The font list was a dropdown of ten names you could not see.** A `<select>` can
+list a font but cannot *show* it, which is the only thing that matters when
+choosing a face — "Condensed" means nothing until you see the letters. The
+picker now renders every row in its own family, so the list is the preview.
+
+The catalogue in `src/mayocut/fonts.ts` is 21 stacks, each ending in a generic
+family so text is never rendered as a surprise serif. They are deliberately not
+web fonts: downloading a face on first use would fail offline, flash the
+fallback, and make an export differ from the preview. Every entry names a real
+font on at least one platform and degrades to something legible on the rest.
+
+**A bug fell out of this.** `fontCss()` only searched the ten built-in stacks, so
+choosing an *imported* font silently rendered the default family on the canvas
+while the label said otherwise. The canvas now resolves through the project's
+imported fonts, and the audit pins it: resolving an imported family must return
+that family, not the default stack.
+
+**And then the measurement changed the priority.** `scripts/perf-bench.mjs` times
+the work a single edit event does — `JSON.stringify` for undo, the patch,
+`commitState`, an autosave schedule — over projects of 3, 12 and 40 clips. It
+came out at 0.1–0.6 ms, i.e. **not the problem**, which killed the optimisation I
+had assumed was needed. What the bench found instead was the per-frame grade:
+
+| pass, 1280×720 | before | after |
+| --- | --- | --- |
+| HSL, 1 band | 279 ms | 20 ms |
+| HSL, 4 bands | 459 ms | 49 ms |
+| vignette | 70 ms | 8 ms |
+| sharpen | 20 ms | 15 ms |
+| full stack | 115 ms | 37 ms |
+
+At 279 ms per frame the HSL panel — which I shipped in the previous stage — was
+a preview that could not play. The fixes are all "stop recomputing what is
+constant": band deltas hoisted out of the pixel loop, the per-pixel object
+allocation removed, the vignette's `Math.hypot` replaced by a separable distance
+and a lookup table, the sharpen's buffer reused across frames, and the second
+weight loop folded into the first.
+
+**Guards, because a fast wrong answer is worse than a slow right one:**
+
+- The audit compares `applyHsl` against a plain reference implementation written
+  straight from the maths and requires **≤1/255** difference on one-, four- and
+  eight-band sets. The optimised code reproduces the old output exactly.
+- The vignette and full grade were diffed against the previous build the same
+  way: max 1/255.
+- A timing assertion fails if HSL regresses past 120 ms for a 720p frame. Putting
+  the old implementation back turns it red at 410 ms, so this guard is real.
+
+Honest limits: these are Node on this machine, not a phone, and there is no
+rasterisation. The remaining "everything at once" cost of ~37 ms is per-pixel JS
+arithmetic — the real fix is a WebGL shader, which is not written yet and is
+therefore not claimed. On a low tier device the preview buffer is 960px rather
+than 1280px, which cuts all of these by roughly 44%.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert
@@ -558,13 +622,15 @@ Green builds are not proof the app works, so the editor is verified three ways
 ```bash
 npx tsc --noEmit -p tsconfig.json     # types
 npx eslint src/mayocut                # lint (0 errors)
-node .diag/audit.mjs                  # 273 pure-logic assertions
+node .diag/audit.mjs                  # 283 pure-logic assertions
 
 npm run build:shell
 node scripts/smoke-shell.mjs /        # bundle boots + renders the landing page
 node scripts/smoke-shell.mjs /mayocut # …and the MayoCut home
 node scripts/smoke-editor.mjs         # the EDITOR mounts with a seeded project
 node scripts/fixture-bench.mjs        # real encoded clips: container + proxy policy
+node scripts/perf-bench.mjs           # interaction + per-frame grade cost
+node scripts/perf-editor.mjs          # interaction latency in the real bundle
 ```
 
 `audit.mjs` covers the maths that is easy to get quietly wrong — and, since

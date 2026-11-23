@@ -3,6 +3,7 @@ import type { AudioFxId } from "./audio-fx";
 import type { CurveSet } from "./curves";
 import type { HslSet } from "./hsl";
 import type { StickerKind } from "./sticker-kinds";
+import { FONT_CATALOGUE, resolveFontCss } from "./fonts";
 // Everything lives on the user's device (IndexedDB). No database, no backend.
 
 export type MediaKind = "video" | "image" | "audio";
@@ -406,24 +407,16 @@ export const TEXT_ANIM_FAMILY: Record<TextAnim, TextAnimFamily> = {
   "tracking-in": "kinetic",
 };
 
-/** Text fonts — built from font stacks present on Android, iOS and desktop,
- *  so exports look the same on every device (no font downloads needed). */
-export const FONTS: { id: string; name: string; css: string }[] = [
-  { id: "system", name: "Modern (default)", css: '"Inter", "Segoe UI", system-ui, sans-serif' },
-  { id: "serif", name: "Classic serif", css: 'Georgia, "Times New Roman", serif' },
-  { id: "condensed", name: "Condensed", css: '"Arial Narrow", "Roboto Condensed", sans-serif' },
-  { id: "slab", name: "Slab", css: 'Rockwell, "Roboto Slab", "Courier New", serif' },
-  { id: "impact", name: "Impact (loud)", css: 'Impact, "Arial Black", sans-serif' },
-  { id: "mono", name: "Typewriter mono", css: '"SF Mono", ui-monospace, "Roboto Mono", monospace' },
-  { id: "script", name: "Script (handwritten)", css: '"Brush Script MT", "Segoe Script", cursive' },
-  { id: "rounded", name: "Rounded (casual)", css: '"Comic Sans MS", "Comic Neue", cursive' },
-  { id: "elegant", name: "Elegant", css: '"Palatino Linotype", Palatino, "Book Antiqua", serif' },
-  {
-    id: "fancy",
-    name: "Fancy (blackletter)",
-    css: '"Old English Text MT", "UnifrakturMaguntia", serif',
-  },
-];
+/**
+ * Text fonts — re-exported from fonts.ts, which is the single source of truth.
+ *
+ * Kept as `FONTS` in this shape because the canvas, the export and the picker
+ * all read it; `fontCss` now also resolves imported families, which it did not
+ * before (an imported font rendered as the default).
+ */
+export const FONTS: { id: string; name: string; css: string }[] = FONT_CATALOGUE.map(
+  ({ id, name, css }) => ({ id, name, css }),
+);
 
 /**
  * One-tap text looks (CapCut's "text styles"). Each is a pure patch on the
@@ -676,8 +669,8 @@ export const TEXT_PRESETS: { name: string; patch: Partial<OverlayClip> }[] = [
   },
 ];
 
-export function fontCss(id?: string): string {
-  return FONTS.find((f) => f.id === id)?.css ?? FONTS[0].css;
+export function fontCss(id?: string, imported?: { id: string; family: string }[]): string {
+  return resolveFontCss(id, imported);
 }
 
 export type BlendMode =

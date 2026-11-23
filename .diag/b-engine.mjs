@@ -3948,6 +3948,173 @@ formatTimestamp_fn = function(timestamp) {
   return hours.toString().padStart(2, "0") + ":" + minutes.toString().padStart(2, "0") + ":" + seconds.toString().padStart(2, "0") + "." + milliseconds.toString().padStart(3, "0");
 };
 
+// src/mayocut/fonts.ts
+var FONT_CATALOGUE = [
+  // ---- clean / captions -----------------------------------------------------
+  {
+    id: "system",
+    name: "Modern (default)",
+    css: '"Inter", "Segoe UI", system-ui, sans-serif',
+    note: "Clean UI sans \u2014 the safe default",
+    kind: "sans"
+  },
+  {
+    id: "helvetica",
+    name: "Helvetica / Nimbus",
+    css: '"Helvetica Neue", Helvetica, "Nimbus Sans", Arial, sans-serif',
+    note: "Neutral Swiss sans, slightly tighter than Modern",
+    kind: "sans"
+  },
+  {
+    id: "grotesk",
+    name: "Grotesk",
+    css: '"Arial", "Liberation Sans", "Helvetica Neue", sans-serif',
+    note: "Plain, wide, extremely legible at small sizes",
+    kind: "sans"
+  },
+  {
+    id: "geometric",
+    name: "Geometric",
+    css: '"Futura", "Century Gothic", "Avenir Next", "Trebuchet MS", sans-serif',
+    note: "Round geometry \u2014 good for titles, weak for body",
+    kind: "sans"
+  },
+  {
+    id: "humanist",
+    name: "Humanist",
+    css: '"Optima", "Candara", "Gill Sans", "Segoe UI", sans-serif',
+    note: "Softer strokes, reads well over busy footage",
+    kind: "sans"
+  },
+  {
+    id: "book",
+    name: "Book",
+    css: '"Verdana", "DejaVu Sans", "Segoe UI", sans-serif',
+    note: "Wide and heavy \u2014 the most readable over video",
+    kind: "sans"
+  },
+  {
+    id: "condensed",
+    name: "Condensed",
+    css: '"Arial Narrow", "Roboto Condensed", "Liberation Sans Narrow", sans-serif',
+    note: "Narrow \u2014 fits long lines and stacked captions",
+    kind: "sans"
+  },
+  // ---- loud / display -------------------------------------------------------
+  {
+    id: "impact",
+    name: "Impact (loud)",
+    css: 'Impact, "Arial Black", "Haettenschweiler", sans-serif',
+    note: "Meme/poster weight; pairs with a thick stroke",
+    kind: "display"
+  },
+  {
+    id: "black",
+    name: "Black",
+    css: '"Arial Black", "Segoe UI Black", "Impact", sans-serif',
+    note: "Very heavy sans for hook text",
+    kind: "display"
+  },
+  {
+    id: "poster",
+    name: "Poster",
+    css: '"Trebuchet MS", "Tahoma", "DejaVu Sans", sans-serif',
+    note: "Friendly and slightly condensed",
+    kind: "display"
+  },
+  // ---- serif ---------------------------------------------------------------
+  {
+    id: "serif",
+    name: "Classic serif",
+    css: 'Georgia, "Times New Roman", "Liberation Serif", serif',
+    note: "Editorial serif; the default for quotes",
+    kind: "serif"
+  },
+  {
+    id: "garamond",
+    name: "Garamond",
+    css: '"EB Garamond", Garamond, "Apple Garamond", "Georgia", serif',
+    note: "Bookish and elegant \u2014 small caps look great",
+    kind: "serif"
+  },
+  {
+    id: "slab",
+    name: "Slab",
+    css: 'Rockwell, "Roboto Slab", "DejaVu Serif", serif',
+    note: "Blocky serif; strong over footage",
+    kind: "serif"
+  },
+  {
+    id: "elegant",
+    name: "Elegant",
+    css: '"Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", serif',
+    note: "Warm old-style; wedding and travel edits",
+    kind: "serif"
+  },
+  {
+    id: "didone",
+    name: "Didone",
+    css: '"Didot", "Bodoni MT", "Baskerville", "Playfair Display", serif',
+    note: "High-contrast fashion type \u2014 large sizes only",
+    kind: "serif"
+  },
+  // ---- mono / typewriter ----------------------------------------------------
+  {
+    id: "mono",
+    name: "Typewriter mono",
+    css: '"SF Mono", ui-monospace, "Roboto Mono", "DejaVu Sans Mono", monospace',
+    note: "Code/terminal feel; good for data and jokes",
+    kind: "mono"
+  },
+  {
+    id: "courier",
+    name: "Courier",
+    css: '"Courier New", Courier, "Nimbus Mono PS", monospace',
+    note: "Script/typewriter look with a thin weight",
+    kind: "mono"
+  },
+  // ---- script / casual ------------------------------------------------------
+  {
+    id: "script",
+    name: "Script (handwritten)",
+    css: '"Brush Script MT", "Segoe Script", "Bradley Hand", cursive',
+    note: "Handwritten \u2014 use sparingly and large",
+    kind: "script"
+  },
+  {
+    id: "rounded",
+    name: "Rounded (casual)",
+    css: '"Comic Sans MS", "Comic Neue", "Chalkboard SE", cursive',
+    note: "Informal and warm",
+    kind: "script"
+  },
+  {
+    id: "marker",
+    name: "Marker",
+    css: '"Marker Felt", "Comic Sans MS", "Segoe Print", cursive',
+    note: "Notebook/marker annotation style",
+    kind: "script"
+  },
+  {
+    id: "fancy",
+    name: "Fancy (blackletter)",
+    css: '"Old English Text MT", "UnifrakturMaguntia", "Cinzel Decorative", serif',
+    note: "Blackletter; decorative only, never body text",
+    kind: "display"
+  }
+];
+var BY_ID = new Map(FONT_CATALOGUE.map((f) => [f.id, f]));
+function resolveFontCss(id, imported) {
+  if (!id) return FONT_CATALOGUE[0].css;
+  const built = BY_ID.get(id);
+  if (built) return built.css;
+  const imp = imported?.find((f) => f.id === id || f.family === id);
+  if (imp?.family) {
+    return `"${imp.family}", ${FONT_CATALOGUE[0].css}`;
+  }
+  return FONT_CATALOGUE[0].css;
+}
+
 // src/mayocut/types.ts
 var DEFAULT_ADJUST = {
   brightness: 100,
@@ -3989,24 +4156,11 @@ function isDipTo(kind) {
   return null;
 }
 var DEFAULT_ANIM = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
-var FONTS = [
-  { id: "system", name: "Modern (default)", css: '"Inter", "Segoe UI", system-ui, sans-serif' },
-  { id: "serif", name: "Classic serif", css: 'Georgia, "Times New Roman", serif' },
-  { id: "condensed", name: "Condensed", css: '"Arial Narrow", "Roboto Condensed", sans-serif' },
-  { id: "slab", name: "Slab", css: 'Rockwell, "Roboto Slab", "Courier New", serif' },
-  { id: "impact", name: "Impact (loud)", css: 'Impact, "Arial Black", sans-serif' },
-  { id: "mono", name: "Typewriter mono", css: '"SF Mono", ui-monospace, "Roboto Mono", monospace' },
-  { id: "script", name: "Script (handwritten)", css: '"Brush Script MT", "Segoe Script", cursive' },
-  { id: "rounded", name: "Rounded (casual)", css: '"Comic Sans MS", "Comic Neue", cursive' },
-  { id: "elegant", name: "Elegant", css: '"Palatino Linotype", Palatino, "Book Antiqua", serif' },
-  {
-    id: "fancy",
-    name: "Fancy (blackletter)",
-    css: '"Old English Text MT", "UnifrakturMaguntia", serif'
-  }
-];
-function fontCss(id) {
-  return FONTS.find((f) => f.id === id)?.css ?? FONTS[0].css;
+var FONTS = FONT_CATALOGUE.map(
+  ({ id, name, css }) => ({ id, name, css })
+);
+function fontCss(id, imported) {
+  return resolveFontCss(id, imported);
 }
 var ASPECTS = {
   "9:16": { w: 1080, h: 1920, label: "9:16 \xB7 Reels / Shorts", hint: "TikTok, Reels, Shorts" },
@@ -4696,94 +4850,98 @@ function hslActive(set) {
     (a) => a && ((a.h ?? 0) !== 0 || (a.s ?? 0) !== 0 || (a.l ?? 0) !== 0)
   );
 }
-function bandWeight(hueDeg, band) {
-  const h = (hueDeg % 360 + 360) % 360;
-  const centre = HSL_CENTERS[band];
-  let d = Math.abs(h - centre);
-  if (d > 180) d = 360 - d;
-  const w = 1 - d / 30;
-  return w > 0 ? w : 0;
-}
-function rgbToHsl(r, g, b) {
-  const rn = r / 255;
-  const gn = g / 255;
-  const bn = b / 255;
-  const max = Math.max(rn, gn, bn);
-  const min = Math.min(rn, gn, bn);
-  const l = (max + min) / 2;
-  const d = max - min;
-  if (d < 1e-9) return { h: 0, s: 0, l };
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h;
-  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) * 60;
-  else if (max === gn) h = ((bn - rn) / d + 2) * 60;
-  else h = ((rn - gn) / d + 4) * 60;
-  return { h, s, l };
-}
-function hue2rgb(p, q, t) {
-  let tt = t;
-  if (tt < 0) tt += 1;
-  if (tt > 1) tt -= 1;
-  if (tt < 1 / 6) return p + (q - p) * 6 * tt;
-  if (tt < 1 / 2) return q;
-  if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
-  return p;
-}
-function hslToRgb(h, s, l) {
-  const hh = (h % 360 + 360) % 360 / 360;
-  if (s <= 0) {
-    const v = l * 255;
-    return { r: v, g: v, b: v };
-  }
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-  return {
-    r: hue2rgb(p, q, hh + 1 / 3) * 255,
-    g: hue2rgb(p, q, hh) * 255,
-    b: hue2rgb(p, q, hh - 1 / 3) * 255
-  };
-}
-function applyHslPixel(r, g, b, set) {
-  if (!hslActive(set)) return { r, g, b };
-  const { h, s, l } = rgbToHsl(r, g, b);
-  if (s < 0.02) return { r, g, b };
-  let dH = 0;
-  let sMul = 0;
-  let dL = 0;
-  let total = 0;
+function activeBands(set) {
+  const out = [];
   for (const band of HSL_BANDS) {
     const adj = set[band.id];
     if (!adj) continue;
-    const ah = adj.h ?? 0;
-    const as = adj.s ?? 0;
-    const al = adj.l ?? 0;
-    if (ah === 0 && as === 0 && al === 0) continue;
-    const w = bandWeight(h, band.id);
-    if (w <= 0) continue;
-    dH += ah / 100 * 30 * w;
-    sMul += as / 100 * w;
-    dL += al / 100 * 0.35 * w;
-    total += w;
+    const h = adj.h ?? 0;
+    const s = adj.s ?? 0;
+    const l = adj.l ?? 0;
+    if (h === 0 && s === 0 && l === 0) continue;
+    out.push({
+      center: band.center,
+      hue: h / 100 * 30,
+      // ±100 → ±30°, so a band cannot swallow its neighbour
+      sat: s / 100,
+      lum: l / 100 * 0.35
+      // ±100 → ±0.35 luminance
+    });
   }
-  if (total === 0) return { r, g, b };
-  const out = hslToRgb(
-    h + dH,
-    Math.max(0, Math.min(1, s * (1 + sMul))),
-    Math.max(0, Math.min(1, l + dL))
-  );
-  return {
-    r: Math.max(0, Math.min(255, out.r)),
-    g: Math.max(0, Math.min(255, out.g)),
-    b: Math.max(0, Math.min(255, out.b))
-  };
+  return out;
 }
 function applyHsl(d, set) {
-  if (!hslActive(set)) return;
+  const bands = activeBands(set);
+  if (bands.length === 0) return;
+  const nb = bands.length;
+  const centers = new Float32Array(nb);
+  const hues = new Float32Array(nb);
+  const sats = new Float32Array(nb);
+  const lums = new Float32Array(nb);
+  for (let b = 0; b < nb; b++) {
+    centers[b] = bands[b].center;
+    hues[b] = bands[b].hue;
+    sats[b] = bands[b].sat;
+    lums[b] = bands[b].lum;
+  }
   for (let i = 0; i < d.length; i += 4) {
-    const out = applyHslPixel(d[i], d[i + 1], d[i + 2], set);
-    d[i] = out.r;
-    d[i + 1] = out.g;
-    d[i + 2] = out.b;
+    const r = d[i];
+    const g = d[i + 1];
+    const b2 = d[i + 2];
+    const rn = r / 255;
+    const gn = g / 255;
+    const bn = b2 / 255;
+    const max = rn > gn ? rn > bn ? rn : bn : gn > bn ? gn : bn;
+    const min = rn < gn ? rn < bn ? rn : bn : gn < bn ? gn : bn;
+    const l = (max + min) / 2;
+    const delta = max - min;
+    if (delta < 1e-9) continue;
+    const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+    if (s < 0.02) continue;
+    let h;
+    if (max === rn) h = ((gn - bn) / delta + (gn < bn ? 6 : 0)) * 60;
+    else if (max === gn) h = ((bn - rn) / delta + 2) * 60;
+    else h = ((rn - gn) / delta + 4) * 60;
+    let dH = 0;
+    let sMul = 0;
+    let dL = 0;
+    let total = 0;
+    for (let bi = 0; bi < nb; bi++) {
+      let dd = h - centers[bi];
+      if (dd < 0) dd = -dd;
+      if (dd > 180) dd = 360 - dd;
+      if (dd >= 30) continue;
+      const w = 1 - dd / 30;
+      dH += hues[bi] * w;
+      sMul += sats[bi] * w;
+      dL += lums[bi] * w;
+      total += w;
+    }
+    if (total === 0) continue;
+    const sOut = s * (1 + sMul);
+    const lOut = l + dL;
+    const ss = sOut < 0 ? 0 : sOut > 1 ? 1 : sOut;
+    const ll = lOut < 0 ? 0 : lOut > 1 ? 1 : lOut;
+    const hh = ((h + dH) % 360 + 360) % 360 / 360;
+    if (ss <= 0) {
+      const v = ll * 255;
+      d[i] = v;
+      d[i + 1] = v;
+      d[i + 2] = v;
+      continue;
+    }
+    const q = ll < 0.5 ? ll * (1 + ss) : ll + ss - ll * ss;
+    const p = 2 * ll - q;
+    let t = hh + 1 / 3;
+    if (t < 0) t += 1;
+    else if (t > 1) t -= 1;
+    d[i] = (t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p) * 255;
+    t = hh;
+    d[i + 1] = (t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p) * 255;
+    t = hh - 1 / 3;
+    if (t < 0) t += 1;
+    else if (t > 1) t -= 1;
+    d[i + 2] = (t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p) * 255;
   }
 }
 
@@ -5205,6 +5363,8 @@ var Engine = class {
   keyColorCache = /* @__PURE__ */ new Map();
   lutCache = /* @__PURE__ */ new Map();
   lutOff = null;
+  /** scratch copy for the sharpen pass, reused across frames */
+  sharpenBuf = null;
   vhsPattern = null;
   impulse = null;
   /**
@@ -7098,18 +7258,26 @@ var Engine = class {
     }
     if (sharp > 0) {
       const stride = W * 4;
-      const centre = new Uint8ClampedArray(d.length);
+      if (!this.sharpenBuf || this.sharpenBuf.length !== d.length) {
+        this.sharpenBuf = new Uint8ClampedArray(d.length);
+      }
+      const centre = this.sharpenBuf;
       centre.set(d);
       const amt = 0.85 * sharp;
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const i = y * stride + x * 4;
-          if (x === 0 || y === 0 || x === W - 1 || y === H - 1) continue;
-          for (let ch = 0; ch < 3; ch++) {
-            const v = centre[i + ch];
-            const blur = (centre[i + ch - 4] + centre[i + ch + 4] + centre[i + ch - stride] + centre[i + ch + stride]) / 4;
-            d[i + ch] = v + (v - blur) * amt;
-          }
+      for (let y = 1; y < H - 1; y++) {
+        let i = y * stride + 4;
+        for (let x = 1; x < W - 1; x++, i += 4) {
+          const up = i - stride;
+          const dn = i + stride;
+          const vR = centre[i];
+          const vG = centre[i + 1];
+          const vB = centre[i + 2];
+          const bR = (centre[i - 4] + centre[i + 4] + centre[up] + centre[dn]) * 0.25;
+          const bG = (centre[i - 3] + centre[i + 5] + centre[up + 1] + centre[dn + 1]) * 0.25;
+          const bB = (centre[i - 2] + centre[i + 6] + centre[up + 2] + centre[dn + 2]) * 0.25;
+          d[i] = vR + (vR - bR) * amt;
+          d[i + 1] = vG + (vG - bG) * amt;
+          d[i + 2] = vB + (vB - bB) * amt;
         }
       }
     }
@@ -7117,14 +7285,22 @@ var Engine = class {
       const cx = W / 2;
       const cy = H / 2;
       const maxD = Math.hypot(cx, cy);
+      const RAMP = new Float32Array(1025);
+      for (let k = 0; k <= 1024; k++) {
+        const r = k / 1024 * 1.6;
+        RAMP[k] = r < 0.55 ? 1 : 1 - vig * 0.85 * Math.min(1, (r - 0.55) / 0.45) ** 1.4;
+      }
+      const scale = 1024 / 1.6;
       for (let y = 0; y < H; y++) {
         const dy = (y - cy) / maxD;
+        const dy2 = dy * dy;
+        const row = y * W;
         for (let x = 0; x < W; x++) {
           const dx = (x - cx) / maxD;
-          const r = Math.hypot(dx, dy);
+          const r = Math.sqrt(dx * dx + dy2);
           if (r < 0.55) continue;
-          const k = 1 - vig * 0.85 * Math.min(1, (r - 0.55) / 0.45) ** 1.4;
-          const i = (y * W + x) * 4;
+          const k = RAMP[Math.min(1024, r * scale | 0)];
+          const i = (row + x) * 4;
           d[i] *= k;
           d[i + 1] *= k;
           d[i + 2] *= k;
@@ -7262,7 +7438,7 @@ var Engine = class {
       riseAlpha = clamp012(localT / 0.25);
     }
     if (anim2 === "wave") wavePhase = localT * 3.4;
-    ctx.font = `${italic}${weight} ${Math.round(px)}px ${fontCss(c.font)}`;
+    ctx.font = `${italic}${weight} ${Math.round(px)}px ${fontCss(c.font, this.project.fonts)}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const tracking = (c.tracking ?? 0) * trackMul * px / 100;

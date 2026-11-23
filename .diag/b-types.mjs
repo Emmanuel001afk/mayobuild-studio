@@ -1,3 +1,170 @@
+// src/mayocut/fonts.ts
+var FONT_CATALOGUE = [
+  // ---- clean / captions -----------------------------------------------------
+  {
+    id: "system",
+    name: "Modern (default)",
+    css: '"Inter", "Segoe UI", system-ui, sans-serif',
+    note: "Clean UI sans \u2014 the safe default",
+    kind: "sans"
+  },
+  {
+    id: "helvetica",
+    name: "Helvetica / Nimbus",
+    css: '"Helvetica Neue", Helvetica, "Nimbus Sans", Arial, sans-serif',
+    note: "Neutral Swiss sans, slightly tighter than Modern",
+    kind: "sans"
+  },
+  {
+    id: "grotesk",
+    name: "Grotesk",
+    css: '"Arial", "Liberation Sans", "Helvetica Neue", sans-serif',
+    note: "Plain, wide, extremely legible at small sizes",
+    kind: "sans"
+  },
+  {
+    id: "geometric",
+    name: "Geometric",
+    css: '"Futura", "Century Gothic", "Avenir Next", "Trebuchet MS", sans-serif',
+    note: "Round geometry \u2014 good for titles, weak for body",
+    kind: "sans"
+  },
+  {
+    id: "humanist",
+    name: "Humanist",
+    css: '"Optima", "Candara", "Gill Sans", "Segoe UI", sans-serif',
+    note: "Softer strokes, reads well over busy footage",
+    kind: "sans"
+  },
+  {
+    id: "book",
+    name: "Book",
+    css: '"Verdana", "DejaVu Sans", "Segoe UI", sans-serif',
+    note: "Wide and heavy \u2014 the most readable over video",
+    kind: "sans"
+  },
+  {
+    id: "condensed",
+    name: "Condensed",
+    css: '"Arial Narrow", "Roboto Condensed", "Liberation Sans Narrow", sans-serif',
+    note: "Narrow \u2014 fits long lines and stacked captions",
+    kind: "sans"
+  },
+  // ---- loud / display -------------------------------------------------------
+  {
+    id: "impact",
+    name: "Impact (loud)",
+    css: 'Impact, "Arial Black", "Haettenschweiler", sans-serif',
+    note: "Meme/poster weight; pairs with a thick stroke",
+    kind: "display"
+  },
+  {
+    id: "black",
+    name: "Black",
+    css: '"Arial Black", "Segoe UI Black", "Impact", sans-serif',
+    note: "Very heavy sans for hook text",
+    kind: "display"
+  },
+  {
+    id: "poster",
+    name: "Poster",
+    css: '"Trebuchet MS", "Tahoma", "DejaVu Sans", sans-serif',
+    note: "Friendly and slightly condensed",
+    kind: "display"
+  },
+  // ---- serif ---------------------------------------------------------------
+  {
+    id: "serif",
+    name: "Classic serif",
+    css: 'Georgia, "Times New Roman", "Liberation Serif", serif',
+    note: "Editorial serif; the default for quotes",
+    kind: "serif"
+  },
+  {
+    id: "garamond",
+    name: "Garamond",
+    css: '"EB Garamond", Garamond, "Apple Garamond", "Georgia", serif',
+    note: "Bookish and elegant \u2014 small caps look great",
+    kind: "serif"
+  },
+  {
+    id: "slab",
+    name: "Slab",
+    css: 'Rockwell, "Roboto Slab", "DejaVu Serif", serif',
+    note: "Blocky serif; strong over footage",
+    kind: "serif"
+  },
+  {
+    id: "elegant",
+    name: "Elegant",
+    css: '"Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", serif',
+    note: "Warm old-style; wedding and travel edits",
+    kind: "serif"
+  },
+  {
+    id: "didone",
+    name: "Didone",
+    css: '"Didot", "Bodoni MT", "Baskerville", "Playfair Display", serif',
+    note: "High-contrast fashion type \u2014 large sizes only",
+    kind: "serif"
+  },
+  // ---- mono / typewriter ----------------------------------------------------
+  {
+    id: "mono",
+    name: "Typewriter mono",
+    css: '"SF Mono", ui-monospace, "Roboto Mono", "DejaVu Sans Mono", monospace',
+    note: "Code/terminal feel; good for data and jokes",
+    kind: "mono"
+  },
+  {
+    id: "courier",
+    name: "Courier",
+    css: '"Courier New", Courier, "Nimbus Mono PS", monospace',
+    note: "Script/typewriter look with a thin weight",
+    kind: "mono"
+  },
+  // ---- script / casual ------------------------------------------------------
+  {
+    id: "script",
+    name: "Script (handwritten)",
+    css: '"Brush Script MT", "Segoe Script", "Bradley Hand", cursive',
+    note: "Handwritten \u2014 use sparingly and large",
+    kind: "script"
+  },
+  {
+    id: "rounded",
+    name: "Rounded (casual)",
+    css: '"Comic Sans MS", "Comic Neue", "Chalkboard SE", cursive',
+    note: "Informal and warm",
+    kind: "script"
+  },
+  {
+    id: "marker",
+    name: "Marker",
+    css: '"Marker Felt", "Comic Sans MS", "Segoe Print", cursive',
+    note: "Notebook/marker annotation style",
+    kind: "script"
+  },
+  {
+    id: "fancy",
+    name: "Fancy (blackletter)",
+    css: '"Old English Text MT", "UnifrakturMaguntia", "Cinzel Decorative", serif',
+    note: "Blackletter; decorative only, never body text",
+    kind: "display"
+  }
+];
+var BY_ID = new Map(FONT_CATALOGUE.map((f) => [f.id, f]));
+function resolveFontCss(id, imported) {
+  if (!id) return FONT_CATALOGUE[0].css;
+  const built = BY_ID.get(id);
+  if (built) return built.css;
+  const imp = imported?.find((f) => f.id === id || f.family === id);
+  if (imp?.family) {
+    return `"${imp.family}", ${FONT_CATALOGUE[0].css}`;
+  }
+  return FONT_CATALOGUE[0].css;
+}
+
 // src/mayocut/types.ts
 var DEFAULT_ADJUST = {
   brightness: 100,
@@ -185,22 +352,9 @@ var TEXT_ANIM_FAMILY = {
   karaoke: "kinetic",
   "tracking-in": "kinetic"
 };
-var FONTS = [
-  { id: "system", name: "Modern (default)", css: '"Inter", "Segoe UI", system-ui, sans-serif' },
-  { id: "serif", name: "Classic serif", css: 'Georgia, "Times New Roman", serif' },
-  { id: "condensed", name: "Condensed", css: '"Arial Narrow", "Roboto Condensed", sans-serif' },
-  { id: "slab", name: "Slab", css: 'Rockwell, "Roboto Slab", "Courier New", serif' },
-  { id: "impact", name: "Impact (loud)", css: 'Impact, "Arial Black", sans-serif' },
-  { id: "mono", name: "Typewriter mono", css: '"SF Mono", ui-monospace, "Roboto Mono", monospace' },
-  { id: "script", name: "Script (handwritten)", css: '"Brush Script MT", "Segoe Script", cursive' },
-  { id: "rounded", name: "Rounded (casual)", css: '"Comic Sans MS", "Comic Neue", cursive' },
-  { id: "elegant", name: "Elegant", css: '"Palatino Linotype", Palatino, "Book Antiqua", serif' },
-  {
-    id: "fancy",
-    name: "Fancy (blackletter)",
-    css: '"Old English Text MT", "UnifrakturMaguntia", serif'
-  }
-];
+var FONTS = FONT_CATALOGUE.map(
+  ({ id, name, css }) => ({ id, name, css })
+);
 var TEXT_PRESETS = [
   {
     name: "Clean white",
@@ -447,8 +601,8 @@ var TEXT_PRESETS = [
     }
   }
 ];
-function fontCss(id) {
-  return FONTS.find((f) => f.id === id)?.css ?? FONTS[0].css;
+function fontCss(id, imported) {
+  return resolveFontCss(id, imported);
 }
 var ASPECTS = {
   "9:16": { w: 1080, h: 1920, label: "9:16 \xB7 Reels / Shorts", hint: "TikTok, Reels, Shorts" },
