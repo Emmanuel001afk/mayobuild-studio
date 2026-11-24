@@ -1,6 +1,7 @@
 // MayoCut — core data model.
 import type { AudioFxId } from "./audio-fx";
 import type { CurveSet } from "./curves";
+import type { FrameGeometry } from "./geometry";
 import type { HslSet } from "./hsl";
 import type { StickerKind } from "./sticker-kinds";
 import { FONT_CATALOGUE, resolveFontCss } from "./fonts";
@@ -389,6 +390,13 @@ export interface MainClip {
   keyframes?: Keyframe[];
   /** how the source fills the canvas: cover (crop), contain (letterbox), blur-fill */
   fit?: FrameFit;
+  /**
+   * Crop / transform: anchor, crop aspect, zoom and rotation.
+   *
+   * Absent means "behave exactly as before" — centred cover fit — so every
+   * project saved before this existed keeps rendering identically.
+   */
+  frame?: FrameGeometry;
   flipX?: boolean;
   flipY?: boolean;
   /** equaliser-style voice shaping, dB-ish -1..1 offsets */
@@ -406,7 +414,23 @@ export interface VoiceShape {
   high?: number; // -1..1 high shelf gain
 }
 
-export type OverlayKind = "text" | "image" | "video" | "audio";
+export type OverlayKind =
+  | "text"
+  | "image"
+  | "video"
+  | "audio"
+  /**
+   * Adjustment layer (CapCut's "Adjustment", Kdenlive's effect clip).
+   *
+   * Not media: a transparent band on the timeline whose grade is applied to the
+   * clips UNDER it for its duration. It is the difference between grading eight
+   * clips one by one and laying one band over the sequence — and between eight
+   * copies of a numeric grade that drift apart and one that cannot.
+   *
+   * Only `adjust` (and an optional look) are read; there is no picture of its
+   * own, so it draws nothing except its grade.
+   */
+  | "adjustment";
 export type TextPos = "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
 export type TextAnim =
   | "none"
@@ -772,6 +796,14 @@ export interface OverlayClip {
   duration: number;
   /** Source time of the left edge for trimmed audio/video overlays. */
   sourceOffset?: number;
+  /**
+   * Adjustment bands only: the grade applied to everything underneath, and an
+   * optional look. Reusing the main clip's grade type (rather than a parallel
+   * one) is deliberate — it means a band and a manually graded clip cannot
+   * diverge, and the inspector can share its controls.
+   */
+  adjust?: FilterAdjust;
+  // (an adjustment band reuses the existing `filter` field for its look)
   // text
   text?: string;
   size?: number; // px at 1080 reference height
@@ -969,6 +1001,7 @@ export function emptyTracks(): OverlayTrack[] {
     { id: "t_text", name: "Text", clips: [] },
     { id: "t_overlay", name: "Overlay", clips: [] },
     { id: "t_audio", name: "Audio", clips: [] },
+    { id: "t_adjust", name: "Adjustment", clips: [] },
   ];
 }
 

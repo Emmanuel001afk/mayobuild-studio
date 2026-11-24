@@ -4872,6 +4872,65 @@ function resolveLookId(id) {
 }
 var LOOK_BY_ID = new Map(LOOKS.map((l) => [l.id, l]));
 
+// src/mayocut/geometry.ts
+var MAX_ZOOM = 8;
+function clampGeometry(g) {
+  const ax = Number.isFinite(g?.ax) ? g.ax : 0.5;
+  const ay = Number.isFinite(g?.ay) ? g.ay : 0.5;
+  const zoom = Number.isFinite(g?.zoom) ? g.zoom : 1;
+  const rot = Number.isFinite(g?.rot) ? g.rot : 0;
+  const crop = g?.crop;
+  return {
+    ax: Math.max(0, Math.min(1, ax)),
+    ay: Math.max(0, Math.min(1, ay)),
+    crop: typeof crop === "number" && Number.isFinite(crop) && crop > 0 ? crop : null,
+    zoom: Math.max(1, Math.min(MAX_ZOOM, zoom)),
+    // wrap rather than clamp: a person spinning a dial past 180 expects to keep
+    // going, not to hit a wall
+    rot: ((rot + 180) % 360 + 360) % 360 - 180
+  };
+}
+function isDefaultGeometry(g) {
+  if (!g) return true;
+  const c = clampGeometry(g);
+  return c.ax === 0.5 && c.ay === 0.5 && c.zoom === 1 && c.rot === 0 && c.crop === null;
+}
+function coverSourceRect(sw, sh, frameW, frameH, g) {
+  const c = clampGeometry(g);
+  if (!sw || !sh || !frameW || !frameH) return { sx: 0, sy: 0, swp: sw, shp: sh };
+  const cover = Math.max(frameW / sw, frameH / sh);
+  let w = frameW / cover;
+  let h = frameH / cover;
+  if (c.crop) {
+    const windowAspect = w / h;
+    if (c.crop < windowAspect) {
+      w = h * c.crop;
+    } else if (c.crop > windowAspect) {
+      h = w / c.crop;
+    }
+  }
+  w = Math.max(1, w / c.zoom);
+  h = Math.max(1, h / c.zoom);
+  w = Math.min(w, sw);
+  h = Math.min(h, sh);
+  const maxX = Math.max(0, sw - w);
+  const maxY = Math.max(0, sh - h);
+  const sx = Math.max(0, Math.min(maxX, c.ax * sw - w / 2));
+  const sy = Math.max(0, Math.min(maxY, c.ay * sh - h / 2));
+  return { sx, sy, swp: w, shp: h };
+}
+var CROP_PRESETS = [
+  { id: "free", name: "Free", aspect: null },
+  { id: "original", name: "Original", aspect: 0 },
+  { id: "1:1", name: "1:1", aspect: 1 },
+  { id: "4:5", name: "4:5", aspect: 4 / 5 },
+  { id: "9:16", name: "9:16", aspect: 9 / 16 },
+  { id: "3:4", name: "3:4", aspect: 3 / 4 },
+  { id: "16:9", name: "16:9", aspect: 16 / 9 },
+  { id: "4:3", name: "4:3", aspect: 4 / 3 },
+  { id: "21:9", name: "21:9", aspect: 21 / 9 }
+];
+
 // src/mayocut/export-plan.ts
 function pixelRatio(a, b) {
   const pa = Math.max(1, a.width * a.height);
@@ -5490,6 +5549,179 @@ function sampleTimeline(project, time) {
   return { time, main, overlays };
 }
 
+// src/mayocut/ripple.ts
+function rippleOverlays(tracks, at, delta) {
+  if (!Number.isFinite(delta) || delta === 0) return { moved: 0, tracks };
+  let moved = 0;
+  const next = tracks.map((tr) => {
+    let changed = false;
+    const clips = tr.clips.map((c) => {
+      if (c.start < at - 1e-6) return c;
+      changed = true;
+      moved++;
+      return { ...c, start: Math.max(0, c.start + delta) };
+    });
+    return changed ? { ...tr, clips } : tr;
+  });
+  return { moved, tracks: next };
+}
+var MIN_KEEP = 0.05;
+function cutOverlays(tracks, span) {
+  let removed = 0;
+  let trimmed = 0;
+  const len = span.end - span.start;
+  if (!(len > 0)) return { removed: 0, trimmed: 0, tracks };
+  const next = tracks.map((tr) => {
+    const clips = [];
+    for (const c of tr.clips) {
+      const cEnd = c.start + c.duration;
+      if (cEnd <= span.start + 1e-6 || c.start >= span.end - 1e-6) {
+        clips.push(c);
+        continue;
+      }
+      const head = Math.max(0, span.start - c.start);
+      const tail = Math.max(0, cEnd - span.end);
+      if (head > MIN_KEEP && tail > MIN_KEEP) {
+        clips.push({ ...c, id: `${c.id}_a`, duration: head });
+        clips.push({
+          ...c,
+          id: `${c.id}_b`,
+          start: span.start,
+          duration: tail,
+          // the tail keeps its content timing relative to the source
+          sourceOffset: (c.sourceOffset ?? 0) + (span.end - c.start)
+        });
+        trimmed++;
+        continue;
+      }
+      if (head > MIN_KEEP) {
+        clips.push({ ...c, duration: head });
+        trimmed++;
+        continue;
+      }
+      if (tail > MIN_KEEP) {
+        clips.push({
+          ...c,
+          start: span.start,
+          duration: tail,
+          sourceOffset: (c.sourceOffset ?? 0) + (span.end - c.start)
+        });
+        trimmed++;
+        continue;
+      }
+      removed++;
+    }
+    return { ...tr, clips };
+  });
+  return { removed, trimmed, tracks: next };
+}
+function removeMainClip(project, clipId, mode = "ripple", startOf, durationOf) {
+  const i = project.main.findIndex((c) => c.id === clipId);
+  if (i === -1) return null;
+  const start = startOf(i);
+  const dur = durationOf(i);
+  const span = { start, end: start + dur };
+  const main = project.main.filter((_, k) => k !== i);
+  if (mode === "ripple") {
+    const r2 = rippleOverlays(project.tracks, span.end, -dur);
+    return {
+      main,
+      tracks: r2.tracks,
+      shifted: dur,
+      overlaysRemoved: 0,
+      overlaysTrimmed: 0,
+      overlaysMoved: r2.moved,
+      span
+    };
+  }
+  const r = cutOverlays(project.tracks, span);
+  return {
+    main,
+    tracks: r.tracks,
+    shifted: 0,
+    overlaysRemoved: r.removed,
+    overlaysTrimmed: r.trimmed,
+    overlaysMoved: 0,
+    span
+  };
+}
+
+// src/mayocut/scopes.ts
+function lumaOf(r, g, b) {
+  return r * 77 + g * 150 + b * 29 >> 8;
+}
+function buildScopes(data, opts = {}) {
+  const step = Math.max(1, Math.floor(opts.step ?? 2));
+  const width = opts.width ?? 0;
+  const colW = Math.max(1, Math.min(256, Math.round(width / Math.max(1, step)) || 256));
+  const hist = {
+    r: new Uint32Array(256),
+    g: new Uint32Array(256),
+    b: new Uint32Array(256),
+    y: new Uint32Array(256)
+  };
+  const WAVE_H = 256;
+  const wave = new Uint32Array(colW * WAVE_H);
+  const VS = 64;
+  const vec = new Uint32Array(VS * VS);
+  let total = 0;
+  let clipped = 0;
+  let crushed = 0;
+  let satSum = 0;
+  let atLimit = 0;
+  const px = Math.max(1, width);
+  for (let i = 0; i < data.length; i += 4 * step) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    if (data.length % 4 !== 0 && i + 2 >= data.length) break;
+    hist.r[r]++;
+    hist.g[g]++;
+    hist.b[b]++;
+    const y = lumaOf(r, g, b);
+    hist.y[y]++;
+    total++;
+    if (r === 255 || g === 255 || b === 255) clipped++;
+    if (r === 0 && g === 0 && b === 0) crushed++;
+    const pixelIndex = i / 4;
+    const x = px > 0 ? pixelIndex % px : 0;
+    const col = Math.min(colW - 1, Math.floor(x / px * colW));
+    wave[col * WAVE_H + y]++;
+    const cb = -0.168736 * r - 0.331264 * g + 0.5 * b;
+    const cr = 0.5 * r - 0.418688 * g - 0.081312 * b;
+    const vx = Math.max(0, Math.min(63, Math.round(32 + cb / 4)));
+    const vy = Math.max(0, Math.min(63, Math.round(32 + cr / 4)));
+    vec[vy * VS + vx]++;
+    const maxc = Math.max(r, g, b);
+    const minc = Math.min(r, g, b);
+    const sat = maxc === 0 ? 0 : (maxc - minc) / maxc;
+    satSum += sat;
+    if (sat > 0.92) atLimit++;
+  }
+  let peak = 1;
+  for (let i = 0; i < 256; i++) {
+    if (hist.r[i] > peak) peak = hist.r[i];
+    if (hist.g[i] > peak) peak = hist.g[i];
+    if (hist.b[i] > peak) peak = hist.b[i];
+    if (hist.y[i] > peak) peak = hist.y[i];
+  }
+  let wavePeak = 1;
+  for (let i = 0; i < wave.length; i++) if (wave[i] > wavePeak) wavePeak = wave[i];
+  let vecPeak = 1;
+  for (let i = 0; i < vec.length; i++) if (vec[i] > vecPeak) vecPeak = vec[i];
+  return {
+    histogram: { ...hist, peak, total, clipped, crushed },
+    waveform: { w: colW, data: wave, peak: wavePeak },
+    vectorscope: {
+      n: VS,
+      data: vec,
+      peak: vecPeak,
+      meanSaturation: total > 0 ? satSum / total : 0,
+      atLimit
+    }
+  };
+}
+
 // src/mayocut/engine.ts
 var import_omggif = __toESM(require_omggif(), 1);
 function decodeGifFrames(blob) {
@@ -5787,6 +6019,10 @@ async function supportsAacEncoder(sampleRate, numberOfChannels, bitrate) {
     return false;
   }
 }
+function adjustmentScale(previewMaxSide, W, H) {
+  if (previewMaxSide <= 0) return 1;
+  return Math.min(1, 1280 / Math.max(1, W, H));
+}
 var Engine = class {
   project;
   media = /* @__PURE__ */ new Map();
@@ -5821,6 +6057,8 @@ var Engine = class {
   lutOff = null;
   /** scratch copy for the sharpen pass, reused across frames */
   sharpenBuf = null;
+  /** scratch buffer for adjustment layers (readback + put-back) */
+  adjustBuf = null;
   vhsPattern = null;
   impulse = null;
   /**
@@ -7137,6 +7375,12 @@ var Engine = class {
         this.drawMainItem(ctx, spans[layer.index], layer.alpha, W, H, t);
       }
     }
+    for (const layer of comp.overlays) {
+      if (layer.clip.kind !== "adjustment") continue;
+      const tr = this.project.tracks.find((track) => track.id === layer.trackId);
+      if (tr?.hidden) continue;
+      this.paintAdjustmentBand(ctx, layer.clip, W, H, t);
+    }
     this.overlayRects.length = 0;
     for (const layer of comp.overlays) {
       const tr = this.project.tracks.find((track) => track.id === layer.trackId);
@@ -7147,6 +7391,7 @@ var Engine = class {
       const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
       const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
       const anim = animAt(c.keyframes, this.animBase(c), localT);
+      if (c.kind === "adjustment") continue;
       if (c.kind === "text")
         this.drawText(ctx, c, W, H, fadeAlpha * clamp012(anim.opacity), localT, c.duration, anim);
       if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
@@ -7557,7 +7802,7 @@ var Engine = class {
     } else if (glitching || eff === "vhs") {
       this.drawMainSliced(ctx, el, W, H, glitching, localT);
     } else {
-      this.drawImageFit(ctx, el, W, H, c.fit);
+      this.drawImageFit(ctx, el, W, H, c.fit, c.frame);
     }
     if (eff === "pulse-color") {
       const pulse = 0.5 + 0.5 * Math.sin(localT / 0.7 * Math.PI * 2);
@@ -7969,13 +8214,13 @@ var Engine = class {
     }
     const octx = off.getContext("2d", { willReadFrequently: true });
     if (!octx) {
-      this.drawImageFit(ctx, el, W, H, c.fit);
+      this.drawImageFit(ctx, el, W, H, c.fit, c.frame);
       return;
     }
     octx.filter = "none";
     octx.globalAlpha = 1;
     octx.clearRect(0, 0, W2, H2);
-    this.paintFit(octx, el, W2, H2, c.fit);
+    this.paintFit(octx, el, W2, H2, c.fit, c.frame);
     const img = octx.getImageData(0, 0, W2, H2);
     this.gradePixels(img.data, W2, H2, c.adjust);
     if (lut) applyLut(lut, img.data);
@@ -7984,6 +8229,68 @@ var Engine = class {
     if (hslActive(c.hsl)) applyHsl(img.data, c.hsl);
     octx.putImageData(img, 0, 0);
     ctx.drawImage(off, 0, 0, W, H);
+  }
+  /**
+   * Paint an adjustment band over everything drawn so far.
+   *
+   * Reads back the frame, applies the same `gradePixels` the per-clip path uses
+   * (so a band and a hand-graded clip cannot drift apart), and puts it back.
+   *
+   * The readback is the cost, so it is skipped when the band has no effect —
+   * an empty adjustment layer must not halve the frame rate just by existing.
+   * It also runs at preview resolution while previewing, because a grade is
+   * smooth: nobody can see that the multiply happened at 960px instead of 1920.
+   */
+  paintAdjustmentBand(ctx, band, W, H, t) {
+    const a = band.adjust;
+    const look = band.filter ? LOOK_BY_ID.get(resolveLookId(band.filter)) : void 0;
+    const hasGrade = a ? this.gradeActive(a) : false;
+    const hasLook = !!(look && look.css);
+    const hasFinish = !!(look && (look.tint || look.grain || look.vignette));
+    if (!hasGrade && !hasLook && !hasFinish) return;
+    const rampIn = Math.min(1, (t - band.start) / 0.25);
+    const rampOut = Math.min(1, (band.start + band.duration - t) / 0.25);
+    const alpha = Math.max(0, Math.min(1, rampIn * rampOut));
+    if (alpha <= 1e-3) return;
+    if (!this.adjustBuf) this.adjustBuf = document.createElement("canvas");
+    const off = this.adjustBuf;
+    const scale = adjustmentScale(this.previewMaxSide, W, H);
+    const W2 = Math.max(4, Math.round(W * scale));
+    const H2 = Math.max(4, Math.round(H * scale));
+    if (off.width !== W2 || off.height !== H2) {
+      off.width = W2;
+      off.height = H2;
+    }
+    const octx = off.getContext("2d", { willReadFrequently: true });
+    if (!octx) return;
+    octx.filter = "none";
+    octx.globalAlpha = 1;
+    octx.clearRect(0, 0, W2, H2);
+    octx.drawImage(this.canvas, 0, 0, W2, H2);
+    if (hasGrade) {
+      const img = octx.getImageData(0, 0, W2, H2);
+      this.gradePixels(img.data, W2, H2, a);
+      octx.putImageData(img, 0, 0);
+    }
+    if (hasLook || hasFinish) {
+      octx.save();
+      if (look?.css) octx.filter = look.css;
+      octx.globalAlpha = alpha;
+      octx.drawImage(off, 0, 0);
+      octx.restore();
+      if (hasFinish) {
+        const finish = finishFor(band.filter);
+        if (finish) paintFinish(octx, finish, W2, H2, alpha);
+      }
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(off, 0, 0, W, H);
+      ctx.globalAlpha = 1;
+      return;
+    }
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(off, 0, 0, W, H);
+    ctx.restore();
   }
   /**
    * One-pass colour grade over RGBA pixels:
@@ -8076,19 +8383,47 @@ var Engine = class {
     }
   }
   /** Frame-fit modes: cover (crop) · contain (letterbox) · blur (blurred fill). */
-  drawImageFit(ctx, src, W, H, fit) {
-    this.paintFit(ctx, src, W, H, fit);
+  drawImageFit(ctx, src, W, H, fit, frame) {
+    this.paintFit(ctx, src, W, H, fit, frame);
   }
-  paintFit(ctx, src, W, H, fit) {
+  paintFit(ctx, src, W, H, fit, frame) {
     const sw = srcW(src);
     const sh = srcH(src);
     if (!sw || !sh) return;
     const mode = fit ?? "cover";
+    const geo = frame && !isDefaultGeometry(frame) ? clampGeometry(frame) : null;
+    if (geo && geo.rot !== 0) {
+      ctx.save();
+      ctx.translate(W / 2, H / 2);
+      ctx.rotate(geo.rot * Math.PI / 180);
+      const rad = Math.abs(geo.rot * Math.PI / 180);
+      const grow = Math.abs(Math.cos(rad)) + Math.abs(Math.sin(rad));
+      ctx.scale(grow, grow);
+      ctx.translate(-W / 2, -H / 2);
+      this.paintFit(ctx, src, W, H, mode, { ...geo, rot: 0 });
+      ctx.restore();
+      return;
+    }
     if (mode === "cover") {
+      if (geo) {
+        const rect = coverSourceRect(sw, sh, W, H, geo);
+        ctx.drawImage(src, rect.sx, rect.sy, rect.swp, rect.shp, 0, 0, W, H);
+        return;
+      }
       const scale2 = Math.max(W / sw, H / sh);
       const dw2 = sw * scale2;
       const dh2 = sh * scale2;
       ctx.drawImage(src, (W - dw2) / 2, (H - dh2) / 2, dw2, dh2);
+      return;
+    }
+    if (geo) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.clip();
+      const rect = coverSourceRect(sw, sh, W, H, geo);
+      ctx.drawImage(src, rect.sx, rect.sy, rect.swp, rect.shp, 0, 0, W, H);
+      ctx.restore();
       return;
     }
     const scale = Math.min(W / sw, H / sh);
@@ -8523,11 +8858,29 @@ var Engine = class {
     }
     return false;
   }
-  deleteMainClip(id) {
-    const i = this.project.main.findIndex((c) => c.id === id);
-    if (i === -1) return;
-    this.project.main.splice(i, 1);
+  /**
+   * Remove a main clip, keeping the rest of the timeline attached to it.
+   *
+   * The main track is a spine, so splicing a clip out slides every later clip
+   * left — while overlays sit at absolute times and do not move. Before this,
+   * deleting one clip near the start silently desynced every caption, sticker
+   * and music cue after it. `removeMainClip` shifts them together; "lift" keeps
+   * the hole instead and trims what was in it.
+   */
+  deleteMainClip(id, mode = "ripple") {
+    const spans = mainSpans(this.project);
+    const result = removeMainClip(
+      this.project,
+      id,
+      mode,
+      (i) => spans[i]?.start ?? 0,
+      (i) => spans[i] ? spans[i].end - spans[i].start : 0
+    );
+    if (!result) return null;
+    this.project.main = result.main;
+    this.project.tracks = result.tracks;
     this.bump();
+    return result;
   }
   duplicateMainClip(id) {
     const i = this.project.main.findIndex((c) => c.id === id);
@@ -8581,6 +8934,26 @@ var Engine = class {
     };
     clip.id = uid("tc");
     clip.kind = "text";
+    track.clips.push(clip);
+    this.bump();
+    return clip;
+  }
+  /**
+   * Add an adjustment band: a grade that applies to everything under it.
+   *
+   * Deliberately not a variant of addTextClip — a band has no text, no colour
+   * and no picture, and giving it text defaults would put "Your text" on screen
+   * the moment it was created.
+   */
+  addAdjustmentClip(trackId, start, duration) {
+    const track = this.project.tracks.find((t) => t.id === trackId) ?? this.project.tracks.find((t) => t.id === "t_adjust") ?? this.project.tracks[this.project.tracks.length - 1];
+    const clip = {
+      id: uid("adj"),
+      kind: "adjustment",
+      start: Math.max(0, start),
+      duration: Math.max(0.2, duration),
+      adjust: { brightness: 100, contrast: 106, saturation: 106, hue: 0 }
+    };
     track.clips.push(clip);
     this.bump();
     return clip;
@@ -8866,6 +9239,26 @@ var Engine = class {
   // ------------------------------------------------------------- undo/redo
   snapshot() {
     return JSON.stringify(this.project);
+  }
+  /**
+   * Read the current preview frame and compute the three scopes.
+   *
+   * Sampled, not exhaustive: a 1080p readback is 8 MB and the scopes are a UI
+   * panel that updates while you drag a slider. Step 3 on each axis is 9x less
+   * work and indistinguishable at these bin counts. Returns null when there is
+   * no canvas yet, so the panel can show "nothing to measure" instead of lying.
+   */
+  scopes(step = 3) {
+    if (!this.canvas || !this.ctx) return null;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    if (w < 2 || h < 2) return null;
+    try {
+      const img = this.ctx.getImageData(0, 0, w, h);
+      return buildScopes(img.data, { step, width: w, height: h });
+    } catch {
+      return null;
+    }
   }
   restore(snap) {
     this.project = JSON.parse(snap);
@@ -9987,6 +10380,7 @@ function gifIndices(rgba, palette, dither) {
 export {
   Engine,
   FILTER_PRESETS,
+  adjustmentScale,
   animAt,
   buildFilterCss,
   exportBlocker,

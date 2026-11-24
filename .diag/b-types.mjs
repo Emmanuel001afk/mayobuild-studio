@@ -665,7 +665,8 @@ function emptyTracks() {
   return [
     { id: "t_text", name: "Text", clips: [] },
     { id: "t_overlay", name: "Overlay", clips: [] },
-    { id: "t_audio", name: "Audio", clips: [] }
+    { id: "t_audio", name: "Audio", clips: [] },
+    { id: "t_adjust", name: "Adjustment", clips: [] }
   ];
 }
 function newProject(name, aspect) {

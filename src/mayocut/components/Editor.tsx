@@ -56,7 +56,10 @@ import {
 } from "../sticker-kinds";
 import { ANIMATED_STICKER_IDS, searchStickers, stickersIn } from "../stickers";
 import { Engine, FILTER_PRESETS, exportBlocker, mp4Supported, pickMime } from "../engine";
+import { Scopes } from "./Scopes";
+import { LOUDNESS_TARGETS, normaliseAdvice, normaliseGain, peakDb } from "../loudness";
 import { LOOK_FAMILIES, looksIn, searchLooks, type LookFamily } from "../looks";
+import type { RippleMode } from "../ripple";
 import {
   ASPECTS,
   DEFAULT_ADJUST,
@@ -404,6 +407,7 @@ export function Editor({
     eng.onPlayingChange = (v) => setPlaying(v);
     eng.onBufferingChange = (v) => setBuffering(v);
     eng.onVersion = () => {
+      setDrawVersion((v) => v + 1);
       setProject({ ...eng.project });
       setMedia((m) => [...m]); // media metadata may have gained durations
       scheduleAutosave();
@@ -594,7 +598,9 @@ export function Editor({
       } else if (e.key === "f" || e.key === "F") {
         doFreeze();
       } else if (e.key === "Delete" || e.key === "Backspace") {
+        liftDelete.current = e.shiftKey;
         deleteSelection();
+        liftDelete.current = false;
       } else if (e.key === "ArrowLeft") {
         // One frame on the project's frame grid; Shift = one second. The grid is
         // explicit so a 24 fps project does not step in 30ths.
@@ -718,9 +724,24 @@ export function Editor({
 
   const deleteSelection = useCallback(() => {
     if (!selection) return;
+    // Ripple is the default because the main track is a spine: splicing a clip
+    // out slides everything after it, so overlays MUST come along or they
+    // silently desync. Shift-delete is "lift" (leave the hole) for when the gap
+    // is wanted — the same two options Kdenlive exposes as a ripple mode.
+    const mode: RippleMode = liftDelete.current ? "lift" : "ripple";
     const ok = mutateVoid((eng) => {
-      if (selection.lane === "main") eng.deleteMainClip(selection.id);
-      else eng.deleteOverlay(selection.id);
+      if (selection.lane === "main") {
+        const r = eng.deleteMainClip(selection.id, mode);
+        if (r && r.overlaysMoved > 0) {
+          toast.success(
+            `Closed the gap — ${r.overlaysMoved} overlay${r.overlaysMoved > 1 ? "s" : ""} moved with it`,
+          );
+        } else if (r && mode === "lift" && (r.overlaysRemoved || r.overlaysTrimmed)) {
+          toast.success(
+            `Left a gap — ${r.overlaysRemoved} overlay${r.overlaysRemoved === 1 ? "" : "s"} removed, ${r.overlaysTrimmed} trimmed`,
+          );
+        }
+      } else eng.deleteOverlay(selection.id);
     });
     if (ok) setSelection(null);
   }, [selection, mutateVoid]);
@@ -1593,6 +1614,80 @@ export function Editor({
     addEmoji(asset.glyph ?? "", patchFor(asset));
   }
 
+  /**
+   * Add an adjustment band over the selected span of the timeline.
+   *
+   * CapCut calls this "Adjustment"; Kdenlive's nearest equivalent is applying an
+   * effect to a range. The point is the same: grade eight clips under one band
+   * rather than eight times by hand, so they cannot drift apart.
+   *
+   * Defaults to a 3 s band at the playhead (or the loop region when one is set,
+   * which is the useful case — "grade exactly this shot").
+   */
+  function addAdjustmentLayer() {
+    const eng = engineRef.current;
+    if (!eng) return;
+    const span = loopRegion
+      ? { start: Math.min(loopRegion.a, loopRegion.b), dur: Math.abs(loopRegion.b - loopRegion.a) }
+      : { start: Math.max(0, eng.t), dur: 3 };
+    const clip = mutateRet((e) =>
+      e.addAdjustmentClip("t_adjust", span.start, Math.max(0.2, span.dur)),
+    );
+    if (clip) {
+      setSelection({ lane: "overlay", trackId: "t_adjust", id: clip.id });
+      toast.success(
+        `Adjustment band over ${Math.max(0.2, span.dur).toFixed(1)}s — drag it to cover the clips you want graded`,
+      );
+    }
+  }
+
+  /**
+   * Normalise the selected clip's audio to a platform target.
+   *
+   * Kdenlive has this and it is the single biggest audio-quality difference:
+   * matching loudness across clips is what makes an edit sound professional, and
+   * it is exactly what a bare volume slider cannot do because the user has no
+   * measurement to aim at.
+   */
+  async function normaliseSelection(target: number) {
+    const eng = engineRef.current;
+    if (!eng || !selection) return;
+    const clip =
+      selection.lane === "main"
+        ? eng.project.main.find((c) => c.id === selection.id)
+        : eng.project.tracks
+            .find((t) => t.id === selection.trackId)
+            ?.clips.find((c) => c.id === selection.id);
+    const mediaId = clip && "mediaId" in clip ? clip.mediaId : undefined;
+    if (!mediaId) {
+      toast.error("Select a clip with audio first");
+      return;
+    }
+    toast.info("Measuring loudness…");
+    const buf = await eng.audioBuffer(mediaId);
+    if (!buf) {
+      toast.error("Could not decode this clip's audio");
+      return;
+    }
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < buf.numberOfChannels; c++) channels.push(buf.getChannelData(c));
+    const r = normaliseGain(channels, target, buf.sampleRate);
+    const advice = normaliseAdvice(r, peakDb(channels));
+    if (r.measuredLufs <= -69) {
+      toast.error(advice);
+      return;
+    }
+    mutateVoid((e) => {
+      // volume is a linear multiplier and may exceed 1 (a quiet clip needs gain).
+      // Clamping it to 1 here was the same bug as dbToLinear's clamp.
+      e.patchClip(selection.id, { volume: Math.max(0, r.gain) });
+    });
+    // The peak warning matters more than the success: a clipped export is a
+    // problem the user cannot see until it is too late.
+    if (r.clamped || peakDb(channels) + r.gainDb > -0.1) toast.warning(advice);
+    else toast.success(advice);
+  }
+
   function addEmoji(emoji: string, patch: Partial<OverlayClip> = {}) {
     const clip = mutateRet((e) =>
       e.addTextClip("t_text", Math.max(0, e.t), {
@@ -1662,6 +1757,10 @@ export function Editor({
 
   // CapCut keeps Emoji and Stickers apart, and so do we — see sticker-kinds.ts
   // for why the distinction is real rather than cosmetic.
+  /** Shift is held: delete lifts instead of rippling. */
+  const liftDelete = useRef(false);
+  /** bumped whenever the picture changes, so the scopes re-measure */
+  const [drawVersion, setDrawVersion] = useState(0);
   const [filterFam, setFilterFam] = useState<LookFamily | "all">("all");
   const [filterQuery, setFilterQuery] = useState("");
   /** The look grid: catalogue-ordered, searchable, family-filtered. */
@@ -2787,6 +2886,12 @@ export function Editor({
           </div>
         )}
         {workspaceTab === "adjust" && (
+          <Scopes
+            sample={() => (engineRef.current ? engineRef.current.scopes(3) : null)}
+            version={drawVersion}
+          />
+        )}
+        {workspaceTab === "adjust" && (
           <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5">
             {!selectedMainClip ? (
               <p className="text-[10px] text-muted-foreground">
@@ -2989,6 +3094,31 @@ export function Editor({
         title="Freeze frame at playhead (F)"
       >
         ❄
+      </button>
+      <select
+        className="h-7 rounded border border-border bg-card px-1 text-[10px]"
+        defaultValue=""
+        aria-label="Normalise loudness"
+        title="Measure this clip and set its volume to a platform target"
+        onChange={(e) => {
+          const t = LOUDNESS_TARGETS.find((x) => x.id === e.target.value);
+          if (t) void normaliseSelection(t.lufs);
+          e.target.value = "";
+        }}
+      >
+        <option value="">Normalise…</option>
+        {LOUDNESS_TARGETS.map((t) => (
+          <option key={t.id} value={t.id} title={t.hint}>
+            {t.name} ({t.lufs} LUFS)
+          </option>
+        ))}
+      </select>
+      <button
+        className="mb-btn-ghost h-7 px-2 text-[10px]"
+        onClick={addAdjustmentLayer}
+        title="Add an adjustment band: a grade that applies to every clip under it (uses the loop region when one is set)"
+      >
+        ◫ Grade
       </button>
       <button
         className="mb-btn-ghost h-7 px-2 text-[10px]"

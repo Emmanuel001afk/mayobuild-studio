@@ -460,6 +460,64 @@ if (!graphicNamed) {
   checks.push(["each trending transition previews with its own motion", distinct.size >= 5]);
 }
 
+// --- what CapCut and Kdenlive have: crop, adjustment, scopes, normalise -----
+{
+  // The inspector only shows clip properties when a clip is selected, so the
+  // crop panel cannot exist before that. Selecting first is what makes this a
+  // test of the control rather than a test of "nothing is selected".
+  const clip = [...document.querySelectorAll("[title]")].find((el) =>
+    (el.getAttribute("title") || "").startsWith("clip.mp4 · 4.00s"),
+  );
+  clip?.dispatchEvent(
+    new window.PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", clientX: 10 }),
+  );
+  window.dispatchEvent(new window.PointerEvent("pointerup", { bubbles: true, pointerType: "mouse", clientX: 10 }));
+  await wait(250);
+
+  // crop controls in the inspector
+  const cropText = [...document.querySelectorAll("span")].some(
+    (el) => (el.textContent || "").trim() === "Crop",
+  );
+  const aspectButtons = ["1:1", "9:16", "16:9", "4:5"].filter((name) =>
+    [...document.querySelectorAll("button")].some((b) =>
+      (b.textContent || "").trim() === name,
+    ),
+  );
+  const zoomSlider = [...document.querySelectorAll("input[type=range]")].some(
+    (i) => i.closest("label")?.textContent?.includes("Zoom"),
+  );
+  checks.push(["inspector offers crop with aspect presets", cropText && aspectButtons.length >= 4]);
+  checks.push(["crop has a zoom control", zoomSlider]);
+
+  // adjustment layer button
+  const gradeBtn = [...document.querySelectorAll("button")].find((b) =>
+    /Grade/.test(b.textContent || "") && (b.getAttribute("title") || "").includes("adjustment"),
+  );
+  checks.push(["an adjustment band can be added from the transport", !!gradeBtn]);
+
+  // normalise control
+  const norm = [...document.querySelectorAll("select")].find(
+    (s2) => s2.getAttribute("aria-label") === "Normalise loudness",
+  );
+  const normOpts = norm ? [...norm.querySelectorAll("option")].map((o) => o.textContent || "") : [];
+  checks.push([
+    "normalise offers platform loudness targets",
+    !!norm && normOpts.some((o) => /LUFS/.test(o)) && normOpts.length >= 4,
+  ]);
+
+  // scopes panel in the adjust tab
+  const adjustTab = [...document.querySelectorAll("button")].find(
+    (b) => (b.getAttribute("title") || "") === "Adjust",
+  );
+  adjustTab?.click();
+  await wait(400);
+  const scopeLabels = ["Histogram", "Wave", "Vector"];
+  const haveScopes = scopeLabels.filter((l) =>
+    [...document.querySelectorAll("button")].some((b) => (b.textContent || "").trim() === l),
+  );
+  checks.push(["scopes panel exposes histogram, waveform and vectorscope", haveScopes.length === 3]);
+}
+
 // --- durability: the project must survive a CLOSE, not just a quiet moment ---
 // The report was "everything disappears when I close the app". Two earlier
 // versions of this check were worthless, and both were caught the same way: by

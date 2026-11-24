@@ -8,6 +8,7 @@ import { HSL_BANDS, hslActive, type HslAdjust, type HslBand } from "../hsl";
 
 type Channel = "rgb" | "r" | "g" | "b";
 import { Clock, Copy, Diamond, Scissors, SlidersHorizontal, Spline, Trash2 } from "lucide-react";
+import { CROP_PRESETS, clampGeometry, isDefaultGeometry } from "../geometry";
 import type {
   AnimValues,
   AspectId,
@@ -694,6 +695,98 @@ export function Inspector(p: Props) {
                 </button>
               ))}
             </div>
+            {/*
+              Crop, the way CapCut and Kdenlive both offer it. Sliders rather
+              than a drag box because the preview is already draggable for
+              overlays, and a second drag mode that changes what a drag MEANS
+              depending on a hidden state is how you get "why did my text move
+              when I tried to crop". Sliders are slower but unambiguous, and the
+              numbers are visible.
+            */}
+            <div className="mt-2 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-muted-foreground">Crop</span>
+                <button
+                  className="text-[10px] text-cyan-400 hover:underline"
+                  onClick={() => p.onPatchMain({ frame: undefined })}
+                  title="Reset crop, zoom and rotation"
+                >
+                  reset
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {CROP_PRESETS.map((cp) => {
+                  const active =
+                    cp.aspect === null
+                      ? !main.frame?.crop
+                      : main.frame?.crop != null &&
+                        Math.abs((main.frame.crop ?? 0) - (cp.aspect || 1)) < 0.01;
+                  return (
+                    <button
+                      key={cp.id}
+                      className={`px-1.5 h-5 rounded border text-[10px] ${
+                        active
+                          ? "border-cyan-400 bg-cyan-400/10 text-cyan-300"
+                          : "border-border text-muted-foreground hover:border-white/40"
+                      }`}
+                      onClick={() =>
+                        p.onPatchMain({
+                          frame: {
+                            ...clampGeometry(main.frame),
+                            crop: cp.aspect === null ? null : cp.aspect || null,
+                          },
+                        })
+                      }
+                      title={
+                        cp.aspect === null
+                          ? "No crop: use the frame's own shape"
+                          : `Crop to ${cp.name}`
+                      }
+                    >
+                      {cp.name}
+                    </button>
+                  );
+                })}
+              </div>
+              {[
+                { key: "zoom" as const, label: "Zoom", min: 1, max: 4, step: 0.01 },
+                { key: "ax" as const, label: "Horizontal", min: 0, max: 1, step: 0.01 },
+                { key: "ay" as const, label: "Vertical", min: 0, max: 1, step: 0.01 },
+                { key: "rot" as const, label: "Rotation", min: -180, max: 180, step: 1 },
+              ].map((s2) => {
+                const g = clampGeometry(main.frame);
+                return (
+                  <label key={s2.key} className="flex items-center gap-1.5 text-[10px]">
+                    <span className="w-16 shrink-0 text-muted-foreground">{s2.label}</span>
+                    <input
+                      type="range"
+                      className="flex-1 accent-cyan-400"
+                      min={s2.min}
+                      max={s2.max}
+                      step={s2.step}
+                      value={g[s2.key]}
+                      onChange={(e) =>
+                        p.onPatchMain({
+                          frame: { ...g, [s2.key]: Number(e.target.value) },
+                        })
+                      }
+                    />
+                    <span className="w-9 text-right tabular-nums text-muted-foreground">
+                      {s2.key === "zoom"
+                        ? `${g.zoom.toFixed(2)}x`
+                        : s2.key === "rot"
+                          ? `${Math.round(g.rot)}°`
+                          : `${Math.round(g[s2.key] * 100)}%`}
+                    </span>
+                  </label>
+                );
+              })}
+              {main.frame && !isDefaultGeometry(main.frame) && (
+                <div className="text-[10px] text-muted-foreground leading-snug">
+                  The crop applies to the export too — what you see is what renders.
+                </div>
+              )}
+            </div>
           </Section>
 
           <Section label="Color LUT" anchor="adjust">
@@ -1082,6 +1175,74 @@ export function Inspector(p: Props) {
       )}
 
       {/* ---------------- text overlay ---------------- */}
+      {over?.kind === "adjustment" && (
+        <Section label="Adjustment band" anchor="adjust">
+          <p className="text-[10px] text-muted-foreground leading-snug mb-1">
+            Grades every clip underneath for {over.duration.toFixed(1)}s. One band instead of eight
+            hand-matched clips.
+          </p>
+          {(
+            [
+              { key: "brightness", label: "Brightness", min: 50, max: 150 },
+              { key: "contrast", label: "Contrast", min: 50, max: 200 },
+              { key: "saturation", label: "Saturation", min: 0, max: 200 },
+              { key: "temperature", label: "Temperature", min: -100, max: 100 },
+              { key: "vignette", label: "Vignette", min: 0, max: 100 },
+            ] as const
+          ).map((s2) => {
+            const defaults: Record<string, number> = {
+              brightness: 100,
+              contrast: 100,
+              saturation: 100,
+              temperature: 0,
+              vignette: 0,
+            };
+            const cur = over.adjust ?? { brightness: 100, contrast: 100, saturation: 100, hue: 0 };
+            return (
+              <Slider
+                key={s2.key}
+                label={s2.label}
+                min={s2.min}
+                max={s2.max}
+                step={1}
+                value={(cur as unknown as Record<string, number>)[s2.key] ?? defaults[s2.key]}
+                onChange={(v) => p.onPatchOverlay(trackId, { adjust: { ...cur, [s2.key]: v } })}
+              />
+            );
+          })}
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>Look</span>
+            <button
+              className="text-cyan-400 hover:underline"
+              onClick={() =>
+                p.onPatchOverlay(trackId, {
+                  adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+                })
+              }
+            >
+              reset grade
+            </button>
+          </div>
+          <select
+            className="w-full bg-slate-900 border border-border rounded px-2 py-1 text-[11px]"
+            value={over.filter ?? "none"}
+            onChange={(e) =>
+              p.onPatchOverlay(trackId, {
+                filter: e.target.value === "none" ? undefined : e.target.value,
+              })
+            }
+          >
+            <option value="none">No look</option>
+            {p.filters
+              .filter((f) => f.id !== "none")
+              .map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+          </select>
+        </Section>
+      )}
       {over?.kind === "text" && (
         <>
           <Section label="Text" anchor="video">

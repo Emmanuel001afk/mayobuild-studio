@@ -32,6 +32,10 @@ const MODULES = [
   "persistence",
   "playback",
   "looks",
+  "geometry",
+  "ripple",
+  "scopes",
+  "loudness",
 ];
 
 for (const name of MODULES) {

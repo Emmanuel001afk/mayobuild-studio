@@ -748,6 +748,69 @@ filtered element, the data URI parses, the preview animations differ per card),
 not pixel by pixel. Thresholds that were exact counts are now floors, so the
 catalogue can keep growing without the suite crying wolf.
 
+### Parity: the five gaps CapCut and Kdenlive had (Stage 4)
+
+The brief was to close the feature gaps against CapCut and Kdenlive, so the list
+was built from what those editors actually ship rather than from guesswork.
+
+**Crop, zoom and rotate are geometry, not a filter.** `geometry.ts` holds a
+`FrameGeometry` — an anchor (`ax`, `ay`), an optional crop, a zoom and a
+rotation — and `coverSourceRect` turns it into the source rectangle to draw.
+The order matters and is the whole maths: cover the frame first, shrink *one*
+axis to the crop, divide by the zoom, then offset by the anchor and clamp. A
+uniform zoom cannot change an aspect ratio, which is why crop is a separate
+field and `fillZoomForCrop` supplies the extra zoom to fill the frame again.
+The crop is applied at *every* `paintFit` call site — three of them — because
+before that it survived until the moment a clip was graded and then vanished.
+`anchorFromDrag` inverts the drag so the picture follows the mouse rather than
+running away from it, and a test walks the whole anchor/zoom space to prove the
+source rectangle never escapes the image.
+
+**Ripple edit, because deleting should not leave a hole.** `ripple.ts` is pure
+and generic over the track type. Removing a clip closes the gap on the main
+track and moves every later overlay back by the removed span — music that
+started at 0:15 and covered the clip comes back to 0:10. Shift+Delete lifts
+instead: the hole stays, and clips that straddle the cut are split, with
+`sourceOffset` moved so the surviving piece keeps playing the same frames. A
+clip trimmed under 50 ms (`MIN_KEEP`) is dropped rather than left as a sliver
+nobody can grab.
+
+**Scopes, so exposure is a measurement and not a guess.** `scopes.ts` builds a
+histogram, an RGB waveform and a vectorscope from one readback, and
+`readExposure` turns them into a sentence — clipped, crushed, flat or balanced.
+The luma weights are Rec.601 (77/150/29) and the histogram records per-channel
+counts, so a pure red that clips only on R is caught; a luma-only histogram
+would call it fine.
+
+**Adjustment layers grade what is underneath them.** A band is an
+`OverlayClip` of kind `"adjustment"` on its own "Adjustment" track, carrying a
+grade (the same `FilterAdjust` every clip uses) and optionally a look. The
+important part is *where* it is drawn: after the main track, before the overlay
+loop, and skipped by that loop. A band has no picture of its own, so drawing it
+as an overlay would put the grade on top of the text it is supposed to be
+grading. It ramps in and out over 250 ms so it can be eased across a scene
+change, and it is not capped at 1280 px during an export — capping there would
+ship a soft band in a 1080p render.
+
+**Normalisation measures, then tells you the number.** `loudness.ts` estimates
+LUFS with a K-weighting approximation, 400 ms blocks at 75 % overlap and the
+two-stage −70 dB / relative gate, so a quiet passage cannot drag the measurement
+down. It offers TikTok/YouTube (−14), podcast (−16) and EBU R128 broadcast
+(−23), clamps the gain to ±24 dB, and warns when the corrected peak would land
+above −0.1 dBFS. The gain is a linear multiplier that is deliberately allowed to
+exceed 1: clamping it at 1 turned every "turn this up" into a silent no-op that
+still reported +11.7 dB. That bug was found by a test asserting the audio
+actually got louder, not by the code looking wrong.
+
+Honest limits: there is no browser and no canvas backend in this environment, so
+the band's *pixels* are not verified. What is verified is the arithmetic
+(geometry, ripple spans, LUFS, scope counts), the wiring (the band is drawn
+outside the overlay loop, the crop reaches all three call sites), and that a
+crop and a band survive a project round trip. The per-frame cost of a heavy
+grade is unchanged at ~39 ms for a 1280×720 buffer — that is pre-existing
+`gradePixels` cost, measured, not something these features introduced, and it
+remains the thing to fix before calling grading smooth on a phone.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert
