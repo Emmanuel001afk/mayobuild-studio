@@ -3252,6 +3252,59 @@ await t('an adjustment band renders at full size when exporting', () => {
   // a degenerate size must not divide by zero
   assert.ok(Number.isFinite(E.adjustmentScale(1920, 0, 0)));
 });
+await t('the grade is bit-identical to the reference for a known frame', () => {
+  // Golden values captured from the implementation *before* the temp/tint,
+  // split-tone and vignette passes were optimised. They exist so that a future
+  // "faster" rewrite has to prove it did not quietly change the picture.
+  const W = 8, H = 6;
+  const d = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = (i * 11) % 256;
+    d[i + 1] = (i * 23 + 30) % 256;
+    d[i + 2] = (i * 37 + 70) % 256;
+    d[i + 3] = 255;
+  }
+  const base = { brightness: 100, contrast: 100, saturation: 100, hue: 0,
+    temperature: 0, tint: 0, splitTone: 0, sharpen: 0, vignette: 0 };
+  const ctx = { sharpenBuf: null, vigRamp: null, vigCols: new Float64Array(0) };
+  E.Engine.prototype.gradePixels.call(ctx, d, W, H,
+    { ...base, temperature: 20, tint: -10, splitTone: 40, vignette: 50 });
+  const got = [];
+  for (let p = 0; p < 4; p++) got.push(d[p * 4], d[p * 4 + 1], d[p * 4 + 2]);
+  assert.deepEqual(got, [1, 18, 43, 37, 92, 164, 86, 190, 92, 130, 48, 2]);
+});
+await t('the vignette darkens the corners and leaves the centre alone', () => {
+  // A flat grey frame, so "darker" is unambiguous — on a patterned buffer the
+  // corner channel can already be 0 and a darkening is then invisible.
+  const W = 16, H = 12;
+  const grey = () => {
+    const d = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < d.length; i += 4) { d[i] = 200; d[i + 1] = 200; d[i + 2] = 200; d[i + 3] = 255; }
+    return d;
+  };
+  const base = { brightness: 100, contrast: 100, saturation: 100, hue: 0,
+    temperature: 0, tint: 0, splitTone: 0, sharpen: 0, vignette: 0 };
+  const ctx = { sharpenBuf: null, vigRamp: null, vigCols: new Float64Array(0) };
+  const d = grey();
+  E.Engine.prototype.gradePixels.call(ctx, d, W, H, { ...base, vignette: 75 });
+  assert.ok(d[0] < 200, 'top-left corner should darken, got ' + d[0]);
+  const mid = ((H >> 1) * W + (W >> 1)) * 4;
+  assert.equal(d[mid], 200, 'the centre must not be touched');
+  // the ramp is rebuilt when the strength changes, not reused blindly
+  const d2 = grey();
+  E.Engine.prototype.gradePixels.call(ctx, d2, W, H, { ...base, vignette: 10 });
+  assert.ok(d2[0] > d[0], 'a weaker vignette must darken less: ' + d2[0] + ' vs ' + d[0]);
+  assert.ok(d2[0] < 200, 'a weak vignette must still do something at the corner');
+});
+await t('the vignette ramp is cached against its strength', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/private vigRamp:\s*\{\s*amount: number;\s*ramp: Float32Array\s*\}/.test(src),
+    'the ramp must be cached by strength');
+  assert.ok(/this\.vigRamp\.amount !== vig/.test(src), 'a changed strength must rebuild the ramp');
+  // float64, or the column rounding shifts the ramp index by a level
+  assert.ok(/private vigCols = new Float64Array\(0\)/.test(src),
+    'column squares must be float64 to stay bit-identical');
+});
 console.log('ripple.ts — deleting without desyncing the timeline');
 const mkTracks = () => [
   { id: 't_text', name: 'Text', clips: [{ id: 'cap', kind: 'text', start: 7, duration: 2 }] },

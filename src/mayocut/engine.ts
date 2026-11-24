@@ -621,6 +621,20 @@ export class Engine {
   private sharpenBuf: Uint8ClampedArray | null = null;
   /** scratch buffer for adjustment layers (readback + put-back) */
   private adjustBuf: HTMLCanvasElement | null = null;
+  /**
+   * The vignette falloff ramp, built once for the strength it was built for.
+   *
+   * It used to be rebuilt inside gradePixels on *every* frame — 1025 entries of
+   * a `**` power — for a curve that depends only on the vignette amount. Same
+   * numbers, computed once instead of 30 times a second.
+   */
+  private vigRamp: { amount: number; ramp: Float32Array } | null = null;
+  /**
+   * dx² per column, so the vignette loop never recomputes it. Float64, not
+   * Float32: rounding here shifts the ramp index and moves pixels by one level,
+   * which would make the pass no longer bit-identical to the original.
+   */
+  private vigCols = new Float64Array(0);
   private vhsPattern: HTMLCanvasElement | null = null;
   private impulse: AudioBuffer | null = null;
 
@@ -3327,26 +3341,36 @@ export class Engine {
       const tr = temp * 26;
       const tb = -temp * 26;
       const tg = tint * 20;
-      for (let i = 0; i < d.length; i += 4) {
-        let r = d[i];
-        let g = d[i + 1];
-        let b = d[i + 2];
-        // temperature + tint (a slight green lift is what "tint" does in CapCut)
-        r += tr;
-        b += tb;
-        g += tg;
-        if (split > 0) {
-          // highlight lift (orange) / shadow push (teal), weighted by luma
+      const split2 = split * 2;
+      if (split > 0) {
+        for (let i = 0; i < d.length; i += 4) {
+          let r = d[i] + tr;
+          let g = d[i + 1] + tg;
+          let b = d[i + 2] + tb;
+          // highlight lift (orange) / shadow push (teal), weighted by luma.
+          // At most one of the two weights is ever non-zero, so only one branch
+          // runs per pixel — Math.max here costs more than it is worth.
           const l = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-          const kHigh = Math.max(0, l - 0.5) * 2 * split;
-          const kLow = Math.max(0, 0.5 - l) * 2 * split;
+          const kHigh = l > 0.5 ? (l - 0.5) * split2 : 0;
+          const kLow = l < 0.5 ? (0.5 - l) * split2 : 0;
           r += 26 * kHigh - 10 * kLow;
           g += 8 * kHigh + 12 * kLow;
           b += -18 * kHigh + 30 * kLow;
+          d[i] = r < 0 ? 0 : r > 255 ? 255 : r;
+          d[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+          d[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
         }
-        d[i] = r < 0 ? 0 : r > 255 ? 255 : r;
-        d[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
-        d[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+      } else {
+        // temperature + tint only (a slight green lift is what "tint" does in
+        // CapCut). No luma, so this loop stays branch-free.
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i] + tr;
+          const g = d[i + 1] + tg;
+          const b = d[i + 2] + tb;
+          d[i] = r < 0 ? 0 : r > 255 ? 255 : r;
+          d[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+          d[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+        }
       }
     }
 
@@ -3393,25 +3417,54 @@ export class Engine {
       // (each involves a sqrt) and keeps the ramp in a small lookup table, which
       // took this pass from ~70 ms to single digits on a 720p buffer. The lookup
       // is the same formula sampled at 1/8 px, far finer than a visible step.
-      const RAMP = new Float32Array(1025);
-      for (let k = 0; k <= 1024; k++) {
-        const r = (k / 1024) * 1.6; // max possible normalised distance is < 1.42
-        RAMP[k] = r < 0.55 ? 1 : 1 - vig * 0.85 * Math.min(1, (r - 0.55) / 0.45) ** 1.4;
+      //
+      // The ramp is cached against `vig`, so it is built once per strength
+      // instead of once per frame. `dx` is a linear function of x, so the inner
+      // loop walks it with an addition.
+      if (!this.vigRamp || this.vigRamp.amount !== vig) {
+        const ramp = new Float32Array(1025);
+        for (let k = 0; k <= 1024; k++) {
+          const r = (k / 1024) * 1.6; // max possible normalised distance is < 1.42
+          ramp[k] = r < 0.55 ? 1 : 1 - vig * 0.85 * Math.min(1, (r - 0.55) / 0.45) ** 1.4;
+        }
+        this.vigRamp = { amount: vig, ramp };
       }
+      const RAMP = this.vigRamp.ramp;
       const scale = 1024 / 1.6;
+      // dx² is constant per column and dy² constant per row, so r² is a single
+      // addition and the only sqrt left is the ramp lookup. The clear centre is
+      // r < 0.55, i.e. r² < 0.3025, and it covers a rectangle, so whole rows and
+      // columns are dismissed with a comparison instead of a square root.
+      let col2 = this.vigCols;
+      if (!col2 || col2.length !== W) col2 = this.vigCols = new Float64Array(W);
+      for (let x = 0; x < W; x++) {
+        const dx = (x - cx) / maxD;
+        col2[x] = dx * dx;
+      }
+      const CLEAR2 = 0.55 * 0.55;
       for (let y = 0; y < H; y++) {
         const dy = (y - cy) / maxD;
         const dy2 = dy * dy;
         const row = y * W;
-        for (let x = 0; x < W; x++) {
-          const dx = (x - cx) / maxD;
-          const r = Math.sqrt(dx * dx + dy2);
-          if (r < 0.55) continue;
-          const k = RAMP[Math.min(1024, (r * scale) | 0)];
-          const i = (row + x) * 4;
-          d[i] *= k;
-          d[i + 1] *= k;
-          d[i + 2] *= k;
+        if (dy2 >= CLEAR2) {
+          // nothing in this row can fall inside the clear centre
+          let i = row * 4;
+          for (let x = 0; x < W; x++, i += 4) {
+            const k = RAMP[Math.min(1024, (Math.sqrt(col2[x] + dy2) * scale) | 0)];
+            d[i] *= k;
+            d[i + 1] *= k;
+            d[i + 2] *= k;
+          }
+        } else {
+          for (let x = 0; x < W; x++) {
+            const r2 = col2[x] + dy2;
+            if (r2 < CLEAR2) continue;
+            const k = RAMP[Math.min(1024, (Math.sqrt(r2) * scale) | 0)];
+            const i = (row + x) * 4;
+            d[i] *= k;
+            d[i + 1] *= k;
+            d[i + 2] *= k;
+          }
         }
       }
     }
