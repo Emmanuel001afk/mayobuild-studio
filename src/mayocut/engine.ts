@@ -33,6 +33,7 @@ import {
   freezeClipFrom,
 } from "./types";
 import { resolveComposition } from "./timeline-resolver";
+import { easeValue, type EaseId, type Bezier4 } from "./easings";
 import { LOOK_BY_ID, LOOKS, resolveLookId, type LookFinish } from "./looks";
 import { clampGeometry, coverSourceRect, isDefaultGeometry, type FrameGeometry } from "./geometry";
 import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-plan";
@@ -340,12 +341,15 @@ export function animAt(kfs: Keyframe[] | undefined, base: AnimValues, t: number)
     if (t >= a.at && t < b.at) {
       const span = b.at - a.at;
       const k = span > 0.0001 ? clamp01((t - a.at) / span) : 1;
+      // The ease belongs to the outgoing keyframe, so it is `a` that carries it.
+      // An absent ease is linear — every keyframe saved before easing existed.
+      const e = easeValue(a.ease, k, a.bez);
       return {
-        x: lerp(a.v.x, b.v.x, k),
-        y: lerp(a.v.y, b.v.y, k),
-        scale: lerp(a.v.scale, b.v.scale, k),
-        rotation: lerp(a.v.rotation, b.v.rotation, k),
-        opacity: lerp(a.v.opacity, b.v.opacity, k),
+        x: lerp(a.v.x, b.v.x, e),
+        y: lerp(a.v.y, b.v.y, e),
+        scale: lerp(a.v.scale, b.v.scale, e),
+        rotation: lerp(a.v.rotation, b.v.rotation, e),
+        opacity: lerp(a.v.opacity, b.v.opacity, e),
       };
     }
   }
@@ -566,6 +570,21 @@ async function supportsAacEncoder(
   } catch {
     return false;
   }
+}
+
+/**
+ * Copy a keyframe, optionally shifted in time.
+ *
+ * Every path that duplicates a clip or splits one has to copy the keyframes,
+ * and each of them used to rebuild `{ at, v }` by hand — which silently drops
+ * any field added later. Easing and its control points are exactly that kind of
+ * field, so the copy lives in one place now.
+ */
+function cloneKeyframe(k: Keyframe, at = k.at): Keyframe {
+  const out: Keyframe = { at, v: { ...k.v } };
+  if (k.ease) out.ease = k.ease;
+  if (k.bez) out.bez = { x1: k.bez.x1, y1: k.bez.y1, x2: k.bez.x2, y2: k.bez.y2 };
+  return out;
 }
 
 /**
@@ -4022,7 +4041,7 @@ export class Engine {
       const kfsA = c.keyframes?.filter((k) => k.at < local);
       const kfsB = c.keyframes
         ?.filter((k) => k.at >= local)
-        .map((k) => ({ at: k.at - local, v: { ...k.v } }));
+        .map((k) => cloneKeyframe(k, k.at - local));
       const a: MainClip = {
         ...c,
         id: uid("mc"),
@@ -4079,7 +4098,7 @@ export class Engine {
       ...src,
       id: uid("mc"),
       adjust: { ...src.adjust },
-      keyframes: src.keyframes?.map((k) => ({ at: k.at, v: { ...k.v } })),
+      keyframes: src.keyframes?.map(cloneKeyframe),
       transitionIn: "none",
       transitionDur: 0,
     });
@@ -4310,7 +4329,7 @@ export class Engine {
       ...c,
       id: uid("ov"),
       start: c.start + 0.05,
-      keyframes: c.keyframes?.map((k) => ({ at: k.at, v: { ...k.v } })),
+      keyframes: c.keyframes?.map(cloneKeyframe),
     }));
     tr.clips.push(...copies);
     this.bump();
@@ -4444,6 +4463,34 @@ export class Engine {
   }
 
   /** Patch the values of the keyframe within eps of `at` (CapCut-style edit). */
+  /**
+   * Set the easing that governs the segment after the keyframe at `at`.
+   *
+   * Matches the keyframe by nearest-in-time within a small window, the same way
+   * `updateKeyframeAt` does, so the UI can pass the value it drew rather than
+   * reconstructing it. `custom` carries explicit control points; every other id
+   * clears them so a stale curve cannot survive a preset change.
+   */
+  setKeyframeEase(clipId: string, at: number, ease: EaseId, bez?: Bezier4): boolean {
+    const kf = this.keyframeNear(clipId, at);
+    if (!kf) return false;
+    kf.ease = ease;
+    if (ease === "custom") {
+      if (bez) kf.bez = { x1: bez.x1, y1: bez.y1, x2: bez.x2, y2: bez.y2 };
+    } else {
+      delete kf.bez;
+    }
+    this.bump();
+    return true;
+  }
+
+  /** The ease on the segment after the keyframe at `at`, if there is one. */
+  keyframeEase(clipId: string, at: number): { ease: EaseId; bez?: Bezier4 } | null {
+    const kf = this.keyframeNear(clipId, at);
+    if (!kf) return null;
+    return { ease: kf.ease ?? "linear", bez: kf.bez };
+  }
+
   updateKeyframeAt(clipId: string, at: number, patch: Partial<AnimValues>): boolean {
     const kf = this.keyframeNear(clipId, at);
     if (!kf) return false;

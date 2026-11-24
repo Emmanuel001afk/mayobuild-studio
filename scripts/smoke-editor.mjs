@@ -489,6 +489,50 @@ if (!graphicNamed) {
   checks.push(["inspector offers crop with aspect presets", cropText && aspectButtons.length >= 4]);
   checks.push(["crop has a zoom control", zoomSlider]);
 
+  // keyframe easing: add a keyframe, then open its ease editor
+  const addKf = [...document.querySelectorAll("button")].find((b) =>
+    /Add keyframe at playhead/.test(b.textContent || ""),
+  );
+  checks.push(["the inspector offers a keyframe button", !!addKf]);
+  if (addKf && !addKf.disabled) {
+    addKf.click();
+    await wait(200);
+    // The keyframe row is the one holding the ◆ jump button. Scoping matters:
+    // the curves editor also has a button labelled "Linear", and clicking that
+    // one tests nothing about keyframes.
+    const row = [...document.querySelectorAll("div")].find(
+      (d) =>
+        /^\s*◆/.test(d.textContent || "") &&
+        [...d.querySelectorAll("button")].some(
+          (b) => (b.textContent || "").trim() === "Linear",
+        ),
+    );
+    const easeChip = row
+      ? [...row.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Linear")
+      : null;
+    checks.push(["a keyframe shows its easing", !!easeChip]);
+    if (easeChip) {
+      easeChip.click();
+      await wait(300);
+      const presets = [
+        "Linear", "Ease in", "Ease out", "Ease in-out", "Smooth", "Snap", "Hold (step)",
+      ];
+      const found = presets.filter((name) =>
+        [...document.querySelectorAll("button")].some((b) => (b.textContent || "").trim() === name),
+      );
+      checks.push(["the ease editor offers the preset curves", found.length >= 6]);
+      const graph = document.querySelector("svg path[stroke='#e879f9']");
+      checks.push(["the ease editor draws the curve", !!graph]);
+      const bezInputs = ["x1", "y1", "x2", "y2"].filter((k) =>
+        document.querySelector(`input[aria-label="Bezier ${k}"]`),
+      );
+      checks.push([
+        "bezier control points are editable without a pointer",
+        bezInputs.length === 4,
+      ]);
+    }
+  }
+
   // adjustment layer button
   const gradeBtn = [...document.querySelectorAll("button")].find((b) =>
     /Grade/.test(b.textContent || "") && (b.getAttribute("title") || "").includes("adjustment"),

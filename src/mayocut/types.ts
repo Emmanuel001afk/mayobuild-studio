@@ -3,6 +3,7 @@ import type { AudioFxId } from "./audio-fx";
 import type { CurveSet } from "./curves";
 import type { FrameGeometry } from "./geometry";
 import type { HslSet } from "./hsl";
+import type { EaseId, Bezier4 } from "./easings";
 import type { StickerKind } from "./sticker-kinds";
 import { FONT_CATALOGUE, resolveFontCss } from "./fonts";
 // Everything lives on the user's device (IndexedDB). No database, no backend.
@@ -217,6 +218,15 @@ export const DEFAULT_ANIM: AnimValues = { x: 0, y: 0, scale: 1, rotation: 0, opa
 export interface Keyframe {
   at: number; // seconds relative to the clip start
   v: AnimValues;
+  /**
+   * Easing applied to the segment *after* this keyframe — the same model CapCut
+   * and Kdenlive use, where the curve belongs to the outgoing side. Absent
+   * means linear, which is what every keyframe written before easing existed
+   * is, so old projects interpolate exactly as they did.
+   */
+  ease?: EaseId;
+  /** Control points for `ease: "custom"`. */
+  bez?: Bezier4;
 }
 
 /** Built-in motion effects applied to a main clip (deterministic, offline). */

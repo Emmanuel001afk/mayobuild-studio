@@ -34,7 +34,7 @@ right, full-width timeline along the bottom.
   matching group instead of one long scroll; the sections themselves are shared,
   so a control can never exist in one tab and be missing from another.
 - **One library on every platform** — the mobile drawer renders the same
-  component, so phone users see the same 19 transitions and 40 looks.
+  component, so phone users see the same 27 transitions and 54 looks.
 
 **Timeline & clips**
 - **Multi-track timeline** — main video lane + Text / Overlay / Audio lanes, per-lane
@@ -50,7 +50,7 @@ right, full-width timeline along the bottom.
 - **Reverse** — frame-stepped playback (audio muted, as CapCut does)
 
 **Look**
-- **Filters** — **40 presets** grouped into Clean / Film / Warm-cool / Neon / Mono
+- **Filters** — **54 presets** grouped into Clean / Film / Warm-cool / Neon / Mono / Trending
   (Kodachrome, Portra 400, Bleach Bypass, Cyanotype, Cyberpunk, Mono High, …)
 - **Adjust** — Brightness, Contrast, Saturation, Hue, **Temperature, Tint, Fade,
   Sharpen, Vignette and Split-tone** (the last five are a real pixel pass, so they
@@ -60,7 +60,7 @@ right, full-width timeline along the bottom.
   background colour behind letterboxing
 - **Color match** — copy one clip's grade to every other clip in one tap
 
-**Transitions** (19) — crossfade, dip to black/white, push ←→↑↓, **diagonal
+**Transitions** (27) — crossfade, dip to black/white, push ←→↑↓, **diagonal
 push**, hard wipe ←→↑↓, **soft (feathered) wipe ←→↑↓**, zoom punch, blur
 dissolve. Duration control and “apply to every cut”. The feathered wipe is a
 real gradient-masked composite, verified in tests for direction, monotonic
@@ -76,7 +76,7 @@ zoom-in, rise, wipe-in, pop, drop-in, swing, blur-in, tracking-in, flip,
 skew-in, per-letter wave) and **20 one-tap text looks** (TikTok white, Yellow
 bar, Pink sticker, Mint chip, Headline split, News lower third, …).
 
-**Motion** — **28 effects** in four families (Camera / Motion / Impact / Retro):
+**Motion** — **37 effects** in four families (Camera / Motion / Impact / Retro):
 zoom pulse, heartbeat, shake, spin, glitch, flash-in, blur-in, VHS, zoom-out,
 pan, tilt up/down, Ken Burns, colour pulse, sway, roll, float, breathe, jitter,
 whip pan ←→, dolly in/out, tilt-shift, earthquake, orbit — plus **keyframes on
@@ -855,6 +855,59 @@ changes back.
 Honest limit: the case with *every* effect on is still ~29 ms, which is under
 30 fps but not comfortably. Sharpen is the remaining cost and it needs a
 different approach (a separable two-pass blur); it has not been done.
+
+### Keyframe easing, and a graph to draw it on (Stage 6)
+
+Surveying what was actually missing rather than what was mis-documented turned
+up one clear gap: **every keyframe interpolated linearly**. CapCut ships a
+Bezier graph editor and Kdenlive has per-keyframe interpolation modes, so this
+was the one place the editor was strictly less expressive than both.
+
+**The curve belongs to the outgoing keyframe.** That is how both of those
+editors model it, and it is not the obvious choice: the tempting alternative is
+to store the ease on the *pair*, which then has two owners and no way to say
+"ease into the third keyframe but leave the second alone". A keyframe now
+carries the ease that governs the segment after it.
+
+**Absent means linear, which is what makes this safe.** Every project saved
+before easing existed has no `ease` field, so it interpolates exactly as it did
+— that case is a test, not a hope.
+
+The curves are CSS-style cubic Beziers solved the way the browser solves
+`cubic-bezier()`, by Newton-Raphson with a **bisection fallback**. The fallback
+is not decoration: a control point at `x1 = x2 = 0` gives a zero derivative at
+`t = 0`, which is precisely the shape a "snap" preset has, and a naive Newton
+loop divides by ~0 there and returns nonsense. One real assertion caught me
+getting this backwards — I asserted the flat-start curve *lags* linear when in
+fact it *leads* it (with both x-handles at 0, the time axis is `x = t³`). The
+test was wrong; the maths was right.
+
+`hold` is deliberately not a Bezier. It is the discrete/stepped mode, where the
+value stays put and then jumps. A step function is not expressible as a smooth
+cubic, and drawing a steep curve while behaving like a step would make the graph
+lie about what plays.
+
+**The editor is a graph, not a dropdown.** Handles drag on the curve, and the
+plot is drawn from the same `sampleEase` the renderer calls, so the shape on
+screen is the shape that plays. Because a pointer drag is not usable by
+everyone, the four control-point numbers are editable inputs and every preset is
+a button — the drag is a convenience, not the only way in.
+
+**The bug this was built to avoid, and then hit anyway.** Duplicating a clip and
+splitting one both rebuilt keyframes by hand as `{ at, v }`, which silently
+drops any field added later. Easing is exactly that kind of field. Both paths
+now go through one `cloneKeyframe`, and — this is the part that mattered — the
+first test for it was a regex over the source, and it **survived a mutation that
+deleted the ease copy entirely**. A regex cannot catch a clone that drops a
+field. Replaced with a behavioural test that duplicates a real clip through the
+engine and asserts the ease, the control points, and that the copy does not
+share the original's Bezier object; all three mutations are now caught.
+
+Honest limits: this is the motion track only. Easing applies to the keyframed
+transform/opacity values, not to speed curves, audio levels or grade sliders —
+those have their own controls and were not touched. The graph draws one segment
+at a time, so a long animation is eased keyframe by keyed keyframe rather than
+in a single multi-point curve editor.
 
 ### A note on the error messages
 

@@ -30,6 +30,7 @@ const GEO = await import('./b-geometry.mjs');
 const RIP = await import('./b-ripple.mjs');
 const SCO = await import('./b-scopes.mjs');
 const LDN = await import('./b-loudness.mjs');
+const ES = await import('./b-easings.mjs');
 console.log('types.ts');
 await t('emptyTracks creates the fixed track set, including Adjustment', () => {
   const tr = T.emptyTracks();
@@ -3304,6 +3305,162 @@ await t('the vignette ramp is cached against its strength', () => {
   // float64, or the column rounding shifts the ramp index by a level
   assert.ok(/private vigCols = new Float64Array\(0\)/.test(src),
     'column squares must be float64 to stay bit-identical');
+});
+console.log('easings.ts — keyframes that are not just linear');
+await t('every ease hits its endpoints exactly', () => {
+  // A curve that does not reach 1 at the end never arrives, so the clip holds
+  // at 99% forever. This is the one property that must be exact, not close.
+  for (const p of ES.EASE_PRESETS) {
+    const a = ES.easeValue(p.id, 0);
+    const b = ES.easeValue(p.id, 1);
+    if (p.id === 'hold') {
+      // the step: 0 until the very end, then 1
+      assert.equal(a, 0, `${p.id} must start at 0`);
+      assert.equal(b, 1, `${p.id} must end at 1`);
+    } else {
+      assert.ok(Math.abs(a) < 1e-9, `${p.id} f(0) should be 0, got ${a}`);
+      assert.ok(Math.abs(b - 1) < 1e-9, `${p.id} f(1) should be 1, got ${b}`);
+    }
+  }
+});
+await t('eases are monotonic — motion never runs backwards', () => {
+  for (const p of ES.EASE_PRESETS) {
+    let prev = -Infinity;
+    for (let i = 0; i <= 100; i++) {
+      const v = ES.easeValue(p.id, i / 100);
+      assert.ok(v >= prev - 1e-9, `${p.id} went backwards at ${(i / 100).toFixed(2)}`);
+      prev = v;
+    }
+  }
+});
+await t('the named eases are actually different shapes', () => {
+  const at = (id) => [0.25, 0.5, 0.75].map((k) => ES.easeValue(id, k));
+  const lin = at('linear');
+  assert.deepEqual(lin, [0.25, 0.5, 0.75], 'linear must be the identity');
+  // ease-in starts slower than linear, ease-out faster
+  assert.ok(at('easeIn')[0] < lin[0] - 0.05, 'ease-in should lag at 25%');
+  assert.ok(at('easeOut')[0] > lin[0] + 0.05, 'ease-out should lead at 25%');
+  assert.ok(at('snap')[0] > at('easeOut')[0], 'snap should be the fastest to arrive');
+  // all-round ease-in-out is symmetric about the midpoint
+  const eio = at('easeInOut');
+  assert.ok(Math.abs(eio[1] - 0.5) < 0.02, 'ease-in-out should cross 0.5 at the middle');
+  assert.ok(Math.abs(eio[0] - (1 - eio[2])) < 0.05, 'ease-in-out should be symmetric');
+});
+await t('hold is a true step, not a fast ramp', () => {
+  assert.equal(ES.easeValue('hold', 0.5), 0);
+  assert.equal(ES.easeValue('hold', 0.99), 0);
+  assert.equal(ES.easeValue('hold', 1), 1);
+});
+await t('a custom curve can overshoot, deliberately', () => {
+  const over = { x1: 0.3, y1: 1.6, x2: 0.5, y2: 1 };
+  assert.ok(ES.easeValue('custom', 0.5, over) > 1, 'an overshoot curve should exceed 1 mid-way');
+  assert.ok(Math.abs(ES.easeValue('custom', 1, over) - 1) < 1e-9, 'but still land on 1');
+});
+await t('solving the bezier is accurate where Newton stalls', () => {
+  // x1 = x2 = 0 is a flat start: the derivative vanishes at t=0, which is where
+  // a naive Newton loop divides by ~0 and returns nonsense.
+  const flat = { x1: 0, y1: 0, x2: 0, y2: 1 };
+  for (let i = 0; i <= 40; i++) {
+    const v = ES.solveBezier(flat, i / 40);
+    assert.ok(v >= 0 && v <= 1, `out of range at ${i}: ${v}`);
+  }
+  // With x1 = x2 = 0 the time axis is x(t) = t³, so the curve arrives at a given
+  // progress sooner than a straight line does — it leads linear, it does not lag.
+  assert.ok(ES.solveBezier(flat, 0.25) > 0.25,
+    'the flat-start curve should lead linear, got ' + ES.solveBezier(flat, 0.25));
+  // and the solve must stay monotonic through the flat region
+  let prev = -Infinity;
+  for (let i = 0; i <= 60; i++) {
+    const v = ES.solveBezier(flat, i / 60);
+    assert.ok(v >= prev - 1e-9, 'flat-start solve went backwards at ' + i);
+    prev = v;
+  }
+});
+await t('animAt honours easing, and old projects stay linear', () => {
+  const kf = (at, x, ease) => ({ at, v: { ...T.DEFAULT_ANIM, x }, ...(ease ? { ease } : {}) });
+  // no ease at all = the behaviour every saved project already has
+  const plain = [kf(0, 0), kf(2, 1)];
+  assert.ok(Math.abs(E.animAt(plain, T.DEFAULT_ANIM, 1).x - 0.5) < 1e-9,
+    'a keyframe without an ease must interpolate linearly');
+  // easeIn lags the linear midpoint
+  const eased = [kf(0, 0, 'easeIn'), kf(2, 1)];
+  assert.ok(E.animAt(eased, T.DEFAULT_ANIM, 1).x < 0.45,
+    'easeIn should be behind linear at the midpoint');
+  // easeOut leads it
+  const out = [kf(0, 0, 'easeOut'), kf(2, 1)];
+  assert.ok(E.animAt(out, T.DEFAULT_ANIM, 1).x > 0.55,
+    'easeOut should be ahead of linear at the midpoint');
+  // the ease belongs to the OUTGOING keyframe: the second one's ease must not
+  // affect the segment before it
+  const tail = [kf(0, 0), kf(2, 1, 'easeIn')];
+  assert.ok(Math.abs(E.animAt(tail, T.DEFAULT_ANIM, 1).x - 0.5) < 1e-9,
+    'a later keyframe\'s ease must not reach backwards');
+  // and every value still lands exactly on its keyframes
+  assert.equal(E.animAt(eased, T.DEFAULT_ANIM, 0).x, 0);
+  assert.equal(E.animAt(eased, T.DEFAULT_ANIM, 2).x, 1);
+});
+await t('easing survives duplicating a clip (behavioural, not a regex)', () => {
+  // The regex test below proves the helper exists; this proves it works. A
+  // regex cannot catch a clone that drops a field, which is how this kind of
+  // bug actually ships.
+  const proj = T.newProject('ease dup', '16:9');
+  proj.main.push({
+    id: 'm1', mediaId: 'med', in: 0, out: 4, speed: 1, reverse: false, filter: 'none',
+    adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+    volume: 1, muted: false, transitionIn: 'none', transitionDur: 0,
+    keyframes: [
+      { at: 0, v: { ...T.DEFAULT_ANIM, x: 0 }, ease: 'easeIn' },
+      { at: 2, v: { ...T.DEFAULT_ANIM, x: 1 }, ease: 'custom', bez: { x1: 0.1, y1: 0.9, x2: 0.2, y2: 1 } },
+    ],
+  });
+  const e = new E.Engine(proj);
+  e.duplicateMainClip('m1');
+  assert.equal(e.project.main.length, 2, 'the duplicate was not created');
+  const copy = e.project.main[1];
+  assert.ok(copy.keyframes && copy.keyframes.length === 2, 'keyframes were not copied');
+  assert.equal(copy.keyframes[0].ease, 'easeIn', 'the ease was dropped by the duplicate');
+  assert.equal(copy.keyframes[1].ease, 'custom', 'the custom ease was dropped');
+  assert.deepEqual(copy.keyframes[1].bez, { x1: 0.1, y1: 0.9, x2: 0.2, y2: 1 });
+  // and the control points must be a copy, not shared with the original
+  copy.keyframes[1].bez.x1 = 0.99;
+  assert.equal(e.project.main[0].keyframes[1].bez.x1, 0.1,
+    'the duplicate shares bezier control points with the original');
+});
+await t('setKeyframeEase writes to the keyframe near the playhead only', () => {
+  const proj = T.newProject('ease set', '16:9');
+  proj.main.push({
+    id: 'm1', mediaId: 'med', in: 0, out: 4, speed: 1, reverse: false, filter: 'none',
+    adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+    volume: 1, muted: false, transitionIn: 'none', transitionDur: 0,
+    keyframes: [
+      { at: 0, v: { ...T.DEFAULT_ANIM, x: 0 } },
+      { at: 1, v: { ...T.DEFAULT_ANIM, x: 0.5 } },
+      { at: 2, v: { ...T.DEFAULT_ANIM, x: 1 } },
+    ],
+  });
+  const e = new E.Engine(proj);
+  assert.ok(e.setKeyframeEase('m1', 1, 'easeOut'), 'setting the ease should succeed');
+  const kfs = e.project.main[0].keyframes;
+  assert.equal(kfs[1].ease, 'easeOut');
+  assert.equal(kfs[0].ease, undefined, 'a neighbouring keyframe must not be touched');
+  assert.equal(kfs[2].ease, undefined);
+  // switching away from custom must clear stale control points
+  e.setKeyframeEase('m1', 1, 'custom', { x1: 0.2, y1: 0.4, x2: 0.6, y2: 0.8 });
+  assert.deepEqual(kfs[1].bez, { x1: 0.2, y1: 0.4, x2: 0.6, y2: 0.8 });
+  e.setKeyframeEase('m1', 1, 'easeIn');
+  assert.equal(kfs[1].bez, undefined, 'stale bezier control points survived a preset change');
+  // an unknown clip is a no-op, not a throw
+  assert.equal(e.setKeyframeEase('nope', 0, 'easeIn'), false);
+});
+await t('easing survives a clip duplicate and a split', () => {
+  // Both paths rebuild keyframes by hand, which is exactly how a new field gets
+  // dropped. The clone helper exists so they cannot.
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/function cloneKeyframe/.test(src), 'the clone helper must exist');
+  assert.ok(!/keyframes:\s*c\.keyframes\?\.map\(\(k\) => \(\{ at: k\.at/.test(src),
+    'duplicating must not rebuild keyframes by hand');
+  assert.ok(/cloneKeyframe\(k, k\.at - local\)/.test(src),
+    'splitting must shift the time AND keep the ease');
 });
 console.log('ripple.ts — deleting without desyncing the timeline');
 const mkTracks = () => [

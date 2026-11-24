@@ -36,6 +36,7 @@ const MODULES = [
   "ripple",
   "scopes",
   "loudness",
+  "easings",
 ];
 
 for (const name of MODULES) {
