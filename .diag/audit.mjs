@@ -26,12 +26,18 @@ const FT = await import('./b-fonts.mjs');
 const PS = await import('./b-persistence.mjs');
 const PB = await import('./b-playback.mjs');
 const LK = await import('./b-looks.mjs');
+const GEO = await import('./b-geometry.mjs');
+const RIP = await import('./b-ripple.mjs');
+const SCO = await import('./b-scopes.mjs');
+const LDN = await import('./b-loudness.mjs');
 console.log('types.ts');
-await t('emptyTracks = 3 fixed tracks', () => {
+await t('emptyTracks creates the fixed track set, including Adjustment', () => {
   const tr = T.emptyTracks();
-  assert.equal(tr.length, 3);
-  assert.ok(tr.some((x) => x.id === 't_text'));
-  assert.ok(tr.some((x) => x.id === 't_audio'));
+  // text + overlay + audio, plus the Adjustment track an effect band lives on
+  assert.equal(tr.length, 4);
+  for (const id of ['t_text', 't_overlay', 't_audio', 't_adjust']) {
+    assert.ok(tr.some((x) => x.id === id), `missing track ${id}`);
+  }
 });
 await t('mainClipDuration: plain speed', () => {
   assert.ok(Math.abs(T.mainClipDuration({ in: 1, out: 5, speed: 2 }) - 2) < 1e-9);
@@ -3091,6 +3097,344 @@ await t('every effect has a family and a display name', () => {
 await t('the named effects creators search for exist', () => {
   for (const id of ['motion-blur', 'glow', 'chroma', 'light-rays', 'speed-push', 'beat-zoom', 'focus-in']) {
     assert.ok(T.EFFECTS.some((e2) => e2.id === id), `${id} missing from EFFECTS`);
+  }
+});
+
+
+// ================= stage 11: what CapCut and Kdenlive have ====================
+console.log('geometry.ts — crop and transform');
+await t('the cover window keeps the frame aspect at zoom 1', () => {
+  // landscape source into a vertical frame: the window is a tall slice
+  const r = GEO.coverSourceRect(1920, 1080, 1080, 1920, {});
+  assert.ok(Math.abs(r.swp / r.shp - 1080 / 1920) < 1e-6, 'window aspect != frame aspect');
+  assert.ok(r.swp <= 1920 && r.shp <= 1080, 'window escapes the source');
+});
+await t('the window never escapes the source, at any anchor or zoom', () => {
+  for (const ax of [0, 0.25, 0.5, 0.75, 1]) {
+    for (const ay of [0, 0.5, 1]) {
+      for (const zoom of [1, 1.5, 3, 8]) {
+        const r = GEO.coverSourceRect(1920, 1080, 1080, 1920, { ax, ay, zoom });
+        assert.ok(r.sx >= -1e-6, `sx ${r.sx} < 0 at ax=${ax} zoom=${zoom}`);
+        assert.ok(r.sy >= -1e-6, `sy ${r.sy} < 0`);
+        assert.ok(r.sx + r.swp <= 1920 + 1e-6, `right edge past source at ax=${ax} zoom=${zoom}`);
+        assert.ok(r.sy + r.shp <= 1080 + 1e-6, `bottom edge past source`);
+      }
+    }
+  }
+});
+await t('the anchor moves the window the way its name says', () => {
+  const left = GEO.coverSourceRect(1920, 1080, 1080, 1920, { ax: 0.1 });
+  const mid = GEO.coverSourceRect(1920, 1080, 1080, 1920, { ax: 0.5 });
+  const right = GEO.coverSourceRect(1920, 1080, 1080, 1920, { ax: 0.9 });
+  assert.ok(left.sx < mid.sx && mid.sx < right.sx, 'ax does not run left to right');
+});
+await t('the default geometry reproduces the old centred cover fit exactly', () => {
+  // This is the compatibility promise: a project saved before crop existed has
+  // no `frame`, and must render identically. Centred cover means the window is
+  // centred on the source.
+  const sw = 1920, sh = 1080, W = 1080, H = 1920;
+  const r = GEO.coverSourceRect(sw, sh, W, H, undefined);
+  const cover = Math.max(W / sw, H / sh);
+  const expectedW = W / cover;
+  const expectedH = H / cover;
+  assert.ok(Math.abs(r.swp - expectedW) < 1e-6, 'width differs from the old cover fit');
+  assert.ok(Math.abs(r.shp - expectedH) < 1e-6, 'height differs');
+  assert.ok(Math.abs(r.sx - (sw - expectedW) / 2) < 1e-6, 'not centred horizontally');
+  assert.ok(Math.abs(r.sy - (sh - expectedH) / 2) < 1e-6, 'not centred vertically');
+  assert.equal(GEO.isDefaultGeometry(undefined), true);
+  assert.equal(GEO.isDefaultGeometry({}), true);
+  assert.equal(GEO.isDefaultGeometry({ zoom: 2 }), false);
+});
+await t('a crop aspect produces a window of that exact shape', () => {
+  for (const aspect of [1, 4 / 5, 9 / 16, 16 / 9, 21 / 9]) {
+    const r = GEO.coverSourceRect(1920, 1080, 1080, 1920, { crop: aspect });
+    assert.ok(
+      Math.abs(r.swp / r.shp - aspect) < 1e-6,
+      `asked for ${aspect.toFixed(3)}, window is ${(r.swp / r.shp).toFixed(3)}`,
+    );
+    assert.ok(r.swp <= 1920 + 1e-6 && r.shp <= 1080 + 1e-6, 'crop exceeded the source');
+  }
+});
+await t('a uniform zoom does not change the aspect (the bug this split avoids)', () => {
+  const a = GEO.coverSourceRect(1920, 1080, 1080, 1920, { zoom: 1 });
+  const b = GEO.coverSourceRect(1920, 1080, 1080, 1920, { zoom: 3 });
+  assert.ok(Math.abs(a.swp / a.shp - b.swp / b.shp) < 1e-9, 'zoom changed the aspect ratio');
+  assert.ok(b.swp < a.swp, 'zoom did not tighten the window');
+});
+await t('dragging the picture right moves the crop window LEFT (inverse)', () => {
+  // The classic crop bug: the picture moves the wrong way. Right-drag must
+  // reveal content to the LEFT of the source, so the window anchor decreases.
+  const d = GEO.anchorFromDrag({ ax: 0.5, ay: 0.5 }, 100, 0, 1080, 1920, 1920, 1080);
+  assert.ok(d.ax < 0.5, `right-drag moved the anchor to ${d.ax}, which moves the picture left`);
+  const u = GEO.anchorFromDrag({ ax: 0.5, ay: 0.5 }, 0, -100, 1080, 1920, 1920, 1080);
+  assert.ok(u.ay > 0.5, 'up-drag should show more of the bottom, so the anchor rises');
+});
+await t('a drag is clamped to the source and cannot push it off-screen', () => {
+  const far = GEO.anchorFromDrag({ ax: 0.5, ay: 0.5 }, 100000, 100000, 1080, 1920, 1920, 1080);
+  assert.ok(far.ax >= 0 && far.ax <= 1 && far.ay >= 0 && far.ay <= 1);
+});
+await t('fillZoomForCrop makes a cropped window cover the frame again', () => {
+  assert.equal(GEO.fillZoomForCrop(null, 1080 / 1920), 1);
+  const z = GEO.fillZoomForCrop(1, 1080 / 1920);
+  assert.ok(Math.abs(z - 1920 / 1080) < 1e-6, `expected 1.778, got ${z}`);
+  assert.ok(GEO.fillZoomForCrop(16 / 9, 9 / 16) > 1, 'a wide crop in a tall frame needs zoom');
+});
+await t('rotation wraps instead of clamping', () => {
+  assert.equal(GEO.clampGeometry({ rot: 190 }).rot, -170);
+  assert.equal(GEO.clampGeometry({ rot: -190 }).rot, 170);
+  assert.equal(GEO.clampGeometry({ rot: 360 }).rot, 0);
+  assert.equal(GEO.clampGeometry({ rot: -450 }).rot, -90);
+});
+await t('a NaN or missing field never becomes NaN in the renderer', () => {
+  // NaN in a transform silently blanks the canvas — this is why every field is
+  // sanitised before it reaches drawImage.
+  const g = GEO.clampGeometry({ ax: NaN, ay: undefined, zoom: NaN, rot: NaN, crop: NaN });
+  for (const [k, v] of Object.entries(g)) {
+    if (k === 'crop') continue;
+    assert.ok(Number.isFinite(v), `${k} came out as ${v}`);
+  }
+  assert.equal(g.crop, null);
+});
+
+await t('crop survives a project save/restore round trip (JSON, like IndexedDB)', () => {
+  // A new clip field that is not in the type survives JSON but is dropped by any
+  // code that rebuilds clips field by field. Snapshot/restore is the engine's own
+  // undo path, so it is the honest test of whether crop persists.
+  const proj = T.newProject('crop round trip', '16:9');
+  proj.main.push({
+    id: 'm1', mediaId: 'med', in: 0, out: 4, speed: 1, reverse: false, filter: 'none',
+    adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+    volume: 1, muted: false, transitionIn: 'none', transitionDur: 0,
+    frame: { ax: 0.2, ay: 0.8, zoom: 2.5, rot: 15, crop: 1 },
+  });
+  const json = JSON.parse(JSON.stringify(proj));
+  const back = json.main[0].frame;
+  assert.ok(back, 'frame was dropped by JSON (it should not be, but prove it)');
+  assert.equal(back.ax, 0.2);
+  assert.equal(back.crop, 1);
+  assert.equal(back.rot, 15);
+  const g = GEO.clampGeometry(back);
+  assert.equal(g.zoom, 2.5, 'zoom lost in the round trip');
+});
+await t('an adjustment band is a clip with a grade and no picture', () => {
+  const proj = T.newProject('band', '9:16');
+  const track = proj.tracks.find((t2) => t2.id === 't_adjust');
+  assert.ok(track, 'the Adjustment track is missing from a new project');
+  const band = {
+    id: 'b1', kind: 'adjustment', start: 1, duration: 3,
+    adjust: { brightness: 100, contrast: 120, saturation: 90, hue: 0 },
+  };
+  track.clips.push(band);
+  const json = JSON.parse(JSON.stringify(proj));
+  const saved = json.tracks.find((t2) => t2.id === 't_adjust').clips[0];
+  assert.equal(saved.kind, 'adjustment');
+  assert.equal(saved.adjust.contrast, 120);
+  // a band must carry no text, or it arrives with "Your text" on screen
+  assert.equal(saved.text, undefined);
+});
+await t('the adjustment kind is distinct from every media kind', () => {
+  // drawMainItem only draws text/image/video; a band must not be mistaken for one
+  const kinds = ['text', 'image', 'video', 'audio', 'adjustment'];
+  assert.equal(new Set(kinds).size, kinds.length);
+});
+await t('an adjustment band renders at full size when exporting', () => {
+  // The band buffer is downscaled in the preview, but an export must be sharp.
+  // previewMaxSide is 0 for exports; a cap applied there would silently soften
+  // every graded band in a 1080p or 4K render.
+  assert.equal(E.adjustmentScale(0, 3840, 2160), 1, 'export was downscaled');
+  assert.equal(E.adjustmentScale(0, 1280, 720), 1, 'export was downscaled');
+  // preview stays bounded
+  const s4k = E.adjustmentScale(1920, 3840, 2160);
+  assert.ok(s4k < 1, 'a 4K preview band should be reduced');
+  assert.ok(Math.abs(s4k * 3840 - 1280) < 1, 'preview band should be ~1280 wide, got ' + s4k * 3840);
+  // a preview smaller than 1280 is never enlarged
+  assert.equal(E.adjustmentScale(854, 854, 480), 1, 'a small preview was upscaled');
+  // a degenerate size must not divide by zero
+  assert.ok(Number.isFinite(E.adjustmentScale(1920, 0, 0)));
+});
+console.log('ripple.ts — deleting without desyncing the timeline');
+const mkTracks = () => [
+  { id: 't_text', name: 'Text', clips: [{ id: 'cap', kind: 'text', start: 7, duration: 2 }] },
+  { id: 't_audio', name: 'Audio', clips: [{ id: 'mus', kind: 'audio', start: 0, duration: 15 }] },
+];
+await t('ripple moves overlays that start after the cut', () => {
+  const r = RIP.removeMainClip(
+    { main: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], tracks: mkTracks() },
+    'a', 'ripple', (i) => i * 5, () => 5,
+  );
+  assert.equal(r.overlaysMoved, 1);
+  assert.equal(r.shifted, 5);
+  // the caption at 7s must follow the picture that used to be under it
+  assert.equal(r.tracks[0].clips[0].start, 2);
+  // a music bed that STARTED before the cut is deliberately untouched: it is
+  // carrying across the edit and moving it would break the sync
+  assert.equal(r.tracks[1].clips[0].start, 0);
+});
+await t('ripple never leaves an overlay at a negative time', () => {
+  const tracks = [{ id: 't_text', name: 'Text', clips: [{ id: 'cap', kind: 'text', start: 5, duration: 2 }] }];
+  const r = RIP.rippleOverlays(tracks, 6, -20);
+  assert.ok(r.tracks[0].clips[0].start >= 0, 'a negative start would draw the overlay before the video');
+});
+await t('lift keeps the timing and cuts what lived in the hole', () => {
+  const r = RIP.removeMainClip(
+    { main: [{ id: 'a' }, { id: 'b' }], tracks: mkTracks() },
+    'a', 'lift', (i) => i * 5, () => 5,
+  );
+  assert.equal(r.shifted, 0, 'lift must not shift anything');
+  // the music bed 0-15 loses the first 5 seconds
+  assert.equal(r.tracks[1].clips[0].start, 0);
+  assert.equal(r.tracks[1].clips[0].duration, 10);
+});
+await t('a cut through the middle of an overlay splits it in two', () => {
+  const tracks = [{ id: 't_audio', name: 'Audio', clips: [{ id: 'mus', kind: 'audio', start: 0, duration: 10 }] }];
+  const r = RIP.cutOverlays(tracks, { start: 3, end: 6 });
+  assert.equal(r.tracks[0].clips.length, 2, 'a straddling clip must become two pieces');
+  assert.equal(r.tracks[0].clips[0].duration, 3);
+  assert.equal(r.tracks[0].clips[1].duration, 4);
+  assert.equal(r.tracks[0].clips[1].start, 3);
+});
+await t('a sliver shorter than MIN_KEEP is dropped, not left behind', () => {
+  const tracks = [{ id: 't_audio', name: 'Audio', clips: [{ id: 's', kind: 'audio', start: 2.98, duration: 3 }] }];
+  const r = RIP.cutOverlays(tracks, { start: 3, end: 6 });
+  // 0.02s of audio is a click, not a clip: nothing survives
+  assert.equal(r.tracks[0].clips.length, 0, 'the sliver survived as a click');
+  assert.equal(r.removed, 1);
+});
+await t('deleting a clip that does not exist changes nothing', () => {
+  assert.equal(RIP.removeMainClip({ main: [], tracks: mkTracks() }, 'nope', 'ripple', () => 0, () => 5), null);
+});
+await t('a trimmed tail keeps its source timing, so audio does not jump', () => {
+  const tracks = [{ id: 't_audio', name: 'Audio', clips: [{ id: 'm', kind: 'audio', start: 0, duration: 10, sourceOffset: 0 }] }];
+  const r = RIP.cutOverlays(tracks, { start: 0, end: 4 });
+  assert.equal(r.tracks[0].clips[0].sourceOffset, 4, 'the tail must resume 4s into the source');
+});
+
+console.log('scopes.ts — measuring what the grade did');
+await t('the histogram counts exactly the pixels it was given', () => {
+  const px = [];
+  for (let i = 0; i < 50; i++) px.push(255, 255, 255, 255);
+  for (let i = 0; i < 50; i++) px.push(0, 0, 0, 255);
+  const r = SCO.buildScopes(new Uint8ClampedArray(px), { step: 1, width: 10 });
+  assert.equal(r.histogram.total, 100);
+  assert.equal(r.histogram.r[255], 50);
+  assert.equal(r.histogram.r[0], 50);
+  assert.equal(r.histogram.clipped, 50);
+  assert.equal(r.histogram.crushed, 50);
+});
+await t('luma uses the 601 weights, not a naive average', () => {
+  // green is much brighter than blue to the eye; an average would call them equal
+  assert.ok(SCO.lumaOf(0, 255, 0) > SCO.lumaOf(0, 0, 255) * 4);
+  assert.equal(SCO.lumaOf(255, 255, 255), 255);
+  assert.equal(SCO.lumaOf(0, 0, 0), 0);
+});
+await t('every channel is histogrammed separately (a luma-only plot hides clipping)', () => {
+  // pure red: only the R channel is clipped. A luma histogram would not show it.
+  const px = [];
+  for (let i = 0; i < 10; i++) px.push(255, 0, 0, 255);
+  const r = SCO.buildScopes(new Uint8ClampedArray(px), { step: 1, width: 10 });
+  assert.equal(r.histogram.r[255], 10);
+  assert.equal(r.histogram.g[255], 0);
+  assert.equal(r.histogram.b[255], 0);
+  assert.equal(r.histogram.clipped, 10, 'a blown red channel must count as clipped');
+});
+await t('exposure reading names clipped, crushed, flat and balanced', () => {
+  const make = (bins, total) => {
+    const h = { r: new Uint32Array(256), g: new Uint32Array(256), b: new Uint32Array(256), y: new Uint32Array(256), peak: 1, total, clipped: 0, crushed: 0 };
+    h.y.set(bins);
+    return h;
+  };
+  const hot = make(new Uint32Array(256), 100);
+  hot.clipped = 20; // 20%
+  assert.equal(SCO.readExposure(hot).verdict, 'clipped');
+
+  const dead = make(new Uint32Array(256), 100);
+  dead.crushed = 40;
+  assert.equal(SCO.readExposure(dead).verdict, 'crushed');
+
+  const flatBins = new Uint32Array(256);
+  flatBins[120] = 100;
+  assert.equal(SCO.readExposure(make(flatBins, 100)).verdict, 'flat');
+
+  const full = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) full[i] = 1;
+  assert.equal(SCO.readExposure(make(full, 256)).verdict, 'balanced');
+});
+await t('the vectorscope centres neutral colours and spreads saturated ones', () => {
+  const grey = [];
+  for (let i = 0; i < 20; i++) grey.push(128, 128, 128, 255);
+  const g = SCO.buildScopes(new Uint8ClampedArray(grey), { step: 1, width: 10 });
+  // grey has zero chroma, so it must land on the centre bin
+  const centre = (g.vectorscope.n / 2) * g.vectorscope.n + g.vectorscope.n / 2;
+  assert.ok(g.vectorscope.data[Math.floor(centre)] >= 20, 'neutral did not land at the centre');
+  assert.ok(g.vectorscope.meanSaturation < 0.01, 'grey reported saturation');
+});
+await t('channel balance names a warm cast and a neutral image', () => {
+  const warmBins = (r, gg, b) => {
+    const h = { r: new Uint32Array(256), g: new Uint32Array(256), b: new Uint32Array(256), y: new Uint32Array(256), peak: 1, total: 10, clipped: 0, crushed: 0 };
+    h.r[r] = 10; h.g[gg] = 10; h.b[b] = 10;
+    return h;
+  };
+  assert.equal(SCO.channelBalance(warmBins(180, 128, 100)).cast, 'warm');
+  assert.equal(SCO.channelBalance(warmBins(128, 128, 128)).cast, 'neutral');
+  assert.equal(SCO.channelBalance(warmBins(90, 128, 180)).cast, 'cool');
+});
+await t('sampling every Nth pixel is proportional and still correct', () => {
+  const px = [];
+  for (let i = 0; i < 100; i++) px.push(200, 100, 50, 255);
+  const all = SCO.buildScopes(new Uint8ClampedArray(px), { step: 1, width: 10 });
+  const some = SCO.buildScopes(new Uint8ClampedArray(px), { step: 4, width: 10 });
+  assert.equal(all.histogram.total, 100);
+  assert.equal(some.histogram.total, 25);
+  // the same colour every time, so the shape must not change with the step
+  assert.equal(some.histogram.r[200], 25);
+});
+
+console.log('loudness.ts — levels that mean something across platforms');
+await t('dB conversion round-trips and never inverts phase', () => {
+  assert.ok(Math.abs(LDN.linearToDb(0.5) - -6.0206) < 0.01);
+  assert.ok(Math.abs(LDN.dbToLinear(-6.0206) - 0.5) < 0.001);
+  assert.equal(LDN.linearToDb(0), -70);
+  assert.equal(LDN.dbToLinear(-Infinity), 0);
+  assert.ok(LDN.dbToLinear(-1e9) >= 0, 'a huge attenuation must not go negative');
+});
+await t('peak measurement is exact on a known tone', () => {
+  const sr = 48000;
+  const a = new Float32Array(sr);
+  for (let i = 0; i < sr; i++) a[i] = 0.5 * Math.sin((2 * Math.PI * 1000 * i) / sr);
+  assert.ok(Math.abs(LDN.peakDb([a]) - -6.0206) < 0.05);
+});
+await t('silence is gated, not reported as a very small number', () => {
+  const z = new Float32Array(48000);
+  assert.equal(LDN.approximateLufs([z], 48000), -70);
+  const n = LDN.normaliseGain([z], -14, 48000);
+  assert.equal(n.gainDb, 0, 'normalising silence must not produce a huge gain');
+});
+await t('normalising a quiet tone lands on the target', () => {
+  const sr = 48000;
+  const a = new Float32Array(sr * 2);
+  for (let i = 0; i < a.length; i++) a[i] = 0.05 * Math.sin((2 * Math.PI * 1000 * i) / sr);
+  const n = LDN.normaliseGain([a], -14, sr);
+  assert.ok(Math.abs(n.measuredLufs + n.gainDb - -14) < 0.01, 'the gain does not reach the target');
+  assert.ok(n.gain > 1, 'a quiet clip should be turned up');
+});
+await t('gain is clamped to a sane range and says when it clamped', () => {
+  const tiny = new Float32Array([1e-7, 1e-7, 1e-7]);
+  const r = LDN.normaliseGain([tiny], -14, 48000);
+  assert.ok(Math.abs(r.gainDb) <= 24, `gain ${r.gainDb} escaped the clamp`);
+});
+await t('the advice warns when normalising would clip', () => {
+  const hot = { measuredLufs: -20, gainDb: 10, gain: 3, clamped: false };
+  const msg = LDN.normaliseAdvice(hot, -2);
+  assert.match(msg, /clip/i, 'a peak that would exceed 0 dBFS must be called out');
+  const ok = LDN.normaliseAdvice({ measuredLufs: -20, gainDb: 6, gain: 2, clamped: false }, -10);
+  assert.match(ok, /turn this up/i);
+  assert.match(LDN.normaliseAdvice({ measuredLufs: -70, gainDb: 0, gain: 1, clamped: false }, -70), /silent/i);
+});
+await t('every platform target is a plausible negative LUFS value', () => {
+  assert.ok(LDN.LOUDNESS_TARGETS.length >= 4, 'too few targets');
+  for (const t2 of LDN.LOUDNESS_TARGETS) {
+    assert.ok(t2.lufs < 0 && t2.lufs > -30, `${t2.id} target ${t2.lufs} is not a plausible LUFS`);
+    assert.ok(typeof t2.hint === "string" && t2.hint.length > 10, `${t2.id} has no usable hint`);
   }
 });
 

@@ -34,6 +34,7 @@ import {
 } from "./types";
 import { resolveComposition } from "./timeline-resolver";
 import { LOOK_BY_ID, LOOKS, resolveLookId, type LookFinish } from "./looks";
+import { clampGeometry, coverSourceRect, isDefaultGeometry, type FrameGeometry } from "./geometry";
 import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-plan";
 import { audioFxRecipe, buildAudioFx, makeImpulse, type AudioFxId } from "./audio-fx";
 import { applyCurveLuts, buildCurveLuts, curvesActive } from "./curves";
@@ -42,6 +43,8 @@ import { blocksPlayback, shouldHardStop, type VideoPlaybackState } from "./playb
 import { sourceFor } from "./proxy";
 import { applyLut, type LutTable } from "./luts";
 import { sampleTimeline } from "./timeline";
+import { removeMainClip, type RemoveMainResult, type RippleMode } from "./ripple";
+import { buildScopes, type Histogram, type Vectorscope, type Waveform } from "./scopes";
 import { probeGif } from "./utils";
 import { GifReader, GifWriter } from "omggif";
 
@@ -565,6 +568,20 @@ async function supportsAacEncoder(
   }
 }
 
+/**
+ * How much to shrink the adjustment-layer buffer by.
+ *
+ * A band grades the whole frame, so it pays a full-frame readback plus a
+ * per-pixel pass. In the preview that is capped to 1280 px on the long side so
+ * scrubbing stays responsive. Exports must not be capped: `previewMaxSide` is 0
+ * while exporting, and honouring that is the difference between a sharp 4K
+ * render and a visibly soft band.
+ */
+export function adjustmentScale(previewMaxSide: number, W: number, H: number): number {
+  if (previewMaxSide <= 0) return 1;
+  return Math.min(1, 1280 / Math.max(1, W, H));
+}
+
 export class Engine {
   project: Project;
   media: Map<string, MediaItem> = new Map();
@@ -602,6 +619,8 @@ export class Engine {
   private lutOff: HTMLCanvasElement | null = null;
   /** scratch copy for the sharpen pass, reused across frames */
   private sharpenBuf: Uint8ClampedArray | null = null;
+  /** scratch buffer for adjustment layers (readback + put-back) */
+  private adjustBuf: HTMLCanvasElement | null = null;
   private vhsPattern: HTMLCanvasElement | null = null;
   private impulse: AudioBuffer | null = null;
 
@@ -2142,6 +2161,18 @@ export class Engine {
       }
     }
 
+    // --- adjustment layers ---
+    // Applied to everything underneath, which by this point is the main track
+    // (and any adjustment band already drawn). They are pulled out of the
+    // overlay loop because a band is not an overlay: it has no picture, and
+    // drawing it as one would put it on top of the text it is meant to grade.
+    for (const layer of comp.overlays) {
+      if (layer.clip.kind !== "adjustment") continue;
+      const tr = this.project.tracks.find((track) => track.id === layer.trackId);
+      if (tr?.hidden) continue;
+      this.paintAdjustmentBand(ctx, layer.clip, W, H, t);
+    }
+
     // --- overlay tracks ---
     this.overlayRects.length = 0;
     for (const layer of comp.overlays) {
@@ -2153,6 +2184,8 @@ export class Engine {
       const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
       const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
       const anim = animAt(c.keyframes, this.animBase(c), localT);
+      // an adjustment band is not drawn here; it was applied above
+      if (c.kind === "adjustment") continue;
       if (c.kind === "text")
         this.drawText(ctx, c, W, H, fadeAlpha * clamp01(anim.opacity), localT, c.duration, anim);
       if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
@@ -2678,7 +2711,7 @@ export class Engine {
     } else if (glitching || eff === "vhs") {
       this.drawMainSliced(ctx, el, W, H, glitching, localT);
     } else {
-      this.drawImageFit(ctx, el, W, H, c.fit);
+      this.drawImageFit(ctx, el, W, H, c.fit, c.frame);
     }
 
     if (eff === "pulse-color") {
@@ -3175,13 +3208,13 @@ export class Engine {
     }
     const octx = off.getContext("2d", { willReadFrequently: true });
     if (!octx) {
-      this.drawImageFit(ctx, el, W, H, c.fit);
+      this.drawImageFit(ctx, el, W, H, c.fit, c.frame);
       return;
     }
     octx.filter = "none";
     octx.globalAlpha = 1;
     octx.clearRect(0, 0, W2, H2);
-    this.paintFit(octx, el, W2, H2, c.fit);
+    this.paintFit(octx, el, W2, H2, c.fit, c.frame);
     const img = octx.getImageData(0, 0, W2, H2);
     this.gradePixels(img.data, W2, H2, c.adjust);
     if (lut) applyLut(lut, img.data);
@@ -3194,6 +3227,85 @@ export class Engine {
     if (hslActive(c.hsl)) applyHsl(img.data, c.hsl!);
     octx.putImageData(img, 0, 0);
     ctx.drawImage(off, 0, 0, W, H);
+  }
+
+  /**
+   * Paint an adjustment band over everything drawn so far.
+   *
+   * Reads back the frame, applies the same `gradePixels` the per-clip path uses
+   * (so a band and a hand-graded clip cannot drift apart), and puts it back.
+   *
+   * The readback is the cost, so it is skipped when the band has no effect —
+   * an empty adjustment layer must not halve the frame rate just by existing.
+   * It also runs at preview resolution while previewing, because a grade is
+   * smooth: nobody can see that the multiply happened at 960px instead of 1920.
+   */
+  private paintAdjustmentBand(
+    ctx: CanvasRenderingContext2D,
+    band: OverlayClip,
+    W: number,
+    H: number,
+    t: number,
+  ) {
+    const a = band.adjust;
+    const look = band.filter ? LOOK_BY_ID.get(resolveLookId(band.filter)) : undefined;
+    const hasGrade = a ? this.gradeActive(a) : false;
+    const hasLook = !!(look && look.css);
+    const hasFinish = !!(look && (look.tint || look.grain || look.vignette));
+    if (!hasGrade && !hasLook && !hasFinish) return;
+
+    // a band fades in and out so it can be eased across a scene change
+    const rampIn = Math.min(1, (t - band.start) / 0.25);
+    const rampOut = Math.min(1, (band.start + band.duration - t) / 0.25);
+    const alpha = Math.max(0, Math.min(1, rampIn * rampOut));
+    if (alpha <= 0.001) return;
+
+    if (!this.adjustBuf) this.adjustBuf = document.createElement("canvas");
+    const off = this.adjustBuf;
+    // A band grades the whole frame, so it pays a full-frame readback plus a
+    // per-pixel pass — the same cost as grading one clip, but it can stack on
+    // top of a graded clip. Preview it no larger than 1280 on the long side,
+    // and render it at whatever size is asked for when exporting: capping an
+    // export here would ship a visibly soft band in a 1080p or 4K render.
+    const scale = adjustmentScale(this.previewMaxSide, W, H);
+    const W2 = Math.max(4, Math.round(W * scale));
+    const H2 = Math.max(4, Math.round(H * scale));
+    if (off.width !== W2 || off.height !== H2) {
+      off.width = W2;
+      off.height = H2;
+    }
+    const octx = off.getContext("2d", { willReadFrequently: true });
+    if (!octx) return;
+
+    octx.filter = "none";
+    octx.globalAlpha = 1;
+    octx.clearRect(0, 0, W2, H2);
+    octx.drawImage(this.canvas!, 0, 0, W2, H2);
+    if (hasGrade) {
+      const img = octx.getImageData(0, 0, W2, H2);
+      this.gradePixels(img.data, W2, H2, a!);
+      octx.putImageData(img, 0, 0);
+    }
+    if (hasLook || hasFinish) {
+      octx.save();
+      if (look?.css) octx.filter = look.css;
+      octx.globalAlpha = alpha;
+      octx.drawImage(off, 0, 0);
+      octx.restore();
+      if (hasFinish) {
+        const finish = finishFor(band.filter!);
+        if (finish) paintFinish(octx, finish, W2, H2, alpha);
+      }
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(off, 0, 0, W, H);
+      ctx.globalAlpha = 1;
+      return;
+    }
+    // grade-only: blend the graded copy back over the original by `alpha`
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(off, 0, 0, W, H);
+    ctx.restore();
   }
 
   /**
@@ -3312,8 +3424,9 @@ export class Engine {
     W: number,
     H: number,
     fit: MainClip["fit"],
+    frame?: FrameGeometry,
   ) {
-    this.paintFit(ctx, src, W, H, fit);
+    this.paintFit(ctx, src, W, H, fit, frame);
   }
 
   private paintFit(
@@ -3322,16 +3435,55 @@ export class Engine {
     W: number,
     H: number,
     fit: MainClip["fit"],
+    frame?: FrameGeometry,
   ) {
     const sw = srcW(src);
     const sh = srcH(src);
     if (!sw || !sh) return;
     const mode = fit ?? "cover";
+    const geo = frame && !isDefaultGeometry(frame) ? clampGeometry(frame) : null;
+
+    if (geo && geo.rot !== 0) {
+      // Rotation happens inside the clip's own save/restore so it cannot leak
+      // into the next clip. The frame is over-covered slightly while rotated,
+      // because a rotated rectangle does not fill its bounding box and the
+      // corners would otherwise show black wedges.
+      ctx.save();
+      ctx.translate(W / 2, H / 2);
+      ctx.rotate((geo.rot * Math.PI) / 180);
+      const rad = Math.abs((geo.rot * Math.PI) / 180);
+      const grow = Math.abs(Math.cos(rad)) + Math.abs(Math.sin(rad));
+      ctx.scale(grow, grow);
+      ctx.translate(-W / 2, -H / 2);
+      this.paintFit(ctx, src, W, H, mode, { ...geo, rot: 0 });
+      ctx.restore();
+      return;
+    }
+
     if (mode === "cover") {
+      if (geo) {
+        // crop: read a sub-rectangle of the source and stretch it to the frame.
+        // The zoom that makes the crop FILL the frame is folded in here so a
+        // 1:1 crop never letterboxes.
+        const rect = coverSourceRect(sw, sh, W, H, geo);
+        ctx.drawImage(src, rect.sx, rect.sy, rect.swp, rect.shp, 0, 0, W, H);
+        return;
+      }
       const scale = Math.max(W / sw, H / sh);
       const dw = sw * scale;
       const dh = sh * scale;
       ctx.drawImage(src, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      return;
+    }
+    if (geo) {
+      // contain / blur-fill honour the crop by masking to the cropped window
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.clip();
+      const rect = coverSourceRect(sw, sh, W, H, geo);
+      ctx.drawImage(src, rect.sx, rect.sy, rect.swp, rect.shp, 0, 0, W, H);
+      ctx.restore();
       return;
     }
     const scale = Math.min(W / sw, H / sh);
@@ -3841,11 +3993,29 @@ export class Engine {
     return false;
   }
 
-  deleteMainClip(id: string) {
-    const i = this.project.main.findIndex((c) => c.id === id);
-    if (i === -1) return;
-    this.project.main.splice(i, 1);
+  /**
+   * Remove a main clip, keeping the rest of the timeline attached to it.
+   *
+   * The main track is a spine, so splicing a clip out slides every later clip
+   * left — while overlays sit at absolute times and do not move. Before this,
+   * deleting one clip near the start silently desynced every caption, sticker
+   * and music cue after it. `removeMainClip` shifts them together; "lift" keeps
+   * the hole instead and trims what was in it.
+   */
+  deleteMainClip(id: string, mode: RippleMode = "ripple"): RemoveMainResult | null {
+    const spans = mainSpans(this.project);
+    const result = removeMainClip(
+      this.project,
+      id,
+      mode,
+      (i) => spans[i]?.start ?? 0,
+      (i) => (spans[i] ? spans[i].end - spans[i].start : 0),
+    );
+    if (!result) return null;
+    this.project.main = result.main;
+    this.project.tracks = result.tracks;
     this.bump();
+    return result;
   }
 
   duplicateMainClip(id: string) {
@@ -3905,6 +4075,30 @@ export class Engine {
     };
     clip.id = uid("tc");
     clip.kind = "text";
+    track.clips.push(clip);
+    this.bump();
+    return clip;
+  }
+
+  /**
+   * Add an adjustment band: a grade that applies to everything under it.
+   *
+   * Deliberately not a variant of addTextClip — a band has no text, no colour
+   * and no picture, and giving it text defaults would put "Your text" on screen
+   * the moment it was created.
+   */
+  addAdjustmentClip(trackId: string, start: number, duration: number): OverlayClip {
+    const track =
+      this.project.tracks.find((t) => t.id === trackId) ??
+      this.project.tracks.find((t) => t.id === "t_adjust") ??
+      this.project.tracks[this.project.tracks.length - 1];
+    const clip: OverlayClip = {
+      id: uid("adj"),
+      kind: "adjustment",
+      start: Math.max(0, start),
+      duration: Math.max(0.2, duration),
+      adjust: { brightness: 100, contrast: 106, saturation: 106, hue: 0 },
+    };
     track.clips.push(clip);
     this.bump();
     return clip;
@@ -4220,6 +4414,29 @@ export class Engine {
 
   snapshot(): string {
     return JSON.stringify(this.project);
+  }
+
+  /**
+   * Read the current preview frame and compute the three scopes.
+   *
+   * Sampled, not exhaustive: a 1080p readback is 8 MB and the scopes are a UI
+   * panel that updates while you drag a slider. Step 3 on each axis is 9x less
+   * work and indistinguishable at these bin counts. Returns null when there is
+   * no canvas yet, so the panel can show "nothing to measure" instead of lying.
+   */
+  scopes(step = 3): { histogram: Histogram; waveform: Waveform; vectorscope: Vectorscope } | null {
+    if (!this.canvas || !this.ctx) return null;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    if (w < 2 || h < 2) return null;
+    try {
+      const img = this.ctx.getImageData(0, 0, w, h);
+      return buildScopes(img.data, { step, width: w, height: h });
+    } catch {
+      // a tainted canvas (cross-origin media) throws on readback; the scopes are
+      // a convenience, so failing quietly beats breaking the editor
+      return null;
+    }
   }
 
   restore(snap: string) {
