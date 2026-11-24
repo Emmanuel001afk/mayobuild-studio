@@ -1065,6 +1065,47 @@ same `propValueAt` the renderer calls, and both now reach every draw path, but
 no pixel has been looked at. Speed curves remain in their own editor rather than
 this graph, and curves are per clip rather than per track.
 
+### A real rasteriser, and a claim of mine it disproved (Stage 10)
+
+Every stage until now ended with the same caveat: *no rasteriser in this
+environment, so the wiring is asserted but no pixel has been looked at.* That
+caveat was hiding something.
+
+`@napi-rs/canvas` is a Skia-backed canvas that runs in plain node, so the engine
+can be driven exactly as the browser drives it and the output inspected.
+`scripts/pixel-render.mjs` renders solid-colour sources through the real
+`Engine.draw()` and asserts the numbers that come out: a grey frame is grey, an
+opacity curve darkens it, a brightness curve moves it to the value the curve's
+own arithmetic predicts, a scale curve resizes the picture, and an overlay fades
+on its own track without touching the main one.
+
+**The first thing it did was disprove a bug I had "fixed" a stage earlier.** I
+had claimed that `drawMainGrade` being handed the raw clip meant an animated
+brightness froze whenever a pixel grade was present, and changed the call to
+pass a curved clip. The rasteriser showed `gradePixels` only ever reads
+temperature, tint, split-tone, sharpen and vignette — it has never read
+brightness, contrast or saturation. Those go through `ctx.filter`, which is
+assigned *before* the graded/ungraded branch, so both paths already had them.
+The change was a no-op and the regression it described did not exist.
+
+That is now corrected in the code, in the audit (which asserts the true reason
+instead), and here. A wrong explanation in a comment is worse than no comment:
+it sends the next reader to fix something that is not broken.
+
+**Why the pixel tests needed their own mutation run.** The first version of the
+brightness check only asked *"is the end brighter than the start"* — and a
+mutation that dropped the curve from the pixel path still passed, because the
+CSS filter path applies brightness too, so the picture moved either way. The
+check now asserts the **absolute** value the curve's arithmetic predicts, and a
+deliberate double-application (255-clipped) fails it.
+
+This runs in CI after the audit, installing the native module with
+`--no-save` so a checkout without it still runs everything else.
+
+Caveat this does *not* remove: there is still no **browser**. Transitions,
+text layout, video decode and the export pipeline remain unverified at the pixel
+level, because they need a real media stack rather than a canvas.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert

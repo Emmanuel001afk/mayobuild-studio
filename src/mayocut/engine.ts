@@ -2832,14 +2832,16 @@ export class Engine {
     const glitching = eff === "glitch" && this.glitchWindow(localT);
     // Pixel-space grade (temperature / tint / vignette / sharpen / split-tone)
     // and LUTs need readback, so they render through the reduced offscreen pass.
-    // It must be handed the CURVED clip: gradePixels reads c.adjust directly, so
-    // an animated brightness/contrast/saturation was silently ignored as soon as
-    // the clip also had a pixel grade (temperature, sharpen, vignette…). The
-    // static CSS path got the curve and this one did not, so the same slider
-    // changed at the start of the clip and froze.
+    //
+    // Brightness, contrast and saturation are NOT handled here — `gradePixels`
+    // only reads temperature, tint, split-tone, sharpen and vignette. Those three
+    // are applied by `ctx.filter` above, which is set *before* this branch and so
+    // covers the graded path too. Verified with a real rasteriser
+    // (scripts/pixel-render.mjs): a brightness curve reaches the pixels
+    // identically whether or not a pixel grade is present.
     const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves) || hslActive(c.hsl);
     if (lut || needsGrade) {
-      this.drawMainGrade(ctx, el, W, H, filterSource, lut ?? null);
+      this.drawMainGrade(ctx, el, W, H, c, lut ?? null);
     } else if (glitching || eff === "vhs") {
       this.drawMainSliced(ctx, el, W, H, glitching, localT);
     } else {
