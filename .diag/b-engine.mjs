@@ -4424,6 +4424,66 @@ function resolveComposition(project, t) {
   };
 }
 
+// src/mayocut/easings.ts
+var DEFAULT_BEZIER = { x1: 0.42, y1: 0, x2: 0.58, y2: 1 };
+var EASE_PRESETS = [
+  { id: "linear", name: "Linear", bez: { x1: 0, y1: 0, x2: 1, y2: 1 } },
+  { id: "easeIn", name: "Ease in", bez: { x1: 0.42, y1: 0, x2: 1, y2: 1 } },
+  { id: "easeOut", name: "Ease out", bez: { x1: 0, y1: 0, x2: 0.58, y2: 1 } },
+  { id: "easeInOut", name: "Ease in-out", bez: { x1: 0.42, y1: 0, x2: 0.58, y2: 1 } },
+  // a slow start that settles rather than stopping dead — the "cinematic" default
+  { id: "smooth", name: "Smooth", bez: { x1: 0.4, y1: 0, x2: 0.2, y2: 1 } },
+  // reaches the value almost immediately then holds — a snap/impact
+  { id: "snap", name: "Snap", bez: { x1: 0.15, y1: 0, x2: 0.05, y2: 1 } },
+  { id: "hold", name: "Hold (step)" },
+  { id: "custom", name: "Custom\u2026" }
+];
+var clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+function bezierFor(id, custom) {
+  const preset = EASE_PRESETS.find((p) => p.id === id);
+  if (id === "custom") return custom ?? DEFAULT_BEZIER;
+  return preset?.bez ?? { x1: 0, y1: 0, x2: 1, y2: 1 };
+}
+function bezAxis(t, p1, p2) {
+  const mt = 1 - t;
+  return 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t * t * t;
+}
+function bezSlope(t, p1, p2) {
+  const mt = 1 - t;
+  return 3 * mt * mt * p1 + 6 * mt * t * (p2 - p1) + 3 * t * t * (1 - p2);
+}
+function solveBezier(b, x) {
+  const px = clamp012(x);
+  if (px === 0) return 0;
+  if (px === 1) return 1;
+  if (b.x1 === b.y1 && b.x2 === b.y2) return px;
+  let t = px;
+  for (let i = 0; i < 8; i++) {
+    const err = bezAxis(t, b.x1, b.x2) - px;
+    if (Math.abs(err) < 1e-6) return bezAxis(t, b.y1, b.y2);
+    const d = bezSlope(t, b.x1, b.x2);
+    if (Math.abs(d) < 1e-6) break;
+    t -= err / d;
+  }
+  let lo = 0;
+  let hi = 1;
+  t = px;
+  for (let i = 0; i < 24; i++) {
+    const v = bezAxis(t, b.x1, b.x2);
+    if (Math.abs(v - px) < 1e-6) break;
+    if (v < px) lo = t;
+    else hi = t;
+    t = (lo + hi) / 2;
+  }
+  return bezAxis(t, b.y1, b.y2);
+}
+function easeValue(id, k, custom) {
+  if (!id || id === "linear") return k;
+  const kk = clamp012(k);
+  if (id === "hold") return kk >= 1 ? 1 : 0;
+  return solveBezier(bezierFor(id, custom), kk);
+}
+
 // src/mayocut/looks.ts
 var LOOKS = [
   // ---------------------------------------------------------------- trending
@@ -5870,7 +5930,7 @@ function buildFilterCss(clip) {
   }
   return [...parts, ...parts2].filter(Boolean).join(" ");
 }
-var clamp012 = (v) => Math.max(0, Math.min(1, v));
+var clamp013 = (v) => Math.max(0, Math.min(1, v));
 var lerp = (a, b, k) => a + (b - a) * k;
 function srcW(src) {
   if (src instanceof HTMLVideoElement) return src.videoWidth;
@@ -5926,13 +5986,14 @@ function animAt(kfs, base, t) {
     const b = kfs[i + 1];
     if (t >= a.at && t < b.at) {
       const span = b.at - a.at;
-      const k = span > 1e-4 ? clamp012((t - a.at) / span) : 1;
+      const k = span > 1e-4 ? clamp013((t - a.at) / span) : 1;
+      const e = easeValue(a.ease, k, a.bez);
       return {
-        x: lerp(a.v.x, b.v.x, k),
-        y: lerp(a.v.y, b.v.y, k),
-        scale: lerp(a.v.scale, b.v.scale, k),
-        rotation: lerp(a.v.rotation, b.v.rotation, k),
-        opacity: lerp(a.v.opacity, b.v.opacity, k)
+        x: lerp(a.v.x, b.v.x, e),
+        y: lerp(a.v.y, b.v.y, e),
+        scale: lerp(a.v.scale, b.v.scale, e),
+        rotation: lerp(a.v.rotation, b.v.rotation, e),
+        opacity: lerp(a.v.opacity, b.v.opacity, e)
       };
     }
   }
@@ -6018,6 +6079,12 @@ async function supportsAacEncoder(sampleRate, numberOfChannels, bitrate) {
   } catch {
     return false;
   }
+}
+function cloneKeyframe(k, at = k.at) {
+  const out = { at, v: { ...k.v } };
+  if (k.ease) out.ease = k.ease;
+  if (k.bez) out.bez = { x1: k.bez.x1, y1: k.bez.y1, x2: k.bez.x2, y2: k.bez.y2 };
+  return out;
 }
 function adjustmentScale(previewMaxSide, W, H) {
   if (previewMaxSide <= 0) return 1;
@@ -6499,8 +6566,8 @@ var Engine = class {
         if (c.kind !== "audio" || !c.mediaId) continue;
         if (t >= c.start && t < c.start + c.duration) {
           active.set(c.mediaId, {
-            reverb: clamp012(c.fx?.reverb ?? 0),
-            echo: clamp012(c.fx?.echo ?? 0),
+            reverb: clamp013(c.fx?.reverb ?? 0),
+            echo: clamp013(c.fx?.echo ?? 0),
             fx: c.audioFx ?? "none"
           });
         }
@@ -7148,8 +7215,8 @@ var Engine = class {
     const inT = t - c.start;
     const outT = c.start + c.duration - t;
     let v = c.volume ?? 1;
-    if (fadeIn > 0) v *= clamp012(inT / fadeIn);
-    if (fadeOut > 0) v *= clamp012(outT / fadeOut);
+    if (fadeIn > 0) v *= clamp013(inT / fadeIn);
+    if (fadeOut > 0) v *= clamp013(outT / fadeOut);
     v *= this.trackGain(this.overlayTrackOf(c.id));
     return Math.max(0, Math.min(1, v));
   }
@@ -7188,8 +7255,8 @@ var Engine = class {
     for (const tr of this.project.tracks) {
       for (const c of tr.clips) {
         if (!c.duck || c.kind === "text") continue;
-        const inK = clamp012((t - c.start) / 0.25);
-        const outK = clamp012((c.start + c.duration - t) / 0.25);
+        const inK = clamp013((t - c.start) / 0.25);
+        const outK = clamp013((c.start + c.duration - t) / 0.25);
         const amt = Math.min(0.98, c.duck) * amount * Math.min(inK, outK);
         if (this.project.tracks.some((x) => x.solo) && this.trackGain(tr.id) === 1) continue;
         k = Math.min(k, 1 - amt);
@@ -7407,7 +7474,7 @@ var Engine = class {
       const anim = animAt(c.keyframes, this.animBase(c), localT);
       if (c.kind === "adjustment") continue;
       if (c.kind === "text")
-        this.drawText(ctx, c, W, H, fadeAlpha * clamp012(anim.opacity), localT, c.duration, anim);
+        this.drawText(ctx, c, W, H, fadeAlpha * clamp013(anim.opacity), localT, c.duration, anim);
       if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
         const rec = this.els.get(c.mediaId);
         if (!rec || !rec.url) continue;
@@ -7430,7 +7497,7 @@ var Engine = class {
           h: size / ar
         });
         const rot = anim.rotation * Math.PI / 180;
-        const alpha = clamp012(fadeAlpha * anim.opacity);
+        const alpha = clamp013(fadeAlpha * anim.opacity);
         const blend = c.blend && c.blend !== "normal" ? c.blend : null;
         if (c.chroma && sw * sh > 4) {
           this.drawChroma(
@@ -7519,7 +7586,7 @@ var Engine = class {
     }
     if (kind === "zoom") {
       this.drawMainItem(ctx, a, 1, W, H, t, 0, 1 + 0.22 * k);
-      this.drawMainItem(ctx, b, clamp012(k * 1.15), W, H, t, 0, 1.18 - 0.18 * k);
+      this.drawMainItem(ctx, b, clamp013(k * 1.15), W, H, t, 0, 1.18 - 0.18 * k);
       return;
     }
     if (kind === "flash") {
@@ -7540,7 +7607,7 @@ var Engine = class {
       const rot = (1 - ease) * Math.PI * 0.5;
       const sc = 0.7 + 0.3 * ease;
       ctx.save();
-      ctx.globalAlpha = clamp012(ease * 1.6);
+      ctx.globalAlpha = clamp013(ease * 1.6);
       ctx.translate(W / 2, H / 2);
       ctx.rotate(rot);
       ctx.scale(sc, sc);
@@ -7606,21 +7673,21 @@ var Engine = class {
       buf.height = bh;
       const bctx = buf.getContext("2d");
       if (!bctx) {
-        this.drawMainItem(ctx, b, clamp012(k * 1.2), W, H, t);
+        this.drawMainItem(ctx, b, clamp013(k * 1.2), W, H, t);
         return;
       }
       bctx.scale(bw / W, bh / H);
       this.drawMainItem(bctx, b, 1, W, H, t);
       bctx.setTransform(1, 0, 0, 1, 0, 0);
-      const edge = -0.3 + 1.6 * clamp012(k);
+      const edge = -0.3 + 1.6 * clamp013(k);
       const shoulder = 0.35;
       bctx.globalCompositeOperation = "destination-in";
       const g = bctx.createLinearGradient(0, 0, bw, 0);
       const A0 = (v) => `rgba(0,0,0,${v})`;
-      g.addColorStop(0, A0(clamp012(edge) > 0 ? 1 : 0));
-      g.addColorStop(clamp012(edge), A0(clamp012(edge) > 0 ? 1 : 0));
-      g.addColorStop(clamp012(edge + shoulder), A0(clamp012(edge + shoulder) >= 1 ? 0 : 1));
-      g.addColorStop(1, A0(clamp012(edge + shoulder) >= 1 ? 0 : 1));
+      g.addColorStop(0, A0(clamp013(edge) > 0 ? 1 : 0));
+      g.addColorStop(clamp013(edge), A0(clamp013(edge) > 0 ? 1 : 0));
+      g.addColorStop(clamp013(edge + shoulder), A0(clamp013(edge + shoulder) >= 1 ? 0 : 1));
+      g.addColorStop(1, A0(clamp013(edge + shoulder) >= 1 ? 0 : 1));
       bctx.fillStyle = g;
       bctx.fillRect(0, 0, bw, bh);
       bctx.globalCompositeOperation = "source-over";
@@ -7630,7 +7697,7 @@ var Engine = class {
     if (kind === "zoomblur") {
       const blurPx = Math.sin(Math.PI * k) * Math.max(4, H * 0.022);
       this.drawMainItem(ctx, a, 1, W, H, t, blurPx * 0.6, 1 + 0.3 * k);
-      this.drawMainItem(ctx, b, clamp012(k * 1.2), W, H, t, blurPx, 1.3 - 0.3 * k);
+      this.drawMainItem(ctx, b, clamp013(k * 1.2), W, H, t, blurPx, 1.3 - 0.3 * k);
       return;
     }
     if (kind === "whipl" || kind === "whipr") {
@@ -7731,11 +7798,11 @@ var Engine = class {
     const vertical = dir === "up" || dir === "down";
     const span = vertical ? bh : bw;
     const feather = Math.max(1, span * 0.12);
-    const k = clamp012(e);
+    const k = clamp013(e);
     const lowSide = dir === "right" || dir === "down";
     const edge = lowSide ? -feather + k * (span + feather * 2) : span + feather - k * (span + feather * 2);
-    const t0 = clamp012((edge - feather) / span);
-    const t1 = clamp012((edge + feather) / span);
+    const t0 = clamp013((edge - feather) / span);
+    const t1 = clamp013((edge + feather) / span);
     const g = vertical ? bctx.createLinearGradient(0, 0, 0, bh) : bctx.createLinearGradient(0, 0, bw, 0);
     const A = (v) => `rgba(0,0,0,${v})`;
     g.addColorStop(0, A(lowSide ? 1 : 0));
@@ -7755,7 +7822,7 @@ var Engine = class {
     const rec = this.els.get(c.mediaId);
     const localT = t - s.start;
     const anim = animAt(c.keyframes, DEFAULT_ANIM, localT);
-    const a = clamp012(alpha * anim.opacity);
+    const a = clamp013(alpha * anim.opacity);
     if (!rec || !rec.url) {
       this.drawPlaceholder(ctx, W, H, c.mediaId, a);
       return;
@@ -7780,7 +7847,7 @@ var Engine = class {
     ctx.globalAlpha = a;
     let filterCss = buildFilterCss(c);
     if (eff === "blur-in") {
-      const ramp = clamp012(localT / 0.45);
+      const ramp = clamp013(localT / 0.45);
       const px = Math.round((1 - ramp) * H * 0.018 * 10) / 10;
       if (px > 0.05) filterCss = (filterCss + ` blur(${px}px)`).trim();
     }
@@ -7828,7 +7895,7 @@ var Engine = class {
       ctx.restore();
     }
     if (eff === "flash-in") {
-      const k = 1 - clamp012(localT / 0.18);
+      const k = 1 - clamp013(localT / 0.18);
       if (k > 0.01) {
         ctx.globalAlpha = a * k * 0.85;
         ctx.fillStyle = "#fff";
@@ -7936,22 +8003,22 @@ var Engine = class {
         r.rot = localT / Math.max(1e-3, dur) * Math.PI * 2;
         break;
       case "zoom-out":
-        r.scale = 1.16 - 0.16 * clamp012(localT / Math.max(0.6, dur * 0.6));
+        r.scale = 1.16 - 0.16 * clamp013(localT / Math.max(0.6, dur * 0.6));
         break;
       case "pan-left":
-        r.tx = -(W * 0.05) * clamp012(localT / Math.max(0.6, dur));
+        r.tx = -(W * 0.05) * clamp013(localT / Math.max(0.6, dur));
         r.scale = 1.08;
         break;
       case "pan-right":
-        r.tx = W * 0.05 * clamp012(localT / Math.max(0.6, dur));
+        r.tx = W * 0.05 * clamp013(localT / Math.max(0.6, dur));
         r.scale = 1.08;
         break;
       case "tilt-up":
-        r.ty = H * 0.045 * (1 - clamp012(localT / Math.max(0.6, dur)));
+        r.ty = H * 0.045 * (1 - clamp013(localT / Math.max(0.6, dur)));
         r.scale = 1.06;
         break;
       case "kenburns": {
-        const k = clamp012(localT / Math.max(1e-3, dur));
+        const k = clamp013(localT / Math.max(1e-3, dur));
         r.scale = 1.04 + 0.07 * k;
         r.tx = (k - 0.5) * W * 0.035;
         r.ty = (k - 0.5) * H * -0.02;
@@ -7964,11 +8031,11 @@ var Engine = class {
         break;
       }
       case "tilt-down":
-        r.ty = H * 0.045 * clamp012(localT / Math.max(0.6, dur));
+        r.ty = H * 0.045 * clamp013(localT / Math.max(0.6, dur));
         r.scale = 1.06;
         break;
       case "roll":
-        r.rot = (clamp012(localT / Math.max(1e-3, dur)) - 1) * Math.PI * 2;
+        r.rot = (clamp013(localT / Math.max(1e-3, dur)) - 1) * Math.PI * 2;
         r.scale = 1.12;
         break;
       case "float": {
@@ -7991,7 +8058,7 @@ var Engine = class {
       }
       case "whip-left":
       case "whip-right": {
-        const k = clamp012(localT / Math.max(1e-3, dur));
+        const k = clamp013(localT / Math.max(1e-3, dur));
         const e2 = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
         const dirSign = (c.effect ?? "") === "whip-left" ? -1 : 1;
         r.tx = dirSign * (1 - e2) * W * 0.5;
@@ -7999,14 +8066,14 @@ var Engine = class {
         break;
       }
       case "dolly-in":
-        r.scale = 1 + 0.16 * clamp012(localT / Math.max(1e-3, dur));
+        r.scale = 1 + 0.16 * clamp013(localT / Math.max(1e-3, dur));
         break;
       case "dolly-out":
-        r.scale = 1.16 - 0.16 * clamp012(localT / Math.max(1e-3, dur));
+        r.scale = 1.16 - 0.16 * clamp013(localT / Math.max(1e-3, dur));
         break;
       case "tilt-shift":
         r.scale = 1.08;
-        r.ty = (clamp012(localT / Math.max(1e-3, dur)) - 0.5) * H * 0.03;
+        r.ty = (clamp013(localT / Math.max(1e-3, dur)) - 0.5) * H * 0.03;
         break;
       case "earthquake": {
         const seed = hashId(c.id);
@@ -8028,7 +8095,7 @@ var Engine = class {
       // decides where the frame sits. Splitting them keeps the transform
       // function free of canvas work, which is what lets the audit test it.
       case "speed-push": {
-        const k2 = clamp012(localT / Math.max(1e-3, dur));
+        const k2 = clamp013(localT / Math.max(1e-3, dur));
         r.scale = 1 + 0.16 * k2 * k2;
         break;
       }
@@ -8046,7 +8113,7 @@ var Engine = class {
         r.scale = 1.08;
         break;
       case "focus-in": {
-        const k2 = clamp012(localT / 0.6);
+        const k2 = clamp013(localT / 0.6);
         r.scale = 1.03 - 0.03 * k2;
         break;
       }
@@ -8538,11 +8605,11 @@ var Engine = class {
     const italic = c.italic ? "italic " : "";
     const anim2 = c.anim ?? "none";
     ctx.save();
-    ctx.globalAlpha = alpha * clamp012(c.opacity ?? 1);
+    ctx.globalAlpha = alpha * clamp013(c.opacity ?? 1);
     let kbScale = 1;
     let kbX = 0;
     if (anim2 === "kenburns" && dur > 0.01) {
-      const k = clamp012(localT / dur);
+      const k = clamp013(localT / dur);
       kbScale = 1 + 0.09 * k;
       kbX = (k - 0.5) * W * 0.03;
     }
@@ -8556,36 +8623,36 @@ var Engine = class {
     let skewX = 0;
     let trackMul = 1;
     let wavePhase = 0;
-    if (anim2 === "bounce") yOff = -px * 0.9 * (1 - easeOutBounce(clamp012(localT / 0.55)));
-    if (anim2 === "slideup") yOff = (1 - clamp012(localT / 0.4)) * H * 0.03;
-    if (anim2 === "slideleft") xOff = (1 - clamp012(localT / 0.4)) * W * 0.06;
-    if (anim2 === "zoom-in") popScale = 0.72 + 0.28 * easeOutBounce(clamp012(localT / 0.5));
+    if (anim2 === "bounce") yOff = -px * 0.9 * (1 - easeOutBounce(clamp013(localT / 0.55)));
+    if (anim2 === "slideup") yOff = (1 - clamp013(localT / 0.4)) * H * 0.03;
+    if (anim2 === "slideleft") xOff = (1 - clamp013(localT / 0.4)) * W * 0.06;
+    if (anim2 === "zoom-in") popScale = 0.72 + 0.28 * easeOutBounce(clamp013(localT / 0.5));
     if (anim2 === "rise") {
-      const k = clamp012(localT / 0.55);
+      const k = clamp013(localT / 0.55);
       yOff = (1 - k) * H * 0.06;
       riseAlpha = k;
     }
     if (anim2 === "wipe-in") riseAlpha = 1;
-    if (anim2 === "pop") popScale = 0.4 + 0.6 * easeOutBack(clamp012(localT / 0.42));
-    if (anim2 === "drop-in") yOff = -H * 0.28 * (1 - easeOutBounce(clamp012(localT / 0.7)));
-    if (anim2 === "swing") swingAngle = (1 - easeOutBack(clamp012(localT / 0.75))) * -0.9;
-    if (anim2 === "blur-in") blurPx2 = (1 - clamp012(localT / 0.5)) * px * 0.55;
+    if (anim2 === "pop") popScale = 0.4 + 0.6 * easeOutBack(clamp013(localT / 0.42));
+    if (anim2 === "drop-in") yOff = -H * 0.28 * (1 - easeOutBounce(clamp013(localT / 0.7)));
+    if (anim2 === "swing") swingAngle = (1 - easeOutBack(clamp013(localT / 0.75))) * -0.9;
+    if (anim2 === "blur-in") blurPx2 = (1 - clamp013(localT / 0.5)) * px * 0.55;
     if (anim2 === "flip") {
-      const k = clamp012(localT / 0.5);
+      const k = clamp013(localT / 0.5);
       flipScale = Math.max(0.02, Math.abs(Math.cos(k * Math.PI)));
     }
-    if (anim2 === "skew-in") skewX = (1 - clamp012(localT / 0.5)) * 0.55;
+    if (anim2 === "skew-in") skewX = (1 - clamp013(localT / 0.5)) * 0.55;
     if (anim2 === "tracking-in") {
-      const k = easeOutCubic(clamp012(localT / 0.8));
+      const k = easeOutCubic(clamp013(localT / 0.8));
       trackMul = 6 + (1 - 6) * k;
-      riseAlpha = clamp012(localT / 0.25);
+      riseAlpha = clamp013(localT / 0.25);
     }
     if (anim2 === "wave") wavePhase = localT * 3.4;
     ctx.font = `${italic}${weight} ${Math.round(px)}px ${fontCss(c.font, this.project.fonts)}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const tracking = (c.tracking ?? 0) * trackMul * px / 100;
-    ctx.globalAlpha = alpha * clamp012(c.opacity ?? 1) * riseAlpha;
+    ctx.globalAlpha = alpha * clamp013(c.opacity ?? 1) * riseAlpha;
     if (anim2 === "karaoke" && (c.words?.length ?? 0) > 0) {
       this.drawTextKaraoke(ctx, c, W, H, px, localT);
       ctx.restore();
@@ -8876,7 +8943,7 @@ var Engine = class {
       if (srcAt - c.in < 0.08 || c.out - srcAt < 0.08) return false;
       const local = t - s.start;
       const kfsA = c.keyframes?.filter((k) => k.at < local);
-      const kfsB = c.keyframes?.filter((k) => k.at >= local).map((k) => ({ at: k.at - local, v: { ...k.v } }));
+      const kfsB = c.keyframes?.filter((k) => k.at >= local).map((k) => cloneKeyframe(k, k.at - local));
       const a = {
         ...c,
         id: uid("mc"),
@@ -8931,7 +8998,7 @@ var Engine = class {
       ...src,
       id: uid("mc"),
       adjust: { ...src.adjust },
-      keyframes: src.keyframes?.map((k) => ({ at: k.at, v: { ...k.v } })),
+      keyframes: src.keyframes?.map(cloneKeyframe),
       transitionIn: "none",
       transitionDur: 0
     });
@@ -9139,7 +9206,7 @@ var Engine = class {
       ...c,
       id: uid("ov"),
       start: c.start + 0.05,
-      keyframes: c.keyframes?.map((k) => ({ at: k.at, v: { ...k.v } }))
+      keyframes: c.keyframes?.map(cloneKeyframe)
     }));
     tr.clips.push(...copies);
     this.bump();
@@ -9260,6 +9327,32 @@ var Engine = class {
     return best;
   }
   /** Patch the values of the keyframe within eps of `at` (CapCut-style edit). */
+  /**
+   * Set the easing that governs the segment after the keyframe at `at`.
+   *
+   * Matches the keyframe by nearest-in-time within a small window, the same way
+   * `updateKeyframeAt` does, so the UI can pass the value it drew rather than
+   * reconstructing it. `custom` carries explicit control points; every other id
+   * clears them so a stale curve cannot survive a preset change.
+   */
+  setKeyframeEase(clipId, at, ease, bez) {
+    const kf = this.keyframeNear(clipId, at);
+    if (!kf) return false;
+    kf.ease = ease;
+    if (ease === "custom") {
+      if (bez) kf.bez = { x1: bez.x1, y1: bez.y1, x2: bez.x2, y2: bez.y2 };
+    } else {
+      delete kf.bez;
+    }
+    this.bump();
+    return true;
+  }
+  /** The ease on the segment after the keyframe at `at`, if there is one. */
+  keyframeEase(clipId, at) {
+    const kf = this.keyframeNear(clipId, at);
+    if (!kf) return null;
+    return { ease: kf.ease ?? "linear", bez: kf.bez };
+  }
   updateKeyframeAt(clipId, at, patch) {
     const kf = this.keyframeNear(clipId, at);
     if (!kf) return false;

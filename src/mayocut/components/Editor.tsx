@@ -59,6 +59,7 @@ import { Engine, FILTER_PRESETS, exportBlocker, mp4Supported, pickMime } from ".
 import { Scopes } from "./Scopes";
 import { LOUDNESS_TARGETS, normaliseAdvice, normaliseGain, peakDb } from "../loudness";
 import { LOOK_FAMILIES, looksIn, searchLooks, type LookFamily } from "../looks";
+import type { EaseId, Bezier4 } from "../easings";
 import type { RippleMode } from "../ripple";
 import {
   ASPECTS,
@@ -868,6 +869,17 @@ export function Editor({
       if (!eng) return;
       pushUndo();
       eng.deleteKeyframe(clipId, at);
+      eng.draw();
+    },
+    [pushUndo],
+  );
+
+  const onKeyframeEase = useCallback(
+    (clipId: string, at: number, ease: EaseId, bez?: Bezier4) => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      pushUndo();
+      eng.setKeyframeEase(clipId, at, ease, bez);
       eng.draw();
     },
     [pushUndo],
@@ -3403,6 +3415,7 @@ export function Editor({
       onAnimChange={onAnimChange}
       onKeyframeAdd={onKeyframeAdd}
       onKeyframeDelete={onKeyframeDelete}
+      onKeyframeEase={onKeyframeEase}
       onSetAspect={setAspect}
       onReplaceMedia={(clipId, item) =>
         mutateVoid((eng) => {

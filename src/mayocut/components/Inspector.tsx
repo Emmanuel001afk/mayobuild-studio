@@ -9,6 +9,8 @@ import { HSL_BANDS, hslActive, type HslAdjust, type HslBand } from "../hsl";
 type Channel = "rgb" | "r" | "g" | "b";
 import { Clock, Copy, Diamond, Scissors, SlidersHorizontal, Spline, Trash2 } from "lucide-react";
 import { CROP_PRESETS, clampGeometry, isDefaultGeometry } from "../geometry";
+import { EaseEditor } from "./EaseEditor";
+import { easeName, type Bezier4, type EaseId } from "../easings";
 import type {
   AnimValues,
   AspectId,
@@ -56,6 +58,7 @@ interface Props {
   onAnimChange: (clipId: string, localT: number, patch: Partial<AnimValues>) => void;
   onKeyframeAdd: (clipId: string) => void;
   onKeyframeDelete: (clipId: string, at: number) => void;
+  onKeyframeEase: (clipId: string, at: number, ease: EaseId, bez?: Bezier4) => void;
   onSetAspect: (a: AspectId) => void;
   onReplaceMedia: (clipId: string, item: MediaItem) => void;
   onDuplicate: () => void;
@@ -870,6 +873,7 @@ export function Inspector(p: Props) {
               onAdd={() => p.onKeyframeAdd(clipId)}
               onDelete={(at) => p.onKeyframeDelete(clipId, at)}
               onSeek={p.onSeek}
+              onEase={(at, ease, bez) => p.onKeyframeEase(clipId, at, ease, bez)}
             />
             <div className="grid grid-cols-2 gap-1 mt-2">
               <button
@@ -1505,6 +1509,7 @@ export function Inspector(p: Props) {
               onAdd={() => p.onKeyframeAdd(clipId)}
               onDelete={(at) => p.onKeyframeDelete(clipId, at)}
               onSeek={p.onSeek}
+              onEase={(at, ease, bez) => p.onKeyframeEase(clipId, at, ease, bez)}
             />
           </Section>
           <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />
@@ -1562,6 +1567,7 @@ export function Inspector(p: Props) {
               onAdd={() => p.onKeyframeAdd(clipId)}
               onDelete={(at) => p.onKeyframeDelete(clipId, at)}
               onSeek={p.onSeek}
+              onEase={(at, ease, bez) => p.onKeyframeEase(clipId, at, ease, bez)}
             />
             <div className="grid grid-cols-2 gap-1 mt-2">
               <button
@@ -2181,6 +2187,7 @@ function KeyframeSection({
   onAdd,
   onDelete,
   onSeek,
+  onEase,
 }: {
   clip: { keyframes?: Keyframe[] };
   clipStart: number;
@@ -2188,8 +2195,10 @@ function KeyframeSection({
   onAdd: () => void;
   onDelete: (at: number) => void;
   onSeek: (v: number) => void;
+  onEase: (at: number, ease: EaseId, bez?: Bezier4) => void;
 }) {
   const kfs = clip.keyframes ?? [];
+  const [openEase, setOpenEase] = useState<number | null>(null);
   return (
     <div className="mt-2">
       <button
@@ -2210,30 +2219,47 @@ function KeyframeSection({
       {kfs.length > 0 ? (
         <div className="mt-1.5 space-y-1">
           {kfs.map((k) => (
-            <div
-              key={k.at}
-              className="flex items-center gap-1.5 text-[10px] bg-slate-900/70 border border-border rounded px-1.5 py-1"
-            >
-              <button
-                className="text-fuchsia-300 hover:scale-125 transition-transform"
-                title="Jump playhead here"
-                onClick={() => onSeek(clipStart + k.at)}
-              >
-                ◆
-              </button>
-              <span className="tabular-nums text-muted-foreground">{k.at.toFixed(2)}s</span>
-              <span className="text-muted-foreground truncate flex-1">
-                ×{k.v.scale.toFixed(2)} · {Math.round(k.v.opacity * 100)}%
-                {(k.v.x !== 0 || k.v.y !== 0 || k.v.rotation !== 0) &&
-                  ` · ${k.v.x.toFixed(2)},${k.v.y.toFixed(2)} ${Math.round(k.v.rotation)}°`}
-              </span>
-              <button
-                className="text-muted-foreground hover:text-destructive"
-                title="Delete keyframe"
-                onClick={() => onDelete(k.at)}
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
+            <div key={k.at}>
+              <div className="flex items-center gap-1.5 text-[10px] bg-slate-900/70 border border-border rounded px-1.5 py-1">
+                <button
+                  className="text-fuchsia-300 hover:scale-125 transition-transform"
+                  title="Jump playhead here"
+                  onClick={() => onSeek(clipStart + k.at)}
+                >
+                  ◆
+                </button>
+                <span className="tabular-nums text-muted-foreground">{k.at.toFixed(2)}s</span>
+                <span className="text-muted-foreground truncate flex-1">
+                  ×{k.v.scale.toFixed(2)} · {Math.round(k.v.opacity * 100)}%
+                  {(k.v.x !== 0 || k.v.y !== 0 || k.v.rotation !== 0) &&
+                    ` · ${k.v.x.toFixed(2)},${k.v.y.toFixed(2)} ${Math.round(k.v.rotation)}°`}
+                </span>
+                <button
+                  className={`text-[10px] px-1 border rounded ${
+                    (k.ease ?? "linear") === "linear"
+                      ? "border-border text-muted-foreground"
+                      : "border-cyan-400/50 text-cyan-300"
+                  }`}
+                  title="Easing for the segment after this keyframe"
+                  onClick={() => setOpenEase(openEase === k.at ? null : k.at)}
+                >
+                  {easeName(k.ease)}
+                </button>
+                <button
+                  className="text-muted-foreground hover:text-destructive"
+                  title="Delete keyframe"
+                  onClick={() => onDelete(k.at)}
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+              {openEase === k.at && (
+                <EaseEditor
+                  ease={k.ease ?? "linear"}
+                  bez={k.bez}
+                  onChange={(e, b) => onEase(k.at, e, b)}
+                />
+              )}
             </div>
           ))}
         </div>
