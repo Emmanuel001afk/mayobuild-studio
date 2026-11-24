@@ -533,6 +533,35 @@ if (!graphicNamed) {
     }
   }
 
+  // the multi-point property graph
+  const graphTabs = ["Opacity", "Scale", "Rotation", "Position X", "Volume"].filter((n) =>
+    document.querySelector(`button[aria-label="Graph ${n}"]`),
+  );
+  checks.push(["the property graph offers per-property curves", graphTabs.length >= 5]);
+  const graphSvg = document.querySelector('svg[aria-label$="curve over time"]');
+  checks.push(["the property graph draws a curve", !!graphSvg]);
+  checks.push([
+    "the graph has an add-point control",
+    [...document.querySelectorAll("button")].some((b) => /\+ point/.test(b.textContent || "")),
+  ]);
+  // drive it: add a point, then confirm the control count climbed
+  const addPoint = [...document.querySelectorAll("button")].find((b) =>
+    /^\+ point$/.test((b.textContent || "").trim()),
+  );
+  const countBefore = document.querySelectorAll('svg[aria-label$="curve over time"] circle').length;
+  if (addPoint) {
+    addPoint.click();
+    await wait(200);
+    const countAfter = document.querySelectorAll('svg[aria-label$="curve over time"] circle').length;
+    checks.push(["clicking + point adds a point to the curve", countAfter > countBefore]);
+    checks.push([
+      "the graph writes the curve onto the clip",
+      /1 point|2 points|3 points/.test(document.body.textContent || ""),
+    ]);
+  }
+  const valueInput = document.querySelector('input[aria-label^="Point "]');
+  checks.push(["graph points are editable numerically", !!valueInput]);
+
   // adjustment layer button
   const gradeBtn = [...document.querySelectorAll("button")].find((b) =>
     /Grade/.test(b.textContent || "") && (b.getAttribute("title") || "").includes("adjustment"),

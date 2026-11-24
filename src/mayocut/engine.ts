@@ -26,6 +26,7 @@ import {
   type MediaKind,
   type OverlayClip,
   type OverlayTrack,
+  type PropCurves,
   type Project,
   type TextPos,
   type TransitionKind,
@@ -34,6 +35,8 @@ import {
 } from "./types";
 import { resolveComposition } from "./timeline-resolver";
 import { easeValue, type EaseId, type Bezier4 } from "./easings";
+import { propValueAt, tracksActive } from "./property-curves";
+import type { CurvePoint } from "./curves";
 import { LOOK_BY_ID, LOOKS, resolveLookId, type LookFinish } from "./looks";
 import { clampGeometry, coverSourceRect, isDefaultGeometry, type FrameGeometry } from "./geometry";
 import { planSteppedExport, recordThroughput, type ExportPlan } from "./export-plan";
@@ -585,6 +588,23 @@ function cloneKeyframe(k: Keyframe, at = k.at): Keyframe {
   if (k.ease) out.ease = k.ease;
   if (k.bez) out.bez = { x1: k.bez.x1, y1: k.bez.y1, x2: k.bez.x2, y2: k.bez.y2 };
   return out;
+}
+
+/**
+ * Deep-copy a per-property curve set.
+ *
+ * `{ ...clip }` copies the object reference, so a duplicated clip shared its
+ * curve arrays with the original — dragging a point on the copy silently moved
+ * the original's curve too. Every field that holds nested objects needs this,
+ * and every clone site must call it.
+ */
+function clonePropCurves(src?: PropCurves): PropCurves | undefined {
+  if (!src) return undefined;
+  const out: PropCurves = {};
+  for (const [k, pts] of Object.entries(src)) {
+    if (Array.isArray(pts)) out[k] = pts.map((p) => ({ x: p.x, y: p.y }));
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**
@@ -1906,8 +1926,16 @@ export class Engine {
     // without a DOM (see mainClipGain). Here we only add the runtime factors.
     const hasPrevious = this.project.main[0]?.id !== clip.id;
     let v = mainClipGain(clip, s, this.nextMainSpan(s), t, hasPrevious);
+    // A volume curve is a multiplier on top of the clip's own gain, so it
+    // composes with fades, ducking and normalisation instead of replacing them.
+    // `propValueAt` returns the clip's plain volume when it holds no curve.
+    if (Number.isFinite(clip.volume) && clip.volume > 0) {
+      v *= propValueAt(clip, "volume", t - s.start, s.end - s.start) / clip.volume;
+    }
     v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
-    return Math.max(0, Math.min(1, v));
+    // Not clamped to 1: a normalised clip needs gain above unity, and the export
+    // path applies it, so clamping only the preview made the two disagree.
+    return Math.max(0, v);
   }
 
   /** The span immediately after `s`, or null when `s` is the last one. */
@@ -1922,10 +1950,18 @@ export class Engine {
     const inT = t - c.start;
     const outT = c.start + c.duration - t;
     let v = c.volume ?? 1;
+    // the same multiplier the main track uses, so a curve on an audio overlay
+    // behaves identically to one on the main track
+    const baseVol = c.volume ?? 1;
+    if (Number.isFinite(baseVol) && baseVol > 0) {
+      // divide by the BASE, not by the running value: `v *= curve / v` would
+      // collapse to just the curve and throw the fades away
+      v *= propValueAt(c, "volume", inT, c.duration) / baseVol;
+    }
     if (fadeIn > 0) v *= clamp01(inT / fadeIn);
     if (fadeOut > 0) v *= clamp01(outT / fadeOut);
     v *= this.trackGain(this.overlayTrackOf(c.id));
-    return Math.max(0, Math.min(1, v));
+    return Math.max(0, v);
   }
 
   /**
@@ -2709,8 +2745,33 @@ export class Engine {
       : this.effectTransform(c, localT, W, H, mainClipDuration(c));
 
     ctx.save();
-    ctx.globalAlpha = a;
-    let filterCss = buildFilterCss(c);
+    // A property curve overrides its axis and nothing else — this is the point
+    // of splitting them out of the keyframe snapshot, where one graph moved all
+    // five values together.
+    let propAlpha = a;
+    if (c.propCurves?.opacity) {
+      const v = propValueAt(c, "opacity", localT, mainClipDuration(c));
+      propAlpha = a * clamp01(v);
+    }
+    ctx.globalAlpha = propAlpha;
+    // Grade curves: buildFilterCss reads the clip's static adjust values, so a
+    // curved brightness/contrast/saturation is passed through a shallow copy
+    // rather than mutating the project (which must stay the source of truth for
+    // undo and autosave).
+    let filterSource = c;
+    if (c.propCurves) {
+      const dur = mainClipDuration(c);
+      const graded = { ...c.adjust };
+      let changed = false;
+      for (const key of ["brightness", "contrast", "saturation"] as const) {
+        if (c.propCurves[key]) {
+          graded[key] = propValueAt(c, key, localT, dur);
+          changed = true;
+        }
+      }
+      if (changed) filterSource = { ...c, adjust: graded };
+    }
+    let filterCss = buildFilterCss(filterSource);
     if (eff === "blur-in") {
       const ramp = clamp01(localT / 0.45);
       const px = Math.round((1 - ramp) * H * 0.018 * 10) / 10;
@@ -2723,10 +2784,21 @@ export class Engine {
       ctx.scale(scaleMul, scaleMul);
       ctx.translate(-W / 2, -H / 2);
     }
-    if (anim.x !== 0 || anim.y !== 0 || anim.scale !== 1 || anim.rotation !== 0) {
-      ctx.translate(W / 2 + anim.x * (W / 2), H / 2 + anim.y * (H / 2));
-      ctx.rotate((anim.rotation * Math.PI) / 180);
-      ctx.scale(anim.scale, anim.scale);
+    let ax = anim.x;
+    let ay = anim.y;
+    let aScale = anim.scale;
+    let aRot = anim.rotation;
+    if (tracksActive(c.propCurves)) {
+      const dur = mainClipDuration(c);
+      if (c.propCurves?.x) ax = propValueAt(c, "x", localT, dur);
+      if (c.propCurves?.y) ay = propValueAt(c, "y", localT, dur);
+      if (c.propCurves?.scale) aScale = anim.scale * propValueAt(c, "scale", localT, dur);
+      if (c.propCurves?.rotation) aRot = propValueAt(c, "rotation", localT, dur);
+    }
+    if (ax !== 0 || ay !== 0 || aScale !== 1 || aRot !== 0) {
+      ctx.translate(W / 2 + ax * (W / 2), H / 2 + ay * (H / 2));
+      ctx.rotate((aRot * Math.PI) / 180);
+      ctx.scale(aScale, aScale);
       ctx.translate(-W / 2, -H / 2);
     }
     if (c.flipX || c.flipY) {
@@ -4055,6 +4127,7 @@ export class Engine {
         in: c.reverse ? srcAt : c.in,
         out: c.reverse ? c.out : srcAt,
         keyframes: kfsA && kfsA.length ? kfsA : undefined,
+        propCurves: clonePropCurves(c.propCurves),
       };
       const b: MainClip = {
         ...c,
@@ -4064,6 +4137,7 @@ export class Engine {
         transitionIn: "none",
         transitionDur: 0,
         keyframes: kfsB && kfsB.length ? kfsB : undefined,
+        propCurves: clonePropCurves(c.propCurves),
       };
       this.project.main.splice(i, 1, a, b);
       this.bump();
@@ -4106,6 +4180,7 @@ export class Engine {
       id: uid("mc"),
       adjust: { ...src.adjust },
       keyframes: src.keyframes?.map(cloneKeyframe),
+      propCurves: clonePropCurves(src.propCurves),
       transitionIn: "none",
       transitionDur: 0,
     });
@@ -4478,6 +4553,46 @@ export class Engine {
    * reconstructing it. `custom` carries explicit control points; every other id
    * clears them so a stale curve cannot survive a preset change.
    */
+  /**
+   * Write a per-property curve (or clear it with null).
+   *
+   * Stored on the clip rather than in a side table so undo, autosave and export
+   * all carry it for free — the same reason every other clip setting lives there.
+   */
+  setPropCurve(clipId: string, prop: string, points: CurvePoint[] | null): boolean {
+    const c = this.findClipAny(clipId);
+    if (!c) return false;
+    if (!points || points.length < 2) {
+      if (c.propCurves) {
+        delete c.propCurves[prop];
+        if (Object.keys(c.propCurves).length === 0) delete c.propCurves;
+      }
+    } else {
+      c.propCurves ??= {};
+      c.propCurves[prop] = points.map((p) => ({ x: p.x, y: p.y }));
+    }
+    this.bump();
+    return true;
+  }
+
+  /** The curve for one property, or null when the clip holds its own value. */
+  propCurve(clipId: string, prop: string): CurvePoint[] | null {
+    const c = this.findClipAny(clipId);
+    return c?.propCurves?.[prop] ?? null;
+  }
+
+  /**
+   * Real-unit value of a property for a main or overlay clip at clip-local time.
+   * Returns null when no curve governs the property, so callers can keep their
+   * existing (cheaper) path untouched.
+   */
+  propAt(clipId: string, prop: string, local: number): number | null {
+    const c = this.findClipAny(clipId);
+    if (!c || !c.propCurves?.[prop]) return null;
+    const spanDur = "kind" in c ? c.duration : mainClipDuration(c as MainClip);
+    return propValueAt(c, prop, local, spanDur);
+  }
+
   setKeyframeEase(clipId: string, at: number, ease: EaseId, bez?: Bezier4): boolean {
     const kf = this.keyframeNear(clipId, at);
     if (!kf) return false;

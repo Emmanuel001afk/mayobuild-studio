@@ -4,6 +4,7 @@ import type { CurveSet } from "./curves";
 import type { FrameGeometry } from "./geometry";
 import type { HslSet } from "./hsl";
 import type { EaseId, Bezier4 } from "./easings";
+import type { CurvePoint } from "./curves";
 import type { StickerKind } from "./sticker-kinds";
 import { FONT_CATALOGUE, resolveFontCss } from "./fonts";
 // Everything lives on the user's device (IndexedDB). No database, no backend.
@@ -229,6 +230,17 @@ export interface Keyframe {
   bez?: Bezier4;
 }
 
+/**
+ * Per-property multi-point curves, keyed by property id (see property-curves.ts).
+ *
+ * Deliberately NOT called `curves`: that name is already taken on MainClip for
+ * the RGB tone-curve set. A keyframe is a *snapshot* of every animatable value
+ * at one instant, which forces them to move together; a property curve is one
+ * value over time, so properties can be shaped independently — which is what a
+ * CapCut-style graph editor draws.
+ */
+export type PropCurves = Record<string, CurvePoint[]>;
+
 /** Built-in motion effects applied to a main clip (deterministic, offline). */
 export type EffectId =
   | "none"
@@ -398,6 +410,8 @@ export interface MainClip {
   transitionIn: TransitionKind;
   transitionDur: number; // seconds
   keyframes?: Keyframe[];
+  /** independent per-property curves (multi-point graph editor) */
+  propCurves?: PropCurves;
   /** how the source fills the canvas: cover (crop), contain (letterbox), blur-fill */
   fit?: FrameFit;
   /**
@@ -876,6 +890,8 @@ export interface OverlayClip {
   audioFx?: AudioFxId;
   filter?: string;
   keyframes?: Keyframe[];
+  /** independent per-property curves (multi-point graph editor) */
+  propCurves?: PropCurves;
 }
 
 export interface OverlayTrack {
@@ -1216,7 +1232,12 @@ export function mainClipGain(
   // A legacy clip may have no `volume`; NaN here would propagate into the gain
   // node and silence the entire audio chain.
   const baseVolume = Number.isFinite(clip.volume) ? clip.volume : 1;
-  let v = clip.muted ? 0 : Math.max(0, Math.min(1, baseVolume));
+  // Volume is a LINEAR multiplier and may legitimately exceed 1: loudness
+  // normalisation computes a gain that takes quiet footage up to the target, and
+  // clamping it here made that a silent no-op in the preview while the export
+  // path (rampedSource) applied it — the same clip was louder in the file than
+  // in the editor. Only 0 is a floor (a negative gain inverts phase).
+  let v = clip.muted ? 0 : Math.max(0, baseVolume);
   // incoming: fade up across this clip's own transition-in window — but only
   // if something precedes it. The first clip has no incoming transition, and
   // treating it as one silenced the start of every video.
@@ -1230,7 +1251,7 @@ export function mainClipGain(
       v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
     }
   }
-  return Math.max(0, Math.min(1, v));
+  return Math.max(0, v);
 }
 
 /** Sequential spans of main-track clips in timeline seconds. */

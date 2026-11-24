@@ -2166,14 +2166,14 @@ computeMoovSizeUpperBound_fn = function() {
     __privateGet(this, _options).fastStart.expectedVideoChunks,
     __privateGet(this, _options).fastStart.expectedAudioChunks
   ];
-  for (let n of sampleCounts) {
-    if (!n)
+  for (let n2 of sampleCounts) {
+    if (!n2)
       continue;
-    upperBound += (4 + 4) * Math.ceil(2 / 3 * n);
-    upperBound += 4 * n;
-    upperBound += (4 + 4 + 4) * Math.ceil(2 / 3 * n);
-    upperBound += 4 * n;
-    upperBound += 8 * n;
+    upperBound += (4 + 4) * Math.ceil(2 / 3 * n2);
+    upperBound += 4 * n2;
+    upperBound += (4 + 4 + 4) * Math.ceil(2 / 3 * n2);
+    upperBound += 4 * n2;
+    upperBound += 8 * n2;
   }
   upperBound += 4096;
   return upperBound;
@@ -4186,9 +4186,9 @@ function speedCurveOf(c) {
   return pts;
 }
 function safeSpeed(v) {
-  const n = typeof v === "number" ? v : Number(v);
-  if (!Number.isFinite(n) || n <= 0) return 1;
-  return Math.max(0.05, Math.min(100, n));
+  const n2 = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n2) || n2 <= 0) return 1;
+  return Math.max(0.05, Math.min(100, n2));
 }
 function speedAt(c, x) {
   const curve = speedCurveOf(c);
@@ -4298,7 +4298,7 @@ function mainPlaybackRate(c, localT) {
 function mainClipGain(clip, span, next, t, hasPrevious = true) {
   if (clip.reverse || clip.freeze) return 0;
   const baseVolume = Number.isFinite(clip.volume) ? clip.volume : 1;
-  let v = clip.muted ? 0 : Math.max(0, Math.min(1, baseVolume));
+  let v = clip.muted ? 0 : Math.max(0, baseVolume);
   if (hasPrevious && clip.transitionIn !== "none" && t < span.start && clip.transitionDur > 0) {
     v *= Math.max(0, Math.min(1, (t - (span.start - clip.transitionDur)) / clip.transitionDur));
   }
@@ -4308,7 +4308,7 @@ function mainClipGain(clip, span, next, t, hasPrevious = true) {
       v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
     }
   }
-  return Math.max(0, Math.min(1, v));
+  return Math.max(0, v);
 }
 function mainSpans(project) {
   let t = 0;
@@ -4489,6 +4489,224 @@ function easeValue(id, k, custom) {
   const kk = clamp012(k);
   if (id === "hold") return kk >= 1 ? 1 : 0;
   return solveBezier(bezierFor(id, custom), kk);
+}
+
+// src/mayocut/curves.ts
+function isIdentity(points) {
+  if (!points || points.length < 2) return true;
+  return points.every((p, i) => {
+    const want = i / (points.length - 1);
+    return Math.abs(p.x - want) < 1e-6 && Math.abs(p.y - want) < 1e-6;
+  });
+}
+function curvesActive(c) {
+  if (!c) return false;
+  return !isIdentity(c.rgb) || !isIdentity(c.r) || !isIdentity(c.g) || !isIdentity(c.b);
+}
+function normalisePoints(points) {
+  const clean = points.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)).map((p) => ({ x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) })).sort((a, b) => a.x - b.x);
+  const out = [];
+  for (const p of clean) {
+    if (out.length && Math.abs(out[out.length - 1].x - p.x) < 1e-4) continue;
+    out.push(p);
+  }
+  if (!out.length || out[0].x > 1e-4) out.unshift({ x: 0, y: out[0]?.y ?? 0 });
+  if (out[out.length - 1].x < 1 - 1e-4) out.push({ x: 1, y: out[out.length - 1].y });
+  return out;
+}
+function evalCurve(points, x) {
+  const pts = normalisePoints(points);
+  const n2 = pts.length;
+  if (n2 === 0) return x;
+  if (n2 === 1) return pts[0].y;
+  if (x <= pts[0].x) return pts[0].y;
+  if (x >= pts[n2 - 1].x) return pts[n2 - 1].y;
+  let i = 0;
+  while (i < n2 - 2 && x > pts[i + 1].x) i++;
+  const x0 = pts[i].x;
+  const x1 = pts[i + 1].x;
+  const y0 = pts[i].y;
+  const y1 = pts[i + 1].y;
+  const h = x1 - x0;
+  if (h <= 1e-9) return y1;
+  const d = [];
+  for (let k = 0; k < n2 - 1; k++) d.push((pts[k + 1].y - pts[k].y) / (pts[k + 1].x - pts[k].x));
+  const m = new Array(n2).fill(0);
+  m[0] = d[0];
+  m[n2 - 1] = d[n2 - 2];
+  for (let k = 1; k < n2 - 1; k++) {
+    if (d[k - 1] * d[k] <= 0) m[k] = 0;
+    else m[k] = (d[k - 1] + d[k]) / 2;
+  }
+  for (let k = 0; k < n2 - 1; k++) {
+    if (Math.abs(d[k]) < 1e-9) {
+      m[k] = 0;
+      m[k + 1] = 0;
+      continue;
+    }
+    const a = m[k] / d[k];
+    const b = m[k + 1] / d[k];
+    const h2 = a * a + b * b;
+    if (h2 > 9) {
+      const t4 = 3 / Math.sqrt(h2);
+      m[k] = t4 * a * d[k];
+      m[k + 1] = t4 * b * d[k];
+    }
+  }
+  const t = (x - x0) / h;
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (2 * t3 - 3 * t2 + 1) * y0 + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * y1 + (t3 - t2) * h * m[i + 1];
+}
+function curveLut(points) {
+  const lut = new Uint8ClampedArray(256);
+  for (let i = 0; i < 256; i++) lut[i] = Math.round(evalCurve(points, i / 255) * 255);
+  return lut;
+}
+function buildCurveLuts(c) {
+  if (!c || !curvesActive(c)) return null;
+  return {
+    rgb: isIdentity(c.rgb) ? null : curveLut(c.rgb),
+    r: isIdentity(c.r) ? null : curveLut(c.r),
+    g: isIdentity(c.g) ? null : curveLut(c.g),
+    b: isIdentity(c.b) ? null : curveLut(c.b)
+  };
+}
+function applyCurveLuts(d, luts) {
+  const { rgb, r, g, b } = luts;
+  for (let i = 0; i < d.length; i += 4) {
+    let R = d[i];
+    let G = d[i + 1];
+    let B = d[i + 2];
+    if (rgb) {
+      R = rgb[R];
+      G = rgb[G];
+      B = rgb[B];
+    }
+    if (r) R = r[R];
+    if (g) G = g[G];
+    if (b) B = b[B];
+    d[i] = R;
+    d[i + 1] = G;
+    d[i + 2] = B;
+  }
+}
+
+// src/mayocut/property-curves.ts
+var n = (v, d) => Number.isFinite(v) ? v : d;
+var PROPERTIES = [
+  {
+    id: "opacity",
+    label: "Opacity",
+    min: 0,
+    max: 1,
+    unit: "",
+    kinds: ["main", "overlay"],
+    fallback: () => 1
+  },
+  {
+    id: "scale",
+    label: "Scale",
+    min: 0,
+    max: 3,
+    unit: "x",
+    kinds: ["main", "overlay"],
+    fallback: (c) => n(c.scale, 1)
+  },
+  {
+    id: "rotation",
+    label: "Rotation",
+    min: -180,
+    max: 180,
+    unit: "\xB0",
+    kinds: ["main", "overlay"],
+    fallback: (c) => n(c.rot, 0)
+  },
+  {
+    id: "x",
+    label: "Position X",
+    min: -1,
+    max: 1,
+    unit: "",
+    kinds: ["main", "overlay"],
+    fallback: (c) => n(c.x, 0)
+  },
+  {
+    id: "y",
+    label: "Position Y",
+    min: -1,
+    max: 1,
+    unit: "",
+    kinds: ["main", "overlay"],
+    fallback: (c) => n(c.y, 0)
+  },
+  {
+    id: "volume",
+    label: "Volume",
+    min: 0,
+    max: 2,
+    unit: "x",
+    kinds: ["main", "overlay"],
+    // volume may exceed 1 for loudness normalisation, so the graph's ceiling is
+    // 2x rather than unity
+    fallback: (c) => n(c.volume, 1)
+  },
+  {
+    id: "brightness",
+    label: "Brightness",
+    min: 0,
+    max: 200,
+    unit: "%",
+    kinds: ["main", "overlay"],
+    fallback: (c) => n(c.adjust?.brightness, 100)
+  },
+  {
+    id: "contrast",
+    label: "Contrast",
+    min: 0,
+    max: 200,
+    unit: "%",
+    kinds: ["main", "overlay"],
+    fallback: (c) => n(c.adjust?.contrast, 100)
+  },
+  {
+    id: "saturation",
+    label: "Saturation",
+    min: 0,
+    max: 200,
+    unit: "%",
+    kinds: ["main", "overlay"],
+    fallback: (c) => n(c.adjust?.saturation, 100)
+  }
+];
+var PROPERTY_BY_ID = new Map(PROPERTIES.map((p) => [p.id, p]));
+var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+function tracksActive(tracks) {
+  if (!tracks) return false;
+  return Object.values(tracks).some((pts) => Array.isArray(pts) && pts.length >= 2);
+}
+function normalisePropPoints(pts) {
+  if (!pts || !Array.isArray(pts)) return null;
+  const clean = pts.filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y)).map((p) => ({ x: clamp013(p.x), y: clamp013(p.y) })).sort((a, b) => a.x - b.x);
+  const out = [];
+  for (const p of clean) {
+    if (out.length && Math.abs(out[out.length - 1].x - p.x) < 4e-3) out[out.length - 1] = p;
+    else out.push(p);
+  }
+  if (out.length < 2) return null;
+  return out;
+}
+function propValueAt(clip, prop, local, spanDur) {
+  const spec = PROPERTY_BY_ID.get(prop);
+  if (!spec) return 0;
+  const base = spec.fallback(clip);
+  const pts = normalisePropPoints(clip.propCurves?.[prop]);
+  if (!pts || !(spanDur > 0)) return base;
+  const u = clamp013(local / spanDur);
+  const lut = curveLut(pts);
+  const v01 = lut[Math.round(u * 255)] / 255;
+  const real = spec.min + v01 * (spec.max - spec.min);
+  return Number.isFinite(real) ? real : base;
 }
 
 // src/mayocut/looks.ts
@@ -5303,107 +5521,6 @@ function buildAudioFx(ctx, id, opts = {}) {
   return { input: inputGain, output: out, rate: recipe.rate, nodes };
 }
 
-// src/mayocut/curves.ts
-function isIdentity(points) {
-  if (!points || points.length < 2) return true;
-  return points.every((p, i) => {
-    const want = i / (points.length - 1);
-    return Math.abs(p.x - want) < 1e-6 && Math.abs(p.y - want) < 1e-6;
-  });
-}
-function curvesActive(c) {
-  if (!c) return false;
-  return !isIdentity(c.rgb) || !isIdentity(c.r) || !isIdentity(c.g) || !isIdentity(c.b);
-}
-function normalisePoints(points) {
-  const clean = points.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)).map((p) => ({ x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) })).sort((a, b) => a.x - b.x);
-  const out = [];
-  for (const p of clean) {
-    if (out.length && Math.abs(out[out.length - 1].x - p.x) < 1e-4) continue;
-    out.push(p);
-  }
-  if (!out.length || out[0].x > 1e-4) out.unshift({ x: 0, y: out[0]?.y ?? 0 });
-  if (out[out.length - 1].x < 1 - 1e-4) out.push({ x: 1, y: out[out.length - 1].y });
-  return out;
-}
-function evalCurve(points, x) {
-  const pts = normalisePoints(points);
-  const n = pts.length;
-  if (n === 0) return x;
-  if (n === 1) return pts[0].y;
-  if (x <= pts[0].x) return pts[0].y;
-  if (x >= pts[n - 1].x) return pts[n - 1].y;
-  let i = 0;
-  while (i < n - 2 && x > pts[i + 1].x) i++;
-  const x0 = pts[i].x;
-  const x1 = pts[i + 1].x;
-  const y0 = pts[i].y;
-  const y1 = pts[i + 1].y;
-  const h = x1 - x0;
-  if (h <= 1e-9) return y1;
-  const d = [];
-  for (let k = 0; k < n - 1; k++) d.push((pts[k + 1].y - pts[k].y) / (pts[k + 1].x - pts[k].x));
-  const m = new Array(n).fill(0);
-  m[0] = d[0];
-  m[n - 1] = d[n - 2];
-  for (let k = 1; k < n - 1; k++) {
-    if (d[k - 1] * d[k] <= 0) m[k] = 0;
-    else m[k] = (d[k - 1] + d[k]) / 2;
-  }
-  for (let k = 0; k < n - 1; k++) {
-    if (Math.abs(d[k]) < 1e-9) {
-      m[k] = 0;
-      m[k + 1] = 0;
-      continue;
-    }
-    const a = m[k] / d[k];
-    const b = m[k + 1] / d[k];
-    const h2 = a * a + b * b;
-    if (h2 > 9) {
-      const t4 = 3 / Math.sqrt(h2);
-      m[k] = t4 * a * d[k];
-      m[k + 1] = t4 * b * d[k];
-    }
-  }
-  const t = (x - x0) / h;
-  const t2 = t * t;
-  const t3 = t2 * t;
-  return (2 * t3 - 3 * t2 + 1) * y0 + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * y1 + (t3 - t2) * h * m[i + 1];
-}
-function curveLut(points) {
-  const lut = new Uint8ClampedArray(256);
-  for (let i = 0; i < 256; i++) lut[i] = Math.round(evalCurve(points, i / 255) * 255);
-  return lut;
-}
-function buildCurveLuts(c) {
-  if (!c || !curvesActive(c)) return null;
-  return {
-    rgb: isIdentity(c.rgb) ? null : curveLut(c.rgb),
-    r: isIdentity(c.r) ? null : curveLut(c.r),
-    g: isIdentity(c.g) ? null : curveLut(c.g),
-    b: isIdentity(c.b) ? null : curveLut(c.b)
-  };
-}
-function applyCurveLuts(d, luts) {
-  const { rgb, r, g, b } = luts;
-  for (let i = 0; i < d.length; i += 4) {
-    let R = d[i];
-    let G = d[i + 1];
-    let B = d[i + 2];
-    if (rgb) {
-      R = rgb[R];
-      G = rgb[G];
-      B = rgb[B];
-    }
-    if (r) R = r[R];
-    if (g) G = g[G];
-    if (b) B = b[B];
-    d[i] = R;
-    d[i + 1] = G;
-    d[i + 2] = B;
-  }
-}
-
 // src/mayocut/hsl.ts
 var HSL_BANDS = [
   { id: "red", name: "Red", center: 0, swatch: "#ef4444" },
@@ -5541,29 +5658,29 @@ function sourceFor(consumer, originalUrl, proxyUrl) {
 
 // src/mayocut/luts.ts
 function applyLut(table, px) {
-  const n = table.size;
-  const scale = (n - 1) / 255;
+  const n2 = table.size;
+  const scale = (n2 - 1) / 255;
   const data = table.data;
-  const step = n * n;
+  const step = n2 * n2;
   for (let i = 0; i < px.length; i += 4) {
     const r = px[i] * scale;
     const g = px[i + 1] * scale;
     const b = px[i + 2] * scale;
-    const r0 = Math.min(n - 2, r | 0);
-    const g0 = Math.min(n - 2, g | 0);
-    const b0 = Math.min(n - 2, b | 0);
+    const r0 = Math.min(n2 - 2, r | 0);
+    const g0 = Math.min(n2 - 2, g | 0);
+    const b0 = Math.min(n2 - 2, b | 0);
     const rf = r - r0;
     const gf = g - g0;
     const bf = b - b0;
     for (let c = 0; c < 3; c++) {
-      const v000 = data[(b0 * step + g0 * n + r0) * 3 + c];
-      const v100 = data[(b0 * step + g0 * n + r0 + 1) * 3 + c];
-      const v010 = data[(b0 * step + (g0 + 1) * n + r0) * 3 + c];
-      const v110 = data[(b0 * step + (g0 + 1) * n + r0 + 1) * 3 + c];
-      const v001 = data[((b0 + 1) * step + g0 * n + r0) * 3 + c];
-      const v101 = data[((b0 + 1) * step + g0 * n + r0 + 1) * 3 + c];
-      const v011 = data[((b0 + 1) * step + (g0 + 1) * n + r0) * 3 + c];
-      const v111 = data[((b0 + 1) * step + (g0 + 1) * n + r0 + 1) * 3 + c];
+      const v000 = data[(b0 * step + g0 * n2 + r0) * 3 + c];
+      const v100 = data[(b0 * step + g0 * n2 + r0 + 1) * 3 + c];
+      const v010 = data[(b0 * step + (g0 + 1) * n2 + r0) * 3 + c];
+      const v110 = data[(b0 * step + (g0 + 1) * n2 + r0 + 1) * 3 + c];
+      const v001 = data[((b0 + 1) * step + g0 * n2 + r0) * 3 + c];
+      const v101 = data[((b0 + 1) * step + g0 * n2 + r0 + 1) * 3 + c];
+      const v011 = data[((b0 + 1) * step + (g0 + 1) * n2 + r0) * 3 + c];
+      const v111 = data[((b0 + 1) * step + (g0 + 1) * n2 + r0 + 1) * 3 + c];
       const c00 = v000 + (v100 - v000) * rf;
       const c10 = v010 + (v110 - v010) * rf;
       const c01 = v001 + (v101 - v001) * rf;
@@ -5941,7 +6058,7 @@ function buildFilterCss(clip) {
   }
   return [...parts, ...parts2].filter(Boolean).join(" ");
 }
-var clamp013 = (v) => Math.max(0, Math.min(1, v));
+var clamp014 = (v) => Math.max(0, Math.min(1, v));
 var lerp = (a, b, k) => a + (b - a) * k;
 function srcW(src) {
   if (src instanceof HTMLVideoElement) return src.videoWidth;
@@ -5997,7 +6114,7 @@ function animAt(kfs, base, t) {
     const b = kfs[i + 1];
     if (t >= a.at && t < b.at) {
       const span = b.at - a.at;
-      const k = span > 1e-4 ? clamp013((t - a.at) / span) : 1;
+      const k = span > 1e-4 ? clamp014((t - a.at) / span) : 1;
       const e = easeValue(a.ease, k, a.bez);
       return {
         x: lerp(a.v.x, b.v.x, e),
@@ -6096,6 +6213,14 @@ function cloneKeyframe(k, at = k.at) {
   if (k.ease) out.ease = k.ease;
   if (k.bez) out.bez = { x1: k.bez.x1, y1: k.bez.y1, x2: k.bez.x2, y2: k.bez.y2 };
   return out;
+}
+function clonePropCurves(src) {
+  if (!src) return void 0;
+  const out = {};
+  for (const [k, pts] of Object.entries(src)) {
+    if (Array.isArray(pts)) out[k] = pts.map((p) => ({ x: p.x, y: p.y }));
+  }
+  return Object.keys(out).length ? out : void 0;
 }
 function adjustmentScale(previewMaxSide, W, H) {
   if (previewMaxSide <= 0) return 1;
@@ -6551,15 +6676,15 @@ var Engine = class {
     const start = Math.max(0, Math.floor(inS * sr));
     const end = Math.min(buf.length, Math.ceil(outS * sr));
     if (end - start < sr * 0.15) return null;
-    const n = end - start;
+    const n2 = end - start;
     const chs = buf.numberOfChannels;
-    const out = new Float32Array(n);
+    const out = new Float32Array(n2);
     for (let c = 0; c < chs; c++) {
       const d = buf.getChannelData(c);
-      for (let i = 0; i < n; i++) out[i] += d[start + i] / chs;
+      for (let i = 0; i < n2; i++) out[i] += d[start + i] / chs;
     }
     const channels = Array.from({ length: chs }, (_, c) => buf.getChannelData(c).slice(start, end));
-    return { samples: out, channels, sampleRate: sr, duration: n / sr };
+    return { samples: out, channels, sampleRate: sr, duration: n2 / sr };
   }
   /** On-device memory guard for full-file audio decode. */
   audioBufferAllowed(mediaId) {
@@ -6577,8 +6702,8 @@ var Engine = class {
         if (c.kind !== "audio" || !c.mediaId) continue;
         if (t >= c.start && t < c.start + c.duration) {
           active.set(c.mediaId, {
-            reverb: clamp013(c.fx?.reverb ?? 0),
-            echo: clamp013(c.fx?.echo ?? 0),
+            reverb: clamp014(c.fx?.reverb ?? 0),
+            echo: clamp014(c.fx?.echo ?? 0),
             fx: c.audioFx ?? "none"
           });
         }
@@ -6624,12 +6749,12 @@ var Engine = class {
     const fx = rec.fx;
     if (!ctx || !fx || !fx.fxIn || !fx.fxOut) return;
     if (fx.fxId === id) return;
-    for (const n of fx.fxNodes) {
+    for (const n2 of fx.fxNodes) {
       try {
-        n.disconnect();
+        n2.disconnect();
       } catch {
       }
-      const maybe = n;
+      const maybe = n2;
       if (typeof maybe.stop === "function") {
         try {
           maybe.stop();
@@ -7214,8 +7339,11 @@ var Engine = class {
   effectiveVolume(clip, t, s) {
     const hasPrevious = this.project.main[0]?.id !== clip.id;
     let v = mainClipGain(clip, s, this.nextMainSpan(s), t, hasPrevious);
+    if (Number.isFinite(clip.volume) && clip.volume > 0) {
+      v *= propValueAt(clip, "volume", t - s.start, s.end - s.start) / clip.volume;
+    }
     v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
-    return Math.max(0, Math.min(1, v));
+    return Math.max(0, v);
   }
   /** The span immediately after `s`, or null when `s` is the last one. */
   nextMainSpan(s) {
@@ -7229,10 +7357,14 @@ var Engine = class {
     const inT = t - c.start;
     const outT = c.start + c.duration - t;
     let v = c.volume ?? 1;
-    if (fadeIn > 0) v *= clamp013(inT / fadeIn);
-    if (fadeOut > 0) v *= clamp013(outT / fadeOut);
+    const baseVol = c.volume ?? 1;
+    if (Number.isFinite(baseVol) && baseVol > 0) {
+      v *= propValueAt(c, "volume", inT, c.duration) / baseVol;
+    }
+    if (fadeIn > 0) v *= clamp014(inT / fadeIn);
+    if (fadeOut > 0) v *= clamp014(outT / fadeOut);
     v *= this.trackGain(this.overlayTrackOf(c.id));
-    return Math.max(0, Math.min(1, v));
+    return Math.max(0, v);
   }
   /**
    * Track-level audio gain from mute/solo. Solo anywhere = every non-solo
@@ -7269,8 +7401,8 @@ var Engine = class {
     for (const tr of this.project.tracks) {
       for (const c of tr.clips) {
         if (!c.duck || c.kind === "text") continue;
-        const inK = clamp013((t - c.start) / 0.25);
-        const outK = clamp013((c.start + c.duration - t) / 0.25);
+        const inK = clamp014((t - c.start) / 0.25);
+        const outK = clamp014((c.start + c.duration - t) / 0.25);
         const amt = Math.min(0.98, c.duck) * amount * Math.min(inK, outK);
         if (this.project.tracks.some((x) => x.solo) && this.trackGain(tr.id) === 1) continue;
         k = Math.min(k, 1 - amt);
@@ -7413,17 +7545,17 @@ var Engine = class {
   }
   /** Remove every clip (main + all overlay tracks) that references a media id. */
   dropMediaRefs(mediaId) {
-    let n = 0;
+    let n2 = 0;
     const before = this.project.main.length;
     this.project.main = this.project.main.filter((c) => c.mediaId !== mediaId);
-    n += before - this.project.main.length;
+    n2 += before - this.project.main.length;
     for (const tr of this.project.tracks) {
       const b = tr.clips.length;
       tr.clips = tr.clips.filter((c) => c.mediaId !== mediaId);
-      n += b - tr.clips.length;
+      n2 += b - tr.clips.length;
     }
-    if (n) this.bump();
-    return n;
+    if (n2) this.bump();
+    return n2;
   }
   /** Interpolated animation values at the playhead for a clip. */
   animAtPlayhead(clip, clipStart) {
@@ -7488,7 +7620,7 @@ var Engine = class {
       const anim = animAt(c.keyframes, this.animBase(c), localT);
       if (c.kind === "adjustment") continue;
       if (c.kind === "text")
-        this.drawText(ctx, c, W, H, fadeAlpha * clamp013(anim.opacity), localT, c.duration, anim);
+        this.drawText(ctx, c, W, H, fadeAlpha * clamp014(anim.opacity), localT, c.duration, anim);
       if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
         const rec = this.els.get(c.mediaId);
         if (!rec || !rec.url) continue;
@@ -7511,7 +7643,7 @@ var Engine = class {
           h: size / ar
         });
         const rot = anim.rotation * Math.PI / 180;
-        const alpha = clamp013(fadeAlpha * anim.opacity);
+        const alpha = clamp014(fadeAlpha * anim.opacity);
         const blend = c.blend && c.blend !== "normal" ? c.blend : null;
         if (c.chroma && sw * sh > 4) {
           this.drawChroma(
@@ -7600,7 +7732,7 @@ var Engine = class {
     }
     if (kind === "zoom") {
       this.drawMainItem(ctx, a, 1, W, H, t, 0, 1 + 0.22 * k);
-      this.drawMainItem(ctx, b, clamp013(k * 1.15), W, H, t, 0, 1.18 - 0.18 * k);
+      this.drawMainItem(ctx, b, clamp014(k * 1.15), W, H, t, 0, 1.18 - 0.18 * k);
       return;
     }
     if (kind === "flash") {
@@ -7621,7 +7753,7 @@ var Engine = class {
       const rot = (1 - ease) * Math.PI * 0.5;
       const sc = 0.7 + 0.3 * ease;
       ctx.save();
-      ctx.globalAlpha = clamp013(ease * 1.6);
+      ctx.globalAlpha = clamp014(ease * 1.6);
       ctx.translate(W / 2, H / 2);
       ctx.rotate(rot);
       ctx.scale(sc, sc);
@@ -7687,21 +7819,21 @@ var Engine = class {
       buf.height = bh;
       const bctx = buf.getContext("2d");
       if (!bctx) {
-        this.drawMainItem(ctx, b, clamp013(k * 1.2), W, H, t);
+        this.drawMainItem(ctx, b, clamp014(k * 1.2), W, H, t);
         return;
       }
       bctx.scale(bw / W, bh / H);
       this.drawMainItem(bctx, b, 1, W, H, t);
       bctx.setTransform(1, 0, 0, 1, 0, 0);
-      const edge = -0.3 + 1.6 * clamp013(k);
+      const edge = -0.3 + 1.6 * clamp014(k);
       const shoulder = 0.35;
       bctx.globalCompositeOperation = "destination-in";
       const g = bctx.createLinearGradient(0, 0, bw, 0);
       const A0 = (v) => `rgba(0,0,0,${v})`;
-      g.addColorStop(0, A0(clamp013(edge) > 0 ? 1 : 0));
-      g.addColorStop(clamp013(edge), A0(clamp013(edge) > 0 ? 1 : 0));
-      g.addColorStop(clamp013(edge + shoulder), A0(clamp013(edge + shoulder) >= 1 ? 0 : 1));
-      g.addColorStop(1, A0(clamp013(edge + shoulder) >= 1 ? 0 : 1));
+      g.addColorStop(0, A0(clamp014(edge) > 0 ? 1 : 0));
+      g.addColorStop(clamp014(edge), A0(clamp014(edge) > 0 ? 1 : 0));
+      g.addColorStop(clamp014(edge + shoulder), A0(clamp014(edge + shoulder) >= 1 ? 0 : 1));
+      g.addColorStop(1, A0(clamp014(edge + shoulder) >= 1 ? 0 : 1));
       bctx.fillStyle = g;
       bctx.fillRect(0, 0, bw, bh);
       bctx.globalCompositeOperation = "source-over";
@@ -7711,7 +7843,7 @@ var Engine = class {
     if (kind === "zoomblur") {
       const blurPx = Math.sin(Math.PI * k) * Math.max(4, H * 0.022);
       this.drawMainItem(ctx, a, 1, W, H, t, blurPx * 0.6, 1 + 0.3 * k);
-      this.drawMainItem(ctx, b, clamp013(k * 1.2), W, H, t, blurPx, 1.3 - 0.3 * k);
+      this.drawMainItem(ctx, b, clamp014(k * 1.2), W, H, t, blurPx, 1.3 - 0.3 * k);
       return;
     }
     if (kind === "whipl" || kind === "whipr") {
@@ -7812,11 +7944,11 @@ var Engine = class {
     const vertical = dir === "up" || dir === "down";
     const span = vertical ? bh : bw;
     const feather = Math.max(1, span * 0.12);
-    const k = clamp013(e);
+    const k = clamp014(e);
     const lowSide = dir === "right" || dir === "down";
     const edge = lowSide ? -feather + k * (span + feather * 2) : span + feather - k * (span + feather * 2);
-    const t0 = clamp013((edge - feather) / span);
-    const t1 = clamp013((edge + feather) / span);
+    const t0 = clamp014((edge - feather) / span);
+    const t1 = clamp014((edge + feather) / span);
     const g = vertical ? bctx.createLinearGradient(0, 0, 0, bh) : bctx.createLinearGradient(0, 0, bw, 0);
     const A = (v) => `rgba(0,0,0,${v})`;
     g.addColorStop(0, A(lowSide ? 1 : 0));
@@ -7836,7 +7968,7 @@ var Engine = class {
     const rec = this.els.get(c.mediaId);
     const localT = t - s.start;
     const anim = animAt(c.keyframes, DEFAULT_ANIM, localT);
-    const a = clamp013(alpha * anim.opacity);
+    const a = clamp014(alpha * anim.opacity);
     if (!rec || !rec.url) {
       this.drawPlaceholder(ctx, W, H, c.mediaId, a);
       return;
@@ -7858,10 +7990,28 @@ var Engine = class {
     const eff = c.effect ?? "none";
     const ef = c.freeze ? { tx: 0, ty: 0, scale: 1, rot: 0 } : this.effectTransform(c, localT, W, H, mainClipDuration(c));
     ctx.save();
-    ctx.globalAlpha = a;
-    let filterCss = buildFilterCss(c);
+    let propAlpha = a;
+    if (c.propCurves?.opacity) {
+      const v = propValueAt(c, "opacity", localT, mainClipDuration(c));
+      propAlpha = a * clamp014(v);
+    }
+    ctx.globalAlpha = propAlpha;
+    let filterSource = c;
+    if (c.propCurves) {
+      const dur = mainClipDuration(c);
+      const graded = { ...c.adjust };
+      let changed = false;
+      for (const key of ["brightness", "contrast", "saturation"]) {
+        if (c.propCurves[key]) {
+          graded[key] = propValueAt(c, key, localT, dur);
+          changed = true;
+        }
+      }
+      if (changed) filterSource = { ...c, adjust: graded };
+    }
+    let filterCss = buildFilterCss(filterSource);
     if (eff === "blur-in") {
-      const ramp = clamp013(localT / 0.45);
+      const ramp = clamp014(localT / 0.45);
       const px = Math.round((1 - ramp) * H * 0.018 * 10) / 10;
       if (px > 0.05) filterCss = (filterCss + ` blur(${px}px)`).trim();
     }
@@ -7872,10 +8022,21 @@ var Engine = class {
       ctx.scale(scaleMul, scaleMul);
       ctx.translate(-W / 2, -H / 2);
     }
-    if (anim.x !== 0 || anim.y !== 0 || anim.scale !== 1 || anim.rotation !== 0) {
-      ctx.translate(W / 2 + anim.x * (W / 2), H / 2 + anim.y * (H / 2));
-      ctx.rotate(anim.rotation * Math.PI / 180);
-      ctx.scale(anim.scale, anim.scale);
+    let ax = anim.x;
+    let ay = anim.y;
+    let aScale = anim.scale;
+    let aRot = anim.rotation;
+    if (tracksActive(c.propCurves)) {
+      const dur = mainClipDuration(c);
+      if (c.propCurves?.x) ax = propValueAt(c, "x", localT, dur);
+      if (c.propCurves?.y) ay = propValueAt(c, "y", localT, dur);
+      if (c.propCurves?.scale) aScale = anim.scale * propValueAt(c, "scale", localT, dur);
+      if (c.propCurves?.rotation) aRot = propValueAt(c, "rotation", localT, dur);
+    }
+    if (ax !== 0 || ay !== 0 || aScale !== 1 || aRot !== 0) {
+      ctx.translate(W / 2 + ax * (W / 2), H / 2 + ay * (H / 2));
+      ctx.rotate(aRot * Math.PI / 180);
+      ctx.scale(aScale, aScale);
       ctx.translate(-W / 2, -H / 2);
     }
     if (c.flipX || c.flipY) {
@@ -7909,7 +8070,7 @@ var Engine = class {
       ctx.restore();
     }
     if (eff === "flash-in") {
-      const k = 1 - clamp013(localT / 0.18);
+      const k = 1 - clamp014(localT / 0.18);
       if (k > 0.01) {
         ctx.globalAlpha = a * k * 0.85;
         ctx.fillStyle = "#fff";
@@ -8017,22 +8178,22 @@ var Engine = class {
         r.rot = localT / Math.max(1e-3, dur) * Math.PI * 2;
         break;
       case "zoom-out":
-        r.scale = 1.16 - 0.16 * clamp013(localT / Math.max(0.6, dur * 0.6));
+        r.scale = 1.16 - 0.16 * clamp014(localT / Math.max(0.6, dur * 0.6));
         break;
       case "pan-left":
-        r.tx = -(W * 0.05) * clamp013(localT / Math.max(0.6, dur));
+        r.tx = -(W * 0.05) * clamp014(localT / Math.max(0.6, dur));
         r.scale = 1.08;
         break;
       case "pan-right":
-        r.tx = W * 0.05 * clamp013(localT / Math.max(0.6, dur));
+        r.tx = W * 0.05 * clamp014(localT / Math.max(0.6, dur));
         r.scale = 1.08;
         break;
       case "tilt-up":
-        r.ty = H * 0.045 * (1 - clamp013(localT / Math.max(0.6, dur)));
+        r.ty = H * 0.045 * (1 - clamp014(localT / Math.max(0.6, dur)));
         r.scale = 1.06;
         break;
       case "kenburns": {
-        const k = clamp013(localT / Math.max(1e-3, dur));
+        const k = clamp014(localT / Math.max(1e-3, dur));
         r.scale = 1.04 + 0.07 * k;
         r.tx = (k - 0.5) * W * 0.035;
         r.ty = (k - 0.5) * H * -0.02;
@@ -8045,11 +8206,11 @@ var Engine = class {
         break;
       }
       case "tilt-down":
-        r.ty = H * 0.045 * clamp013(localT / Math.max(0.6, dur));
+        r.ty = H * 0.045 * clamp014(localT / Math.max(0.6, dur));
         r.scale = 1.06;
         break;
       case "roll":
-        r.rot = (clamp013(localT / Math.max(1e-3, dur)) - 1) * Math.PI * 2;
+        r.rot = (clamp014(localT / Math.max(1e-3, dur)) - 1) * Math.PI * 2;
         r.scale = 1.12;
         break;
       case "float": {
@@ -8064,15 +8225,15 @@ var Engine = class {
         break;
       case "jitter": {
         const seed = hashId(c.id);
-        const n = (a) => Math.sin(localT * a + seed) * Math.sin(localT * (a * 0.37) + seed * 3);
-        r.tx = n(47) * W * 7e-3;
-        r.ty = n(53) * H * 7e-3;
-        r.rot = n(41) * 4e-3;
+        const n2 = (a) => Math.sin(localT * a + seed) * Math.sin(localT * (a * 0.37) + seed * 3);
+        r.tx = n2(47) * W * 7e-3;
+        r.ty = n2(53) * H * 7e-3;
+        r.rot = n2(41) * 4e-3;
         break;
       }
       case "whip-left":
       case "whip-right": {
-        const k = clamp013(localT / Math.max(1e-3, dur));
+        const k = clamp014(localT / Math.max(1e-3, dur));
         const e2 = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
         const dirSign = (c.effect ?? "") === "whip-left" ? -1 : 1;
         r.tx = dirSign * (1 - e2) * W * 0.5;
@@ -8080,14 +8241,14 @@ var Engine = class {
         break;
       }
       case "dolly-in":
-        r.scale = 1 + 0.16 * clamp013(localT / Math.max(1e-3, dur));
+        r.scale = 1 + 0.16 * clamp014(localT / Math.max(1e-3, dur));
         break;
       case "dolly-out":
-        r.scale = 1.16 - 0.16 * clamp013(localT / Math.max(1e-3, dur));
+        r.scale = 1.16 - 0.16 * clamp014(localT / Math.max(1e-3, dur));
         break;
       case "tilt-shift":
         r.scale = 1.08;
-        r.ty = (clamp013(localT / Math.max(1e-3, dur)) - 0.5) * H * 0.03;
+        r.ty = (clamp014(localT / Math.max(1e-3, dur)) - 0.5) * H * 0.03;
         break;
       case "earthquake": {
         const seed = hashId(c.id);
@@ -8109,7 +8270,7 @@ var Engine = class {
       // decides where the frame sits. Splitting them keeps the transform
       // function free of canvas work, which is what lets the audit test it.
       case "speed-push": {
-        const k2 = clamp013(localT / Math.max(1e-3, dur));
+        const k2 = clamp014(localT / Math.max(1e-3, dur));
         r.scale = 1 + 0.16 * k2 * k2;
         break;
       }
@@ -8127,7 +8288,7 @@ var Engine = class {
         r.scale = 1.08;
         break;
       case "focus-in": {
-        const k2 = clamp013(localT / 0.6);
+        const k2 = clamp014(localT / 0.6);
         r.scale = 1.03 - 0.03 * k2;
         break;
       }
@@ -8619,11 +8780,11 @@ var Engine = class {
     const italic = c.italic ? "italic " : "";
     const anim2 = c.anim ?? "none";
     ctx.save();
-    ctx.globalAlpha = alpha * clamp013(c.opacity ?? 1);
+    ctx.globalAlpha = alpha * clamp014(c.opacity ?? 1);
     let kbScale = 1;
     let kbX = 0;
     if (anim2 === "kenburns" && dur > 0.01) {
-      const k = clamp013(localT / dur);
+      const k = clamp014(localT / dur);
       kbScale = 1 + 0.09 * k;
       kbX = (k - 0.5) * W * 0.03;
     }
@@ -8637,36 +8798,36 @@ var Engine = class {
     let skewX = 0;
     let trackMul = 1;
     let wavePhase = 0;
-    if (anim2 === "bounce") yOff = -px * 0.9 * (1 - easeOutBounce(clamp013(localT / 0.55)));
-    if (anim2 === "slideup") yOff = (1 - clamp013(localT / 0.4)) * H * 0.03;
-    if (anim2 === "slideleft") xOff = (1 - clamp013(localT / 0.4)) * W * 0.06;
-    if (anim2 === "zoom-in") popScale = 0.72 + 0.28 * easeOutBounce(clamp013(localT / 0.5));
+    if (anim2 === "bounce") yOff = -px * 0.9 * (1 - easeOutBounce(clamp014(localT / 0.55)));
+    if (anim2 === "slideup") yOff = (1 - clamp014(localT / 0.4)) * H * 0.03;
+    if (anim2 === "slideleft") xOff = (1 - clamp014(localT / 0.4)) * W * 0.06;
+    if (anim2 === "zoom-in") popScale = 0.72 + 0.28 * easeOutBounce(clamp014(localT / 0.5));
     if (anim2 === "rise") {
-      const k = clamp013(localT / 0.55);
+      const k = clamp014(localT / 0.55);
       yOff = (1 - k) * H * 0.06;
       riseAlpha = k;
     }
     if (anim2 === "wipe-in") riseAlpha = 1;
-    if (anim2 === "pop") popScale = 0.4 + 0.6 * easeOutBack(clamp013(localT / 0.42));
-    if (anim2 === "drop-in") yOff = -H * 0.28 * (1 - easeOutBounce(clamp013(localT / 0.7)));
-    if (anim2 === "swing") swingAngle = (1 - easeOutBack(clamp013(localT / 0.75))) * -0.9;
-    if (anim2 === "blur-in") blurPx2 = (1 - clamp013(localT / 0.5)) * px * 0.55;
+    if (anim2 === "pop") popScale = 0.4 + 0.6 * easeOutBack(clamp014(localT / 0.42));
+    if (anim2 === "drop-in") yOff = -H * 0.28 * (1 - easeOutBounce(clamp014(localT / 0.7)));
+    if (anim2 === "swing") swingAngle = (1 - easeOutBack(clamp014(localT / 0.75))) * -0.9;
+    if (anim2 === "blur-in") blurPx2 = (1 - clamp014(localT / 0.5)) * px * 0.55;
     if (anim2 === "flip") {
-      const k = clamp013(localT / 0.5);
+      const k = clamp014(localT / 0.5);
       flipScale = Math.max(0.02, Math.abs(Math.cos(k * Math.PI)));
     }
-    if (anim2 === "skew-in") skewX = (1 - clamp013(localT / 0.5)) * 0.55;
+    if (anim2 === "skew-in") skewX = (1 - clamp014(localT / 0.5)) * 0.55;
     if (anim2 === "tracking-in") {
-      const k = easeOutCubic(clamp013(localT / 0.8));
+      const k = easeOutCubic(clamp014(localT / 0.8));
       trackMul = 6 + (1 - 6) * k;
-      riseAlpha = clamp013(localT / 0.25);
+      riseAlpha = clamp014(localT / 0.25);
     }
     if (anim2 === "wave") wavePhase = localT * 3.4;
     ctx.font = `${italic}${weight} ${Math.round(px)}px ${fontCss(c.font, this.project.fonts)}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const tracking = (c.tracking ?? 0) * trackMul * px / 100;
-    ctx.globalAlpha = alpha * clamp013(c.opacity ?? 1) * riseAlpha;
+    ctx.globalAlpha = alpha * clamp014(c.opacity ?? 1) * riseAlpha;
     if (anim2 === "karaoke" && (c.words?.length ?? 0) > 0) {
       this.drawTextKaraoke(ctx, c, W, H, px, localT);
       ctx.restore();
@@ -8677,9 +8838,9 @@ var Engine = class {
     const rawLines = text.split("\n");
     let prefix = 0;
     const lines = rawLines.map((l) => {
-      const n = Math.max(0, Math.min(l.length, reveal - prefix));
+      const n2 = Math.max(0, Math.min(l.length, reveal - prefix));
       prefix += l.length + 1;
-      return l.slice(0, n);
+      return l.slice(0, n2);
     });
     const totalChars = text.length;
     const doneTyping = reveal >= totalChars;
@@ -8963,7 +9124,8 @@ var Engine = class {
         id: uid("mc"),
         in: c.reverse ? srcAt : c.in,
         out: c.reverse ? c.out : srcAt,
-        keyframes: kfsA && kfsA.length ? kfsA : void 0
+        keyframes: kfsA && kfsA.length ? kfsA : void 0,
+        propCurves: clonePropCurves(c.propCurves)
       };
       const b = {
         ...c,
@@ -8972,7 +9134,8 @@ var Engine = class {
         out: c.reverse ? srcAt : c.out,
         transitionIn: "none",
         transitionDur: 0,
-        keyframes: kfsB && kfsB.length ? kfsB : void 0
+        keyframes: kfsB && kfsB.length ? kfsB : void 0,
+        propCurves: clonePropCurves(c.propCurves)
       };
       this.project.main.splice(i, 1, a, b);
       this.bump();
@@ -9013,6 +9176,7 @@ var Engine = class {
       id: uid("mc"),
       adjust: { ...src.adjust },
       keyframes: src.keyframes?.map(cloneKeyframe),
+      propCurves: clonePropCurves(src.propCurves),
       transitionIn: "none",
       transitionDur: 0
     });
@@ -9270,11 +9434,11 @@ var Engine = class {
   splitAtAllBeats() {
     const beats = (this.project.beats ?? []).slice().sort((a, b) => a - b);
     if (beats.length === 0) return 0;
-    let n = 0;
+    let n2 = 0;
     for (let i = beats.length - 1; i >= 0; i--) {
-      if (this.splitAt(beats[i])) n++;
+      if (this.splitAt(beats[i])) n2++;
     }
-    return n;
+    return n2;
   }
   setBeats(beats) {
     this.project.beats = beats.slice(0, 400).sort((a, b) => a - b);
@@ -9349,6 +9513,43 @@ var Engine = class {
    * reconstructing it. `custom` carries explicit control points; every other id
    * clears them so a stale curve cannot survive a preset change.
    */
+  /**
+   * Write a per-property curve (or clear it with null).
+   *
+   * Stored on the clip rather than in a side table so undo, autosave and export
+   * all carry it for free — the same reason every other clip setting lives there.
+   */
+  setPropCurve(clipId, prop, points) {
+    const c = this.findClipAny(clipId);
+    if (!c) return false;
+    if (!points || points.length < 2) {
+      if (c.propCurves) {
+        delete c.propCurves[prop];
+        if (Object.keys(c.propCurves).length === 0) delete c.propCurves;
+      }
+    } else {
+      c.propCurves ??= {};
+      c.propCurves[prop] = points.map((p) => ({ x: p.x, y: p.y }));
+    }
+    this.bump();
+    return true;
+  }
+  /** The curve for one property, or null when the clip holds its own value. */
+  propCurve(clipId, prop) {
+    const c = this.findClipAny(clipId);
+    return c?.propCurves?.[prop] ?? null;
+  }
+  /**
+   * Real-unit value of a property for a main or overlay clip at clip-local time.
+   * Returns null when no curve governs the property, so callers can keep their
+   * existing (cheaper) path untouched.
+   */
+  propAt(clipId, prop, local) {
+    const c = this.findClipAny(clipId);
+    if (!c || !c.propCurves?.[prop]) return null;
+    const spanDur = "kind" in c ? c.duration : mainClipDuration(c);
+    return propValueAt(c, prop, local, spanDur);
+  }
   setKeyframeEase(clipId, at, ease, bez) {
     const kf = this.keyframeNear(clipId, at);
     if (!kf) return false;
@@ -9618,11 +9819,11 @@ var Engine = class {
     const prevCap = this.previewMaxSide;
     try {
       await probe.configure({ codec, width: w, height: h, framerate: fps, bitrate: 2e6 });
-      const n = Math.max(4, Math.min(24, sampleFrames));
+      const n2 = Math.max(4, Math.min(24, sampleFrames));
       const started = performance.now();
-      for (let f = 0; f < n; f++) {
+      for (let f = 0; f < n2; f++) {
         if (encError) break;
-        const t = f / n * dur;
+        const t = f / n2 * dur;
         await this.frameReadyAt(t, 1500);
         const vf = new W_.VideoFrame(this.canvas, { timestamp: f * 33333 });
         probe.encode(vf, { keyFrame: f === 0 });
@@ -9754,13 +9955,13 @@ var Engine = class {
         const chunkFrames = sampleRate;
         const data = audio.channels;
         for (let off = 0; off < audio.frames; off += chunkFrames) {
-          const n = Math.min(chunkFrames, audio.frames - off);
-          const l = data[0].slice(off, off + n);
-          const r = data[1].slice(off, off + n);
+          const n2 = Math.min(chunkFrames, audio.frames - off);
+          const l = data[0].slice(off, off + n2);
+          const r = data[1].slice(off, off + n2);
           const ad = new W2Audio.AudioData({
             format: "f32-planar",
             sampleRate,
-            numberOfFrames: n,
+            numberOfFrames: n2,
             numberOfChannels: 2,
             timestamp: Math.round(off / sampleRate * 1e6),
             data: [l, r]
@@ -9831,12 +10032,12 @@ var Engine = class {
     const opusRate = 48e3;
     if (audio && audio.sampleRate !== opusRate) {
       const ratio = opusRate / audio.sampleRate;
-      const n = Math.max(1, Math.round(audio.frames * ratio));
+      const n2 = Math.max(1, Math.round(audio.frames * ratio));
       const resampled = [];
       for (let ch = 0; ch < 2; ch++) {
         const src = audio.channels[ch] ?? audio.channels[0];
-        const out = new Float32Array(n);
-        for (let i = 0; i < n; i++) {
+        const out = new Float32Array(n2);
+        for (let i = 0; i < n2; i++) {
           const x = i / ratio;
           const i0 = Math.floor(x);
           const i1 = Math.min(src.length - 1, i0 + 1);
@@ -9846,7 +10047,7 @@ var Engine = class {
         resampled.push(out);
       }
       audio.channels = resampled;
-      audio.frames = n;
+      audio.frames = n2;
       audio.sampleRate = opusRate;
     }
     const target = new ArrayBufferTarget2();
@@ -9914,13 +10115,13 @@ var Engine = class {
         const chunkFrames = sampleRate;
         for (let off = 0; off < audio.frames; off += chunkFrames) {
           if (encError) break;
-          const n = Math.min(chunkFrames, audio.frames - off);
-          const l = data[0].slice(off, off + n);
-          const r = data[1].slice(off, off + n);
+          const n2 = Math.min(chunkFrames, audio.frames - off);
+          const l = data[0].slice(off, off + n2);
+          const r = data[1].slice(off, off + n2);
           const ad = new W2Audio.AudioData({
             format: "f32-planar",
             sampleRate,
-            numberOfFrames: n,
+            numberOfFrames: n2,
             numberOfChannels: 2,
             timestamp: Math.round(off / sampleRate * 1e6),
             data: [l, r]
@@ -10407,14 +10608,14 @@ var Engine = class {
     onProgress(0.9);
     const L = rendered.getChannelData(0);
     const R = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : L;
-    const n = L.length;
-    const ab = new ArrayBuffer(44 + n * 4);
+    const n2 = L.length;
+    const ab = new ArrayBuffer(44 + n2 * 4);
     const v = new DataView(ab);
     const tag = (o2, t) => {
       for (let i = 0; i < t.length; i++) v.setUint8(o2 + i, t.charCodeAt(i));
     };
     tag(0, "RIFF");
-    v.setUint32(4, 36 + n * 4, true);
+    v.setUint32(4, 36 + n2 * 4, true);
     tag(8, "WAVE");
     tag(12, "fmt ");
     v.setUint32(16, 16, true);
@@ -10425,9 +10626,9 @@ var Engine = class {
     v.setUint16(32, 4, true);
     v.setUint16(34, 16, true);
     tag(36, "data");
-    v.setUint32(40, n * 4, true);
+    v.setUint32(40, n2 * 4, true);
     let o = 44;
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < n2; i++) {
       v.setInt16(o, Math.max(-1, Math.min(1, L[i])) * 32767, true);
       o += 2;
       v.setInt16(o, Math.max(-1, Math.min(1, R[i])) * 32767, true);
