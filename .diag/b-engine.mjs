@@ -8080,7 +8080,7 @@ var Engine = class {
     const glitching = eff === "glitch" && this.glitchWindow(localT);
     const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves) || hslActive(c.hsl);
     if (lut || needsGrade) {
-      this.drawMainGrade(ctx, el, W, H, filterSource, lut ?? null);
+      this.drawMainGrade(ctx, el, W, H, c, lut ?? null);
     } else if (glitching || eff === "vhs") {
       this.drawMainSliced(ctx, el, W, H, glitching, localT);
     } else {

@@ -3760,22 +3760,31 @@ await t('setPropCurve writes, clears and ignores an unknown clip', () => {
   assert.equal(e.project.main[0].propCurves, undefined, 'an empty curve set should be removed');
   assert.equal(e.setPropCurve('nope', 'opacity', [{ x: 0, y: 0 }, { x: 1, y: 1 }]), false);
 });
-await t('a grade curve actually reaches the PIXEL path, not just the CSS path', () => {
-  // The bug: gradePixels reads c.adjust directly, and drawMainGrade was handed
-  // the raw clip. So an animated brightness was applied through CSS (which the
-  // curve fed) and ignored by the pixel pass — the same slider animated at the
-  // start of a clip and froze the moment the clip also had a temperature,
-  // sharpen or vignette grade. Both paths must receive the curved clip.
+await t('grade curves reach the pixels through the CSS filter, not the pixel pass', () => {
+  // CORRECTION to Stage 9. That commit claimed a bug: that drawMainGrade was
+  // handed the raw clip, so an animated brightness "froze" whenever a pixel grade
+  // was present. A real rasteriser later showed the claim was wrong.
+  //
+  // gradePixels only reads temperature, tint, split-tone, sharpen and vignette —
+  // it never touches brightness/contrast/saturation. Those go through ctx.filter,
+  // which is assigned BEFORE the graded/ungraded branch, so both paths get them.
+  // Passing `filterSource` into drawMainGrade was therefore a no-op, and the
+  // regression it was "fixing" did not exist.
   const src = readFileSync('src/mayocut/engine.ts', 'utf8');
-  const fn = src.slice(src.indexOf('private drawMainItem'));
-  const body = fn.slice(0, fn.indexOf('private drawMainGrade'));
-  assert.ok(!/drawMainGrade\(ctx, el, W, H, c, /.test(body),
-    'drawMainGrade is still handed the raw clip, so grade curves are ignored');
-  assert.ok(/drawMainGrade\(ctx, el, W, H, filterSource, /.test(body),
-    'drawMainGrade must receive the clip with its curved adjust values');
-  // and the curved values must actually be built
-  assert.ok(/graded\[key\] = propValueAt\(c, key, localT, dur\)/.test(src),
-    'brightness/contrast/saturation must be resolved from their curves');
+  const grade = src.slice(src.indexOf('private gradePixels'));
+  const body = grade.slice(0, grade.indexOf('private ') > 0 ? grade.indexOf('\n  /**', 100) : 6000);
+  assert.ok(!/a\.brightness/.test(body), 'gradePixels must not read brightness — it is a CSS filter');
+  assert.ok(!/a\.contrast/.test(body), 'gradePixels must not read contrast');
+  assert.ok(!/a\.saturation/.test(body), 'gradePixels must not read saturation');
+  // and ctx.filter must be set outside the graded/ungraded branch, so both get it
+  const item = src.slice(src.indexOf('private drawMainItem'));
+  const filterAt = item.indexOf('ctx.filter = filterCss');
+  const branchAt = item.indexOf('if (lut || needsGrade)');
+  assert.ok(filterAt > 0 && branchAt > 0, 'both the filter and the branch must exist');
+  assert.ok(
+    filterAt < branchAt,
+    'ctx.filter must be assigned BEFORE the graded branch, or the pixel path loses the grade',
+  );
 });
 await t('an overlay curve is applied, and leaves the untouched axes alone', () => {
   // Behavioural, not a source regex. Curves were only wired into the main-track

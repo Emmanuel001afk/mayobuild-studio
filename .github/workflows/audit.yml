@@ -18,6 +18,7 @@ on:
     paths:
       - "src/mayocut/**"
       - "scripts/smoke-*.mjs"
+      - "scripts/pixel-render.mjs"
       - ".diag/**"
       - ".github/workflows/audit.yml"
   pull_request:
@@ -57,6 +58,14 @@ jobs:
         run: |
           bash scripts/make-fixtures.sh --check
           node scripts/fixture-bench.mjs
+
+      # A real Skia canvas in plain node. Everything before this asserts wiring;
+      # this asserts PIXELS, which is the only way to catch a curve that is read,
+      # stored, plotted — and then never applied.
+      - name: Pixel-level render verification
+        run: |
+          npm install --no-save --ignore-scripts @napi-rs/canvas
+          node scripts/pixel-render.mjs
 
       - name: Build offline shell bundle
         run: npm run build:shell
