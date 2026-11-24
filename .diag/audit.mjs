@@ -3462,6 +3462,147 @@ await t('easing survives a clip duplicate and a split', () => {
   assert.ok(/cloneKeyframe\(k, k\.at - local\)/.test(src),
     'splitting must shift the time AND keep the ease');
 });
+console.log('the "Invalid timeline time" crash — one bad number must not brick a project');
+await t('a non-finite overlay clip cannot make the project duration NaN', () => {
+  // This was the crash. One overlay with a NaN start made projectDuration() NaN;
+  // seek() then computed Math.max(0, Math.min(NaN, t)) = NaN (the clamp helpers
+  // do not reject a non-finite bound), so the playhead was non-finite and
+  // sampleTimeline threw on every single frame.
+  const base = (mutate) => {
+    const p = T.newProject('crash', '16:9');
+    p.main.push({
+      id: 'm1', mediaId: 'med', in: 0, out: 4, speed: 1, reverse: false, filter: 'none',
+      adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+      volume: 1, muted: false, transitionIn: 'none', transitionDur: 0,
+    });
+    mutate(p);
+    return p;
+  };
+  const cases = {
+    'NaN start': (p) => p.tracks[0].clips.push({ id: 'o', kind: 'text', start: NaN, duration: 2 }),
+    'NaN duration': (p) => p.tracks[0].clips.push({ id: 'o', kind: 'text', start: 1, duration: NaN }),
+    Infinity: (p) => p.tracks[2].clips.push({ id: 'a', kind: 'audio', start: 0, duration: Infinity }),
+    '-Infinity start': (p) => p.tracks[1].clips.push({ id: 'o', kind: 'image', start: -Infinity, duration: 2 }),
+  };
+  for (const [name, mutate] of Object.entries(cases)) {
+    const p = base(mutate);
+    const d = T.projectDuration(p);
+    // The EXACT duration matters, not merely that it is finite: 0 is finite, and
+    // collapsing the project to 0 s would be a different bug that a finiteness
+    // check happily accepts. The main clip is 0..4 s, so 4 is the only right
+    // answer — a corrupt overlay contributes nothing, it does not erase the edit.
+    assert.equal(d, 4, `${name} produced ${d}, expected the main clip's 4 s`);
+  }
+});
+await t('the final duration guard catches a non-finite sum from any source', () => {
+  // M1 lesson: the per-clip guards made the outer guard unreachable through the
+  // normal path, so a mutation of them survived. The outer guard is the one that
+  // must hold whatever a future track field does, so it is asserted directly:
+  // mainSpans can carry a corrupt end, and the returned duration must still be
+  // finite.
+  const p = T.newProject('outer', '16:9');
+  p.main.push({
+    id: 'm1', mediaId: 'med', in: 0, out: 4, speed: 1, reverse: false, filter: 'none',
+    adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+    volume: 1, muted: false, transitionIn: 'none', transitionDur: 0,
+  });
+  // a track shape the per-clip code does not understand
+  p.tracks.push({ id: 't_bad', name: 'bad', clips: [{ id: 'x', kind: 'text', start: NaN, duration: Infinity }] });
+  const d = T.projectDuration(p);
+  assert.equal(d, 4, 'projectDuration returned ' + d + ' for a corrupt track, expected 4');
+});
+await t('the playhead clamp cannot leave a NaN time', () => {
+  // Mirrors Engine.seek: the limit must be finite before it is used, because
+  // Math.max(0, Math.min(NaN, x)) is NaN rather than 0.
+  const clamp = (dur, t) => {
+    const limit = Number.isFinite(dur) && dur > 0 ? dur : 0;
+    const want = Number.isFinite(t) ? t : 0;
+    return Math.max(0, Math.min(limit, want));
+  };
+  for (const [dur, t] of [[NaN, 1], [1, NaN], [NaN, NaN], [Infinity, 5], [4, -3]]) {
+    const v = clamp(dur, t);
+    assert.ok(Number.isFinite(v) && v >= 0, `clamp(${dur}, ${t}) = ${v}`);
+  }
+});
+await t('seek() survives a non-finite duration instead of throwing Invalid timeline time', () => {
+  // The exact reported crash, reproduced at its source. The old code did
+  // `this.t = Math.max(0, Math.min(this.duration(), t))`; with a NaN duration
+  // that is NaN, and the very next syncElements -> sampleTimeline threw
+  // RangeError("Invalid timeline time"), which the error boundary turned into
+  // "Mayobuild Studio failed to start" over the whole editor.
+  const e = new E.Engine(mkProject());
+  e.duration = () => NaN;
+  assert.doesNotThrow(() => e.seek(2), 'seek must not throw on a non-finite duration');
+  assert.ok(Number.isFinite(e.t), 'the playhead became ' + e.t);
+  assert.equal(e.t, 0, 'a non-finite range should fall back to the start, not to NaN');
+  // and with a finite duration it still honours the request
+  const e2 = new E.Engine(mkProject());
+  e2.seek(1);
+  assert.equal(e2.t, 1);
+  // a non-finite REQUEST must not poison the clock either
+  e2.seek(NaN);
+  assert.ok(Number.isFinite(e2.t), 'a NaN seek target left t = ' + e2.t);
+});
+await t('repairProject fixes a corrupt project instead of deleting clips', () => {
+  const p = T.newProject('repair', '16:9');
+  p.main.push({
+    id: 'm1', mediaId: 'med', in: 0, out: 4, speed: 1, reverse: false, filter: 'none',
+    adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+    volume: 1, muted: false, transitionIn: 'none', transitionDur: 0,
+  });
+  p.tracks[0].clips.push({ id: 'o1', kind: 'text', start: NaN, duration: 2, text: 'keep me' });
+  p.tracks[2].clips.push({ id: 'a1', kind: 'audio', start: -5, duration: Infinity });
+  const { project: fixed, repaired } = PS.repairProject(p);
+  assert.ok(repaired.length >= 3, 'the broken fields should be reported, got ' + repaired.length);
+  assert.ok(Number.isFinite(T.projectDuration(fixed)), 'still non-finite after repair');
+  // the clips survive — a repair must not silently delete the user's work
+  assert.equal(fixed.tracks[0].clips.length, 1, 'the text clip was dropped by the repair');
+  assert.equal(fixed.tracks[2].clips.length, 1, 'the audio clip was dropped by the repair');
+  assert.equal(fixed.tracks[0].clips[0].text, 'keep me', 'clip content was lost');
+  assert.ok(Number.isFinite(fixed.tracks[2].clips[0].duration) && fixed.tracks[2].clips[0].duration > 0);
+  assert.ok(fixed.tracks[2].clips[0].start >= 0, 'a negative start must be clamped to 0');
+});
+await t('repairProject leaves a healthy project completely alone', () => {
+  const p = T.newProject('clean', '16:9');
+  p.main.push({
+    id: 'm1', mediaId: 'med', in: 0.5, out: 4, speed: 2, reverse: false, filter: 'none',
+    adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+    volume: 1, muted: false, transitionIn: 'none', transitionDur: 0,
+  });
+  p.tracks[1].clips.push({ id: 'o1', kind: 'image', start: 1, duration: 2 });
+  const before = JSON.stringify(p);
+  const { project: fixed, repaired } = PS.repairProject(p);
+  assert.deepEqual(repaired, [], 'a clean project must not be reported as repaired');
+  assert.equal(JSON.stringify(fixed), before, 'a clean project must be byte-identical');
+});
+await t('the editor repairs a project at load, before the engine sees it', () => {
+  // A repair that exists but is never called rescues nobody — and this bug was
+  // persisted, so runtime clamping alone cannot recover an existing project.
+  const src = readFileSync('src/mayocut/components/Editor.tsx', 'utf8');
+  assert.ok(/import \{[^}]*repairProject/s.test(src), 'Editor must import repairProject');
+  const load = src.slice(src.indexOf('const [p, m] = await Promise.all'));
+  assert.ok(load.indexOf('repairProject(p)') > 0, 'the load path must repair the project');
+  assert.ok(
+    load.indexOf('repairProject(p)') < load.indexOf('setProject('),
+    'the project must be repaired before it is put into state',
+  );
+});
+await t('the shell does not cover a running app with the startup error', () => {
+  // The overlay was a full-screen, inset:0, z-index 99999 panel appended on ANY
+  // window error for the whole process lifetime, so a recoverable error after
+  // startup buried the editor behind "failed to start" with no way out.
+  const src = readFileSync('shell/main.tsx', 'utf8');
+  assert.ok(/appHasRendered/.test(src), 'the overlay must distinguish startup from runtime');
+  assert.ok(/role", "alert"/.test(src) || /role="alert"/.test(src), 'runtime errors need a dismissal bar');
+  assert.ok(/inset:0/.test(src), 'the full-screen variant should still exist for a real boot failure');
+  // the full-screen variant must be the else-branch, not the default
+  const fn = src.slice(src.indexOf('function showStartupError'));
+  const body = fn.slice(0, fn.indexOf('window.addEventListener'));
+  assert.ok(
+    body.indexOf('if (started)') < body.indexOf('inset:0'),
+    'the full-screen overlay must be conditional on the app not having rendered',
+  );
+});
 console.log('ripple.ts — deleting without desyncing the timeline');
 const mkTracks = () => [
   { id: 't_text', name: 'Text', clips: [{ id: 'cap', kind: 'text', start: 7, duration: 2 }] },

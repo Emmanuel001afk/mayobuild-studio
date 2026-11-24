@@ -909,6 +909,71 @@ those have their own controls and were not touched. The graph draws one segment
 at a time, so a long animation is eased keyframe by keyed keyframe rather than
 in a single multi-point curve editor.
 
+### "Invalid timeline time", and why it killed the app (Stage 7)
+
+Reported from a phone: opening a project showed **"⚠ Mayobuild Studio failed to
+start — RangeError: Invalid timeline time"** and nothing else. Importing *before*
+opening a project worked; importing *inside* one did not.
+
+**Both symptoms had one cause.** `projectDuration()` maxes over every overlay
+and audio clip as well as the main track. `mainClipDuration` had been hardened
+against NaN in an earlier stage, but the overlay path was raw: one clip with a
+non-finite `start` or `duration` made the whole project duration `NaN`. Then
+
+```
+this.t = Math.max(0, Math.min(this.duration(), t));   // Math.min(NaN, t) = NaN
+```
+
+and the clamp helpers do **not** reject a non-finite bound — `Math.max(0, NaN)`
+is `NaN`, not `0`. So the playhead became `NaN` permanently, `sampleTimeline`
+threw `RangeError("Invalid timeline time")` on every frame, and the throw
+propagated out of the draw loop into the error boundary, which replaced the
+editor with a full-screen failure. The corruption was **persisted**, so it
+happened again on every launch.
+
+That also explains the import asymmetry exactly: importing inside a project
+calls `engine.setMedia(...)` and then `draw()`, which goes through the poisoned
+clock. Importing before a project exists never touches the engine.
+
+**Four changes, because one was not enough:**
+
+1. `projectDuration()` treats a non-finite clip field as a clip of no length
+   instead of letting it poison the sum.
+2. `Engine.seek()` clamps against a guaranteed-finite limit, and treats a
+   non-finite *request* as 0. `Math.max`/`Math.min` cannot be trusted to
+   sanitise anything.
+3. `repairProject()` repairs a project **when it is loaded**, and the editor
+   saves the repair back. Runtime clamping alone rescues nobody whose project is
+   already broken on disk. The policy is conservative: a broken number is
+   repaired to a harmless default, and **nothing is deleted** — a clip with a
+   bad start becomes a clip at 0, which the user can see and fix, rather than
+   silently vanishing. It returns the list of repairs, so the user is told
+   rather than quietly having their work rewritten.
+4. The shell's startup overlay no longer hijacks a running app. It used to
+   append a full-screen `inset:0; z-index:99999` panel on **any** window error
+   for the whole lifetime of the process — so a recoverable error long after
+   startup buried the editor behind "failed to start" with no way out. It now
+   only takes the screen when the app has not rendered yet; otherwise it shows a
+   dismissible bar and the user keeps their app.
+
+The bug was reproduced headlessly before and after: on the old code,
+`seek(2)` with a NaN duration throws exactly `RangeError: Invalid timeline time`
+from `seek` → `syncElements` → `sampleTimeline`; on the new code it lands on 0
+and the frame draws.
+
+**A testing lesson worth recording.** The first version of these tests asserted
+only that the duration was *finite*. Two mutations survived — including the
+original bug — because `0` is finite, and the guards had collapsed the project
+to nothing rather than crashing. Asserting the **exact** duration (4 s, from a
+4 s main clip) turned them into real tests. A test that accepts "did not crash"
+will happily accept "threw the whole edit away".
+
+One line remains **untested and deliberately kept**: the final
+`Number.isFinite(end) ? end : 0` in `projectDuration` is unreachable through the
+per-clip guards, and no mutation of the suite can reach it. It stays as defence
+in depth, with a comment saying so, because the cost of being wrong here is the
+whole app failing to start.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert

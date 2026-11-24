@@ -25,7 +25,70 @@
 // what order, what counts as success, and what to tell the user when it fails.
 // The browser glue (event listeners) lives with the editor.
 
-import type { Project } from "./types";
+import type { MainClip, OverlayClip, Project } from "./types";
+
+/**
+ * Repair a project loaded from storage so a corrupt number cannot brick it.
+ *
+ * This exists because of a real crash: one overlay clip with a non-finite
+ * `start` made `projectDuration()` return NaN, which made the playhead NaN,
+ * which made `sampleTimeline` throw on every frame — and the error boundary then
+ * replaced the whole editor with "failed to start". The corruption is on disk,
+ * so clamping the clock at runtime is not enough: the project has to be fixed
+ * when it is opened, or it fails again on every launch.
+ *
+ * The policy is deliberately conservative:
+ *   • a broken number is repaired to a harmless default;
+ *   • nothing is deleted — a clip with a bad start becomes a clip at 0, which
+ *     the user can see and fix, rather than silently vanishing;
+ *   • the return value reports whether anything changed, so the caller can save
+ *     the repair back and tell the user instead of quietly rewriting their work.
+ */
+export function repairProject(p: Project): { project: Project; repaired: string[] } {
+  const repaired: string[] = [];
+  const num = (v: unknown, fallback: number, label: string, ok?: (n: number) => boolean) => {
+    const good = typeof v === "number" && Number.isFinite(v) && (ok ? ok(v) : v >= 0);
+    if (good) return v as number;
+    repaired.push(label);
+    return fallback;
+  };
+
+  const main: MainClip[] = (p.main ?? []).map((c, i) => {
+    const next: MainClip = { ...c };
+    next.in = num(c.in, 0, `main[${i}].in`);
+    next.out = num(c.out, next.in + 5, `main[${i}].out`, (n) => n > next.in);
+    next.speed = num(c.speed, 1, `main[${i}].speed`, (n) => n > 0);
+    next.volume = num(c.volume, 1, `main[${i}].volume`);
+    next.transitionDur = num(c.transitionDur, 0, `main[${i}].transitionDur`);
+    return next;
+  });
+
+  const tracks = (p.tracks ?? []).map((tr) => ({
+    ...tr,
+    clips: (tr.clips ?? []).map((c: OverlayClip, i) => {
+      const next: OverlayClip = { ...c };
+      next.start = num(c.start, 0, `${tr.id}[${i}].start`);
+      next.duration = num(c.duration, 3, `${tr.id}[${i}].duration`, (n) => n > 0);
+      if (c.sourceOffset != null) {
+        next.sourceOffset = num(c.sourceOffset, 0, `${tr.id}[${i}].sourceOffset`);
+      }
+      return next;
+    }),
+  }));
+
+  // Project has no stored duration (it is derived), so only the clips and the
+  // handful of scalars that feed the transport are checked.
+  const next: Project = { ...p, main, tracks };
+  if (p.masterGain != null) next.masterGain = num(p.masterGain, 1, "project.masterGain");
+  if (Array.isArray(p.beats)) {
+    const beats = p.beats.filter((b) => Number.isFinite(b) && b >= 0);
+    if (beats.length !== p.beats.length) {
+      repaired.push("project.beats");
+      next.beats = beats;
+    }
+  }
+  return { project: next, repaired };
+}
 
 /** How long autosave waits after the last edit. */
 export const AUTOSAVE_DEBOUNCE_MS = 1200;
