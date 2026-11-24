@@ -4298,7 +4298,7 @@ function mainPlaybackRate(c, localT) {
 function mainClipGain(clip, span, next, t, hasPrevious = true) {
   if (clip.reverse || clip.freeze) return 0;
   const baseVolume = Number.isFinite(clip.volume) ? clip.volume : 1;
-  let v = clip.muted ? 0 : Math.max(0, Math.min(1, baseVolume));
+  let v = clip.muted ? 0 : Math.max(0, baseVolume);
   if (hasPrevious && clip.transitionIn !== "none" && t < span.start && clip.transitionDur > 0) {
     v *= Math.max(0, Math.min(1, (t - (span.start - clip.transitionDur)) / clip.transitionDur));
   }
@@ -4308,7 +4308,7 @@ function mainClipGain(clip, span, next, t, hasPrevious = true) {
       v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
     }
   }
-  return Math.max(0, Math.min(1, v));
+  return Math.max(0, v);
 }
 function mainSpans(project) {
   let t = 0;
@@ -7215,7 +7215,7 @@ var Engine = class {
     const hasPrevious = this.project.main[0]?.id !== clip.id;
     let v = mainClipGain(clip, s, this.nextMainSpan(s), t, hasPrevious);
     v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
-    return Math.max(0, Math.min(1, v));
+    return Math.max(0, v);
   }
   /** The span immediately after `s`, or null when `s` is the last one. */
   nextMainSpan(s) {
@@ -7232,7 +7232,7 @@ var Engine = class {
     if (fadeIn > 0) v *= clamp013(inT / fadeIn);
     if (fadeOut > 0) v *= clamp013(outT / fadeOut);
     v *= this.trackGain(this.overlayTrackOf(c.id));
-    return Math.max(0, Math.min(1, v));
+    return Math.max(0, v);
   }
   /**
    * Track-level audio gain from mute/solo. Solo anywhere = every non-solo

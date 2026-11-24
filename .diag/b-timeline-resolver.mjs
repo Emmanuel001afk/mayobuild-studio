@@ -282,7 +282,7 @@ function mainPlaybackRate(c, localT) {
 function mainClipGain(clip, span, next, t, hasPrevious = true) {
   if (clip.reverse || clip.freeze) return 0;
   const baseVolume = Number.isFinite(clip.volume) ? clip.volume : 1;
-  let v = clip.muted ? 0 : Math.max(0, Math.min(1, baseVolume));
+  let v = clip.muted ? 0 : Math.max(0, baseVolume);
   if (hasPrevious && clip.transitionIn !== "none" && t < span.start && clip.transitionDur > 0) {
     v *= Math.max(0, Math.min(1, (t - (span.start - clip.transitionDur)) / clip.transitionDur));
   }
@@ -292,7 +292,7 @@ function mainClipGain(clip, span, next, t, hasPrevious = true) {
       v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
     }
   }
-  return Math.max(0, Math.min(1, v));
+  return Math.max(0, v);
 }
 function mainSpans(project) {
   let t = 0;

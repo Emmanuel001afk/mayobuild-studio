@@ -1216,7 +1216,12 @@ export function mainClipGain(
   // A legacy clip may have no `volume`; NaN here would propagate into the gain
   // node and silence the entire audio chain.
   const baseVolume = Number.isFinite(clip.volume) ? clip.volume : 1;
-  let v = clip.muted ? 0 : Math.max(0, Math.min(1, baseVolume));
+  // Volume is a LINEAR multiplier and may legitimately exceed 1: loudness
+  // normalisation computes a gain that takes quiet footage up to the target, and
+  // clamping it here made that a silent no-op in the preview while the export
+  // path (rampedSource) applied it — the same clip was louder in the file than
+  // in the editor. Only 0 is a floor (a negative gain inverts phase).
+  let v = clip.muted ? 0 : Math.max(0, baseVolume);
   // incoming: fade up across this clip's own transition-in window — but only
   // if something precedes it. The first clip has no incoming transition, and
   // treating it as one silenced the start of every video.
@@ -1230,7 +1235,7 @@ export function mainClipGain(
       v *= Math.max(0, Math.min(1, 1 - (t - winStart) / next.clip.transitionDur));
     }
   }
-  return Math.max(0, Math.min(1, v));
+  return Math.max(0, v);
 }
 
 /** Sequential spans of main-track clips in timeline seconds. */

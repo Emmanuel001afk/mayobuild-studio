@@ -3603,6 +3603,38 @@ await t('the shell does not cover a running app with the startup error', () => {
     'the full-screen overlay must be conditional on the app not having rendered',
   );
 });
+await t('a normalised clip is as loud in the preview as in the export', () => {
+  // mainClipGain clamped volume to 1, so a loudness-normalised clip (gain > 1)
+  // played at unity in the editor while the export path applied the real gain.
+  // The same clip was audibly louder in the file than in the preview.
+  const mk = (volume) => {
+    const p = T.newProject('gain', '16:9');
+    p.main.push({
+      id: 'm1', mediaId: 'med', in: 0, out: 4, speed: 1, reverse: false, filter: 'none',
+      adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+      volume, muted: false, transitionIn: 'none', transitionDur: 0,
+    });
+    return p;
+  };
+  const gainAt = (volume) => {
+    const p = mk(volume);
+    const spans = T.mainSpans(p);
+    return T.mainClipGain(spans[0].clip, spans[0], null, 1, false);
+  };
+  assert.ok(Math.abs(gainAt(1) - 1) < 1e-9, 'unity volume must stay unity');
+  assert.ok(gainAt(2) > 1.5, 'volume 2 must give gain above unity, got ' + gainAt(2));
+  assert.ok(Math.abs(gainAt(2) - 2) < 1e-9, 'volume 2 should be exactly 2x');
+  assert.ok(gainAt(0.4) < 0.5, 'quiet clips must still attenuate');
+  assert.equal(gainAt(-1), 0, 'a negative volume must floor at 0, not invert phase');
+});
+await t('the preview does not clamp gain the way the export does not', () => {
+  // A wiring assertion: the clamp was inside effectiveVolume/overlayAudioVolume,
+  // which is why the module-level fix alone did not silence the bug.
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const eff = src.slice(src.indexOf('private effectiveVolume'));
+  assert.ok(!/return Math\.max\(0, Math\.min\(1, v\)\);/.test(eff.slice(0, 600)),
+    'effectiveVolume still clamps to 1, so a normalised clip is quiet in preview');
+});
 console.log('ripple.ts — deleting without desyncing the timeline');
 const mkTracks = () => [
   { id: 't_text', name: 'Text', clips: [{ id: 'cap', kind: 'text', start: 7, duration: 2 }] },

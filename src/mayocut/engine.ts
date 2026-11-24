@@ -1907,7 +1907,9 @@ export class Engine {
     const hasPrevious = this.project.main[0]?.id !== clip.id;
     let v = mainClipGain(clip, s, this.nextMainSpan(s), t, hasPrevious);
     v *= this.mainTrackAudible() ? this.duckFactor(t) : 0;
-    return Math.max(0, Math.min(1, v));
+    // Not clamped to 1: a normalised clip needs gain above unity, and the export
+    // path applies it, so clamping only the preview made the two disagree.
+    return Math.max(0, v);
   }
 
   /** The span immediately after `s`, or null when `s` is the last one. */
@@ -1925,7 +1927,7 @@ export class Engine {
     if (fadeIn > 0) v *= clamp01(inT / fadeIn);
     if (fadeOut > 0) v *= clamp01(outT / fadeOut);
     v *= this.trackGain(this.overlayTrackOf(c.id));
-    return Math.max(0, Math.min(1, v));
+    return Math.max(0, v);
   }
 
   /**
