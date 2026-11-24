@@ -61,6 +61,7 @@ import { Scopes } from "./Scopes";
 import { LOUDNESS_TARGETS, normaliseAdvice, normaliseGain, peakDb } from "../loudness";
 import { LOOK_FAMILIES, looksIn, searchLooks, type LookFamily } from "../looks";
 import type { EaseId, Bezier4 } from "../easings";
+import type { CurvePoint } from "../curves";
 import type { RippleMode } from "../ripple";
 import {
   ASPECTS,
@@ -900,6 +901,18 @@ export function Editor({
       eng.draw();
     },
     [pushUndo],
+  );
+
+  const onPropCurve = useCallback(
+    (clipId: string, prop: string, points: CurvePoint[] | null) => {
+      const eng = engineRef.current;
+      if (!eng) return;
+      pushUndo();
+      eng.setPropCurve(clipId, prop, points);
+      eng.draw();
+      scheduleAutosave();
+    },
+    [pushUndo, scheduleAutosave],
   );
 
   /**
@@ -3433,6 +3446,7 @@ export function Editor({
       onKeyframeAdd={onKeyframeAdd}
       onKeyframeDelete={onKeyframeDelete}
       onKeyframeEase={onKeyframeEase}
+      onPropCurve={onPropCurve}
       onSetAspect={setAspect}
       onReplaceMedia={(clipId, item) =>
         mutateVoid((eng) => {

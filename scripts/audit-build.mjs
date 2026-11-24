@@ -37,6 +37,7 @@ const MODULES = [
   "scopes",
   "loudness",
   "easings",
+  "property-curves",
 ];
 
 for (const name of MODULES) {

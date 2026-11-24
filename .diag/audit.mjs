@@ -31,6 +31,7 @@ const RIP = await import('./b-ripple.mjs');
 const SCO = await import('./b-scopes.mjs');
 const LDN = await import('./b-loudness.mjs');
 const ES = await import('./b-easings.mjs');
+const PC = await import('./b-property-curves.mjs');
 console.log('types.ts');
 await t('emptyTracks creates the fixed track set, including Adjustment', () => {
   const tr = T.emptyTracks();
@@ -3634,6 +3635,130 @@ await t('the preview does not clamp gain the way the export does not', () => {
   const eff = src.slice(src.indexOf('private effectiveVolume'));
   assert.ok(!/return Math\.max\(0, Math\.min\(1, v\)\);/.test(eff.slice(0, 600)),
     'effectiveVolume still clamps to 1, so a normalised clip is quiet in preview');
+});
+console.log('property-curves.ts — the multi-point per-property graph');
+const pcClip = (extra = {}) => ({ id: 'c', start: 0, duration: 4, volume: 1, ...extra });
+await t('a property with no curve keeps the clip\'s own value', () => {
+  // Adding the graph editor must not silently change any existing edit.
+  const c = pcClip({ volume: 1.6, adjust: { brightness: 120, contrast: 100, saturation: 100, hue: 0 } });
+  assert.equal(PC.propValueAt(c, 'volume', 2, 4), 1.6);
+  assert.equal(PC.propValueAt(c, 'brightness', 2, 4), 120);
+  assert.equal(PC.propValueAt(c, 'opacity', 2, 4), 1);
+});
+await t('each property is independent — the whole point of a per-property graph', () => {
+  // With keyframes, one graph moved all five anim values together. Here an
+  // opacity fade must leave scale, position and rotation exactly where they are.
+  const c = pcClip({
+    scale: 0.8, x: 0, y: 0, rot: 0,
+    propCurves: { opacity: [{ x: 0, y: 1 }, { x: 1, y: 0 }] },
+  });
+  assert.ok(Math.abs(PC.propValueAt(c, 'opacity', 2, 4) - 0.5) < 0.02);
+  assert.equal(PC.propValueAt(c, 'scale', 2, 4), 0.8, 'scale moved with the opacity fade');
+  assert.equal(PC.propValueAt(c, 'rotation', 2, 4), 0, 'rotation moved with the opacity fade');
+  assert.equal(PC.propValueAt(c, 'x', 2, 4), 0, 'position moved with the opacity fade');
+});
+await t('curves reach the real values, including above unity', () => {
+  const c = pcClip({ propCurves: { volume: [{ x: 0, y: 0.5 }, { x: 1, y: 1 }] } });
+  // 0..2 range: unit 0.5 = 1x, unit 1 = 2x
+  assert.ok(Math.abs(PC.propValueAt(c, 'volume', 0, 4) - 1) < 0.02);
+  assert.ok(Math.abs(PC.propValueAt(c, 'volume', 4, 4) - 2) < 0.02);
+  const b = pcClip({ propCurves: { brightness: [{ x: 0, y: 0 }, { x: 1, y: 1 }] } });
+  assert.ok(Math.abs(PC.propValueAt(b, 'brightness', 0, 4)) < 2);
+  assert.ok(Math.abs(PC.propValueAt(b, 'brightness', 4, 4) - 200) < 2);
+  const r = pcClip({ propCurves: { rotation: [{ x: 0, y: 0 }, { x: 1, y: 1 }] } });
+  assert.ok(Math.abs(PC.propValueAt(r, 'rotation', 4, 4) - 180) < 2, 'rotation should reach 180');
+});
+await t('a mid-curve point shapes the value (more than two points)', () => {
+  // hold at full opacity for 80% of the clip, then drop — impossible with a
+  // single lerp, which is the capability the request was about
+  const c = pcClip({
+    propCurves: { opacity: [{ x: 0, y: 1 }, { x: 0.8, y: 1 }, { x: 1, y: 0 }] },
+  });
+  assert.ok(PC.propValueAt(c, 'opacity', 0.4 * 4, 4) > 0.97, 'should hold high');
+  assert.ok(PC.propValueAt(c, 'opacity', 0.95 * 4, 4) < 0.5, 'should have dropped by the end');
+  assert.ok(PC.propValueAt(c, 'opacity', 4, 4) < 0.02, 'must land on 0');
+});
+await t('degenerate curves fall back instead of producing NaN', () => {
+  const one = pcClip({ propCurves: { opacity: [{ x: 0, y: 0.3 }] } });
+  assert.ok(Number.isFinite(PC.propValueAt(one, 'opacity', 2, 4)), 'single point gave NaN');
+  const bad = pcClip({ propCurves: { opacity: [{ x: NaN, y: 1 }, { x: 1, y: 0 }] } });
+  assert.ok(Number.isFinite(PC.propValueAt(bad, 'opacity', 2, 4)), 'NaN point gave NaN');
+  assert.ok(Number.isFinite(PC.propValueAt(pcClip({}), 'opacity', 2, 0)), 'a zero span gave NaN');
+  assert.equal(PC.normalisePropPoints([{ x: 0, y: 1 }]), null, 'one point is not a curve');
+  assert.equal(PC.normalisePropPoints([]), null);
+  assert.equal(PC.normalisePropPoints(undefined), null);
+});
+await t('points are clamped and de-duplicated on the time axis', () => {
+  const pts = PC.normalisePropPoints([
+    { x: 1.4, y: 0.2 }, { x: -0.3, y: 0.8 }, { x: 0.5, y: 0.5 }, { x: 0.5005, y: 0.6 },
+  ]);
+  assert.ok(pts, 'should normalise');
+  for (const p of pts) assert.ok(p.x >= 0 && p.x <= 1, 'x out of range: ' + p.x);
+  for (const p of pts) assert.ok(p.y >= 0 && p.y <= 1, 'y out of range: ' + p.y);
+  assert.ok(pts.length === 3, 'near-duplicate times should collapse, got ' + pts.length);
+  // sorted
+  for (let i = 1; i < pts.length; i++) assert.ok(pts[i].x > pts[i - 1].x);
+});
+await t('the plot and the renderer share one evaluator', () => {
+  // The graph draws from propValueAt; so must the engine. If the engine grows a
+  // second interpolation for curves, the line on screen stops being the truth.
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/propValueAt\(c, "opacity"/.test(src), 'opacity curve must go through propValueAt');
+  assert.ok(/propValueAt\(clip, "volume"/.test(src), 'main volume curve must go through propValueAt');
+  assert.ok(/propValueAt\(c, "volume"/.test(src), 'overlay volume curve must go through propValueAt');
+  assert.ok(/propValueAt\(c, key, localT, dur\)/.test(src), 'grade curves must go through propValueAt');
+  const graph = readFileSync('src/mayocut/components/PropertyGraph.tsx', 'utf8');
+  assert.ok(/propValueAt\(sampleClip/.test(graph), 'the graph must plot the engine evaluator');
+});
+await t('a volume curve composes with fades instead of replacing them', () => {
+  // The bug I nearly shipped: `v *= curve / v` collapses to just the curve. The
+  // ratio must divide by the BASE volume so fades, ducking and normalisation all
+  // still apply.
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('private overlayAudioVolume'));
+  const body = fn.slice(0, fn.indexOf('private )') > 0 ? 900 : 900);
+  assert.ok(/const baseVol = c\.volume \?\? 1;/.test(body), 'the base volume must be captured');
+  assert.ok(/\/ baseVol/.test(body), 'the curve must be divided by the BASE, not the running gain');
+});
+await t('curves survive duplicating and splitting a clip', () => {
+  // Same bug class as keyframe easing: both paths rebuild clips, and a field
+  // they do not copy is silently dropped. This asserts they survive for real.
+  const proj = T.newProject('curves dup', '16:9');
+  proj.main.push({
+    id: 'm1', mediaId: 'med', in: 0, out: 4, speed: 1, reverse: false, filter: 'none',
+    adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+    volume: 1, muted: false, transitionIn: 'none', transitionDur: 0,
+    propCurves: { opacity: [{ x: 0, y: 1 }, { x: 1, y: 0 }] },
+  });
+  const e = new E.Engine(proj);
+  e.duplicateMainClip('m1');
+  const copy = e.project.main[1];
+  assert.ok(copy.propCurves?.opacity?.length === 2, 'the duplicate lost the property curve');
+  // and it must be a copy, not a shared array
+  copy.propCurves.opacity[0].y = 0.123;
+  assert.equal(e.project.main[0].propCurves.opacity[0].y, 1, 'the duplicate shares the curve array');
+});
+await t('setPropCurve writes, clears and ignores an unknown clip', () => {
+  const proj = T.newProject('curves api', '16:9');
+  proj.main.push({
+    id: 'm1', mediaId: 'med', in: 0, out: 4, speed: 1, reverse: false, filter: 'none',
+    adjust: { brightness: 100, contrast: 100, saturation: 100, hue: 0 },
+    volume: 1, muted: false, transitionIn: 'none', transitionDur: 0,
+  });
+  const e = new E.Engine(proj);
+  assert.ok(e.setPropCurve('m1', 'opacity', [{ x: 0, y: 1 }, { x: 1, y: 0.2 }]));
+  assert.equal(e.propCurve('m1', 'opacity')?.length, 2);
+  // a second property adds to the same clip without disturbing the first
+  assert.ok(e.setPropCurve('m1', 'scale', [{ x: 0, y: 0.5 }, { x: 1, y: 0.9 }]));
+  assert.equal(e.propCurve('m1', 'opacity')?.length, 2);
+  assert.equal(e.propCurve('m1', 'scale')?.length, 2);
+  // clearing removes the key, and the whole object when it empties
+  assert.ok(e.setPropCurve('m1', 'opacity', null));
+  assert.equal(e.propCurve('m1', 'opacity'), null);
+  assert.ok(e.project.main[0].propCurves, 'scale should still be there');
+  e.setPropCurve('m1', 'scale', null);
+  assert.equal(e.project.main[0].propCurves, undefined, 'an empty curve set should be removed');
+  assert.equal(e.setPropCurve('nope', 'opacity', [{ x: 0, y: 0 }, { x: 1, y: 1 }]), false);
 });
 console.log('ripple.ts — deleting without desyncing the timeline');
 const mkTracks = () => [

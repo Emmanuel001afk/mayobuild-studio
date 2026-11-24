@@ -4,6 +4,7 @@ import type { CurveSet } from "./curves";
 import type { FrameGeometry } from "./geometry";
 import type { HslSet } from "./hsl";
 import type { EaseId, Bezier4 } from "./easings";
+import type { CurvePoint } from "./curves";
 import type { StickerKind } from "./sticker-kinds";
 import { FONT_CATALOGUE, resolveFontCss } from "./fonts";
 // Everything lives on the user's device (IndexedDB). No database, no backend.
@@ -229,6 +230,17 @@ export interface Keyframe {
   bez?: Bezier4;
 }
 
+/**
+ * Per-property multi-point curves, keyed by property id (see property-curves.ts).
+ *
+ * Deliberately NOT called `curves`: that name is already taken on MainClip for
+ * the RGB tone-curve set. A keyframe is a *snapshot* of every animatable value
+ * at one instant, which forces them to move together; a property curve is one
+ * value over time, so properties can be shaped independently — which is what a
+ * CapCut-style graph editor draws.
+ */
+export type PropCurves = Record<string, CurvePoint[]>;
+
 /** Built-in motion effects applied to a main clip (deterministic, offline). */
 export type EffectId =
   | "none"
@@ -398,6 +410,8 @@ export interface MainClip {
   transitionIn: TransitionKind;
   transitionDur: number; // seconds
   keyframes?: Keyframe[];
+  /** independent per-property curves (multi-point graph editor) */
+  propCurves?: PropCurves;
   /** how the source fills the canvas: cover (crop), contain (letterbox), blur-fill */
   fit?: FrameFit;
   /**
@@ -876,6 +890,8 @@ export interface OverlayClip {
   audioFx?: AudioFxId;
   filter?: string;
   keyframes?: Keyframe[];
+  /** independent per-property curves (multi-point graph editor) */
+  propCurves?: PropCurves;
 }
 
 export interface OverlayTrack {

@@ -10,6 +10,7 @@ type Channel = "rgb" | "r" | "g" | "b";
 import { Clock, Copy, Diamond, Scissors, SlidersHorizontal, Spline, Trash2 } from "lucide-react";
 import { CROP_PRESETS, clampGeometry, isDefaultGeometry } from "../geometry";
 import { EaseEditor } from "./EaseEditor";
+import { PropertyGraph } from "./PropertyGraph";
 import { easeName, type Bezier4, type EaseId } from "../easings";
 import type {
   AnimValues,
@@ -59,6 +60,7 @@ interface Props {
   onKeyframeAdd: (clipId: string) => void;
   onKeyframeDelete: (clipId: string, at: number) => void;
   onKeyframeEase: (clipId: string, at: number, ease: EaseId, bez?: Bezier4) => void;
+  onPropCurve: (clipId: string, prop: string, points: CurvePoint[] | null) => void;
   onSetAspect: (a: AspectId) => void;
   onReplaceMedia: (clipId: string, item: MediaItem) => void;
   onDuplicate: () => void;
@@ -875,6 +877,13 @@ export function Inspector(p: Props) {
               onSeek={p.onSeek}
               onEase={(at, ease, bez) => p.onKeyframeEase(clipId, at, ease, bez)}
             />
+            <PropertyGraph
+              clip={main}
+              duration={Math.max(0.1, mainClipDuration(main))}
+              playheadLocal={p.playheadLocal}
+              onChange={(prop, pts) => p.onPropCurve(clipId, prop, pts)}
+              onSeekLocal={(local) => p.onSeek(p.clipStart + local)}
+            />
             <div className="grid grid-cols-2 gap-1 mt-2">
               <button
                 className={`h-7 border rounded text-[10px] ${main.flipX ? "border-cyan-400 bg-cyan-400/10" : "border-border hover:border-white/40"}`}
@@ -1511,6 +1520,13 @@ export function Inspector(p: Props) {
               onSeek={p.onSeek}
               onEase={(at, ease, bez) => p.onKeyframeEase(clipId, at, ease, bez)}
             />
+            <PropertyGraph
+              clip={over}
+              duration={Math.max(0.1, over.duration)}
+              playheadLocal={p.playheadLocal}
+              onChange={(prop, pts) => p.onPropCurve(clipId, prop, pts)}
+              onSeekLocal={(local) => p.onSeek(p.clipStart + local)}
+            />
           </Section>
           <TimingSection over={over} onPatch={(patch) => p.onPatchOverlay(trackId, patch)} />
         </>
@@ -1568,6 +1584,13 @@ export function Inspector(p: Props) {
               onDelete={(at) => p.onKeyframeDelete(clipId, at)}
               onSeek={p.onSeek}
               onEase={(at, ease, bez) => p.onKeyframeEase(clipId, at, ease, bez)}
+            />
+            <PropertyGraph
+              clip={over}
+              duration={Math.max(0.1, over.duration)}
+              playheadLocal={p.playheadLocal}
+              onChange={(prop, pts) => p.onPropCurve(clipId, prop, pts)}
+              onSeekLocal={(local) => p.onSeek(p.clipStart + local)}
             />
             <div className="grid grid-cols-2 gap-1 mt-2">
               <button

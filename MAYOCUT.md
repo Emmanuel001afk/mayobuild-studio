@@ -974,6 +974,61 @@ per-clip guards, and no mutation of the suite can reach it. It stays as defence
 in depth, with a comment saying so, because the cost of being wrong here is the
 whole app failing to start.
 
+### The multi-point property graph, and per-property curves (Stage 8)
+
+The previous stage shipped keyframe easing and named its own limits: easing
+covered keyframed transform/opacity only, not speed curves, audio levels or
+grade sliders, and the graph drew one segment at a time. This closes those.
+
+**The blocker was the data model, not the editor.** A `Keyframe` stores a full
+`AnimValues` snapshot — x, y, scale, rotation and opacity at one instant. One
+graph over that can only ever describe one mixed value; the five properties move
+together or not at all. No amount of editor work fixes that. So the keyframe
+model stayed (it is the right shape for "the whole clip does this here") and a
+second container was added: `propCurves`, one curve per property, any number of
+points, in clip-local time.
+
+It is deliberately **not** called `curves` — that name is already the RGB
+tone-curve set on `MainClip`, and the first attempt to reuse it collided
+immediately. `PropCurves` is a record of property id → points.
+
+**Nine properties, each independent**: opacity, scale, rotation, position x and
+y, volume, brightness, contrast, saturation. That covers the three areas the
+previous stage listed as missing — audio levels and grade sliders now animate,
+and speed curves already had their own editor.
+
+Two design rules worth stating:
+
+- **The plot is the renderer.** The graph draws from `propValueAt`, the exact
+  function the engine calls, and an assertion checks that the engine has not
+  grown a second interpolation. A graph that draws something the clip does not
+  do is worse than no graph.
+- **No curve means the clip's own value.** Adding the editor changes no existing
+  project, which is asserted rather than assumed.
+
+Interpolation reuses `curves.ts` (the monotone cubic already used for tone
+curves) rather than a second spline implementation: a property curve is a tone
+curve whose x axis is time.
+
+**A real bug found by the tests, not by reading.** `duplicateMainClip` spreads
+the clip (`{ ...src }`), which copies the *reference* to the curve object — so a
+duplicated clip shared its curves with the original and dragging a point on the
+copy silently moved the original. This is the third time a clone path has
+dropped or shared a nested field, so all three clone sites (duplicate, and both
+halves of a split) now go through one `clonePropCurves`. The test asserts the
+copy is deep, not just present.
+
+Also fixed while reading the audio path, and unrelated to the graph:
+**`mainClipGain` clamped volume to 1**, so a loudness-normalised clip (gain > 1)
+played at unity in the editor while the export mixer applied the real gain — the
+same clip was audibly louder in the exported file than in the preview. Volume is
+a linear multiplier that may exceed 1; only 0 is a floor.
+
+Honest limits: speed curves are not unified into this graph — they already have
+a dedicated editor with presets, and moving them would be churn for no gain.
+Curves are per clip, not per track. There is still no headless rasteriser here,
+so what is verified is the values, the wiring and the persistence, not pixels.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert
