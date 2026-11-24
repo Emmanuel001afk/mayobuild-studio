@@ -3760,6 +3760,86 @@ await t('setPropCurve writes, clears and ignores an unknown clip', () => {
   assert.equal(e.project.main[0].propCurves, undefined, 'an empty curve set should be removed');
   assert.equal(e.setPropCurve('nope', 'opacity', [{ x: 0, y: 0 }, { x: 1, y: 1 }]), false);
 });
+await t('a grade curve actually reaches the PIXEL path, not just the CSS path', () => {
+  // The bug: gradePixels reads c.adjust directly, and drawMainGrade was handed
+  // the raw clip. So an animated brightness was applied through CSS (which the
+  // curve fed) and ignored by the pixel pass — the same slider animated at the
+  // start of a clip and froze the moment the clip also had a temperature,
+  // sharpen or vignette grade. Both paths must receive the curved clip.
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  const fn = src.slice(src.indexOf('private drawMainItem'));
+  const body = fn.slice(0, fn.indexOf('private drawMainGrade'));
+  assert.ok(!/drawMainGrade\(ctx, el, W, H, c, /.test(body),
+    'drawMainGrade is still handed the raw clip, so grade curves are ignored');
+  assert.ok(/drawMainGrade\(ctx, el, W, H, filterSource, /.test(body),
+    'drawMainGrade must receive the clip with its curved adjust values');
+  // and the curved values must actually be built
+  assert.ok(/graded\[key\] = propValueAt\(c, key, localT, dur\)/.test(src),
+    'brightness/contrast/saturation must be resolved from their curves');
+});
+await t('an overlay curve is applied, and leaves the untouched axes alone', () => {
+  // Behavioural, not a source regex. Curves were only wired into the main-track
+  // path, so a curve drawn on a text or sticker clip was stored, plotted by the
+  // graph, and then never applied.
+  const clip = { id: 'o', kind: 'text', start: 0, duration: 4, scale: 1, x: 0.2, y: -0.1, rot: 10 };
+  const anim = { x: 0.2, y: -0.1, scale: 1, rotation: 10, opacity: 1 };
+  const c = { ...clip, propCurves: { opacity: [{ x: 0, y: 1 }, { x: 1, y: 0 }] } };
+  const out = PC.applyOverlayCurves(c, anim, 2);
+  assert.ok(Math.abs(out.opacity - 0.5) < 0.02, 'the opacity curve was not applied: ' + out.opacity);
+  assert.equal(out.x, 0.2, 'an uncurved axis must keep its own value');
+  assert.equal(out.rotation, 10, 'an uncurved axis must keep its own value');
+  // no curves at all = untouched
+  const plain = PC.applyOverlayCurves(clip, anim, 2);
+  assert.deepEqual(plain, anim, 'a clip with no curves must be returned unchanged');
+  // position and rotation curves DO apply
+  const moved = PC.applyOverlayCurves(
+    { ...clip, propCurves: { x: [{ x: 0, y: 0 }, { x: 1, y: 1 }], rotation: [{ x: 0, y: 0 }, { x: 1, y: 1 }] } },
+    anim, 4,
+  );
+  assert.ok(Math.abs(moved.x - 1) < 0.02, 'x curve should reach +1, got ' + moved.x);
+  assert.ok(Math.abs(moved.rotation - 180) < 2, 'rotation curve should reach 180, got ' + moved.rotation);
+});
+await t('an overlay scale curve is a multiplier on the sticker\'s own size', () => {
+  // Overlay scale is a FRACTION of the frame (a sticker is 0.5, not 1), so
+  // assigning the curve's absolute value would snap every sticker to one size
+  // the moment a curve was added.
+  const anim = { x: 0, y: 0, scale: 0.5, rotation: 0, opacity: 1 };
+  const clip = { id: 'o', kind: 'image', start: 0, duration: 4, scale: 0.5 };
+  // curve from 0.5x to 1x of the property range (0..3) => unit 0.1667 .. 0.3333
+  const curved = PC.applyOverlayCurves(
+    { ...clip, propCurves: { scale: [{ x: 0, y: 0.1667 }, { x: 1, y: 0.3333 }] } },
+    anim, 4,
+  );
+  // at the end the real value is ~1.0, own is 0.5, so scale = 0.5 * (1 / 0.5) = 1
+  assert.ok(curved.scale > 0.9 && curved.scale < 1.1, 'expected ~1x frame, got ' + curved.scale);
+  // and at the start it is the clip's own size
+  const atStart = PC.applyOverlayCurves(
+    { ...clip, propCurves: { scale: [{ x: 0, y: 0.1667 }, { x: 1, y: 0.3333 }] } },
+    anim, 0,
+  );
+  assert.ok(Math.abs(atStart.scale - 0.5) < 0.05, 'should start at the sticker\'s own size, got ' + atStart.scale);
+
+  // The distinguishing case. When own == anim.scale, multiply and replace give
+  // the SAME number, so the assertions above cannot tell them apart — that is
+  // how a mutation survived. Here the clip's stored scale (0.8) differs from the
+  // anim value in play (0.5), so the two behaviours diverge: multiply gives
+  // 0.5 * (2.0 / 0.8) = 1.25, replace gives 2.0.
+  const split = { id: 'o', kind: 'image', start: 0, duration: 4, scale: 0.8 };
+  const mult = PC.applyOverlayCurves(
+    { ...split, propCurves: { scale: [{ x: 0, y: 0 }, { x: 1, y: 0.6667 }] } },
+    { x: 0, y: 0, scale: 0.5, rotation: 0, opacity: 1 },
+    4,
+  );
+  assert.ok(
+    Math.abs(mult.scale - 1.25) < 0.05,
+    'a scale curve must MULTIPLY (expected 1.25), got ' + mult.scale.toFixed(3),
+  );
+});
+await t('the renderer uses the tested overlay-curve helper', () => {
+  const src = readFileSync('src/mayocut/engine.ts', 'utf8');
+  assert.ok(/applyOverlayCurves\(c, anim, localT\)/.test(src),
+    'the overlay loop must go through applyOverlayCurves, not a hand-rolled copy');
+});
 console.log('ripple.ts — deleting without desyncing the timeline');
 const mkTracks = () => [
   { id: 't_text', name: 'Text', clips: [{ id: 'cap', kind: 'text', start: 7, duration: 2 }] },

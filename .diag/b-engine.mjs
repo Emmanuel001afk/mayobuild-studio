@@ -4708,6 +4708,22 @@ function propValueAt(clip, prop, local, spanDur) {
   const real = spec.min + v01 * (spec.max - spec.min);
   return Number.isFinite(real) ? real : base;
 }
+function applyOverlayCurves(clip, anim, local) {
+  const curves = clip.propCurves;
+  if (!curves) return anim;
+  const dur = clip.duration ?? 0;
+  const out = { ...anim };
+  if (curves.x) out.x = propValueAt(clip, "x", local, dur);
+  if (curves.y) out.y = propValueAt(clip, "y", local, dur);
+  if (curves.rotation) out.rotation = propValueAt(clip, "rotation", local, dur);
+  if (curves.opacity) out.opacity = propValueAt(clip, "opacity", local, dur);
+  if (curves.scale) {
+    const own = Number.isFinite(clip.scale) ? clip.scale : 1;
+    const curved = propValueAt(clip, "scale", local, dur);
+    out.scale = own > 0 ? anim.scale * (curved / own) : curved;
+  }
+  return out;
+}
 
 // src/mayocut/looks.ts
 var LOOKS = [
@@ -7618,9 +7634,19 @@ var Engine = class {
       const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
       const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
       const anim = animAt(c.keyframes, this.animBase(c), localT);
+      const animCurved = applyOverlayCurves(c, anim, localT);
       if (c.kind === "adjustment") continue;
       if (c.kind === "text")
-        this.drawText(ctx, c, W, H, fadeAlpha * clamp014(anim.opacity), localT, c.duration, anim);
+        this.drawText(
+          ctx,
+          c,
+          W,
+          H,
+          fadeAlpha * clamp014(animCurved.opacity),
+          localT,
+          c.duration,
+          animCurved
+        );
       if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
         const rec = this.els.get(c.mediaId);
         if (!rec || !rec.url) continue;
@@ -7631,10 +7657,10 @@ var Engine = class {
         const sw = srcW(src);
         const sh = srcH(src);
         if (!sw || !sh) continue;
-        const size = Math.max(1, anim.scale * W);
+        const size = Math.max(1, animCurved.scale * W);
         const ar = sw / sh;
-        const cx = W / 2 + anim.x * (W / 2);
-        const cy = H / 2 + anim.y * (H / 2);
+        const cx = W / 2 + animCurved.x * (W / 2);
+        const cy = H / 2 + animCurved.y * (H / 2);
         this.overlayRects.push({
           clipId: c.id,
           x: cx - size / 2,
@@ -7642,8 +7668,8 @@ var Engine = class {
           w: size,
           h: size / ar
         });
-        const rot = anim.rotation * Math.PI / 180;
-        const alpha = clamp014(fadeAlpha * anim.opacity);
+        const rot = animCurved.rotation * Math.PI / 180;
+        const alpha = clamp014(fadeAlpha * animCurved.opacity);
         const blend = c.blend && c.blend !== "normal" ? c.blend : null;
         if (c.chroma && sw * sh > 4) {
           this.drawChroma(
@@ -8054,7 +8080,7 @@ var Engine = class {
     const glitching = eff === "glitch" && this.glitchWindow(localT);
     const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves) || hslActive(c.hsl);
     if (lut || needsGrade) {
-      this.drawMainGrade(ctx, el, W, H, c, lut ?? null);
+      this.drawMainGrade(ctx, el, W, H, filterSource, lut ?? null);
     } else if (glitching || eff === "vhs") {
       this.drawMainSliced(ctx, el, W, H, glitching, localT);
     } else {

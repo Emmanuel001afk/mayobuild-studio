@@ -212,6 +212,42 @@ export function seedCurve(spec: PropSpec, clip: MainClip | OverlayClip): PropPoi
   ];
 }
 
+/**
+ * Resolve an overlay's animation values through its property curves.
+ *
+ * Pulled out of the renderer so it can be asserted directly: the overlay path
+ * is where curves were silently ignored, and a source-regex cannot show that the
+ * numbers are right.
+ *
+ * Two rules that are easy to get wrong and are tested:
+ *  · an overlay's `scale` is a FRACTION of the frame (a sticker is 0.5, not 1),
+ *    so a scale curve is a multiplier on it — assigning the curve's absolute
+ *    value would snap every sticker to the same size;
+ *  · `x`/`y`/`rotation`/`opacity` map straight onto the anim fields.
+ */
+export function applyOverlayCurves(
+  clip: MainClip | OverlayClip,
+  anim: { x: number; y: number; scale: number; rotation: number; opacity: number },
+  local: number,
+): { x: number; y: number; scale: number; rotation: number; opacity: number } {
+  const curves = clip.propCurves;
+  if (!curves) return anim;
+  const dur = (clip as OverlayClip).duration ?? 0;
+  const out = { ...anim };
+  if (curves.x) out.x = propValueAt(clip, "x", local, dur);
+  if (curves.y) out.y = propValueAt(clip, "y", local, dur);
+  if (curves.rotation) out.rotation = propValueAt(clip, "rotation", local, dur);
+  if (curves.opacity) out.opacity = propValueAt(clip, "opacity", local, dur);
+  if (curves.scale) {
+    const own = Number.isFinite((clip as OverlayClip).scale)
+      ? ((clip as OverlayClip).scale as number)
+      : 1;
+    const curved = propValueAt(clip, "scale", local, dur);
+    out.scale = own > 0 ? anim.scale * (curved / own) : curved;
+  }
+  return out;
+}
+
 /** Format a real value for the graph's readout. */
 export function fmtProp(spec: PropSpec, value: number): string {
   const decimals = spec.max - spec.min > 20 ? 0 : 2;
