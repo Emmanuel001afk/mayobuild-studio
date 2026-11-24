@@ -811,6 +811,51 @@ grade is unchanged at ~39 ms for a 1280×720 buffer — that is pre-existing
 `gradePixels` cost, measured, not something these features introduced, and it
 remains the thing to fix before calling grading smooth on a phone.
 
+### Making the grade pass faster without changing a pixel (Stage 5)
+
+Stage 4 shipped with one measured number left on the table: a heavy grade cost
+~39 ms per 1280×720 frame, which is more than a 30 fps budget. This is what
+carried that cost, and what happened when it was attacked.
+
+Measuring first paid off twice. The vignette ramp was rebuilt inside
+`gradePixels` on every frame — 1025 entries of a `**` power. Caching it looked
+like the obvious win and bought **nothing**, because 1025 iterations is noise
+against 921,600 pixels. The real cost was the `Math.sqrt` per pixel, which the
+cache did not touch. The lesson is the usual one: the loop you can see is
+rarely the loop that costs.
+
+Three changes survived:
+
+1. **The vignette no longer takes a square root per pixel.** `dx²` is constant
+   per column and `dy²` constant per row, so `r²` is an addition, and the only
+   sqrt left is the ramp lookup. The clear centre is `r < 0.55`, i.e.
+   `r² < 0.3025`, which covers a rectangle — so whole rows and columns are
+   dismissed with a comparison instead of a root. **36 % faster.**
+2. **temp/tint has its own loop.** Split-tone was `if (split > 0)` *inside* the
+   per-pixel loop, so every frame paid that branch 921,600 times for a setting
+   that never changes mid-frame. Hoisting it out: **36 % faster** for
+   temperature and tint, **12 %** for split-tone.
+3. **One branch instead of two `Math.max`** in the split-tone weight, since at
+   most one of the two can be non-zero.
+
+Everything else was measured and left alone. Sharpen (~11 ms) is untouched:
+the unsharp mask needs the four neighbours of every pixel, so the same
+technique does not apply, and it was already optimised in an earlier stage.
+The whole pass went **34 ms → 29 ms** for the every-effect-at-once case.
+
+**The constraint was bit-identical output, not "close enough".** A colour
+regression that nobody can see in a diff is exactly the kind that ships, so the
+optimised code was diffed against the original across eleven grade
+combinations, and the audit now pins **golden pixel values captured from the
+pre-optimisation implementation**. One real bug came out of that: caching `dx²`
+in a `Float32Array` rounded the values enough to shift the ramp index and move
+six pixels by one level. It is `Float64Array` now, and a test fails if it
+changes back.
+
+Honest limit: the case with *every* effect on is still ~29 ms, which is under
+30 fps but not comfortably. Sharpen is the remaining cost and it needs a
+different approach (a separable two-pass blur); it has not been done.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert
