@@ -1319,7 +1319,14 @@ export class Engine {
   }
 
   seek(t: number) {
-    this.t = Math.max(0, Math.min(this.duration(), t));
+    // Clamp into a guaranteed-finite range. `Math.max(0, Math.min(NaN, x))` is
+    // NaN — the clamp helpers do NOT reject a non-finite bound — so a single bad
+    // duration used to leave `this.t` permanently NaN, and every frame then threw
+    // "Invalid timeline time" out of sampleTimeline and took the editor down.
+    const dur = this.duration();
+    const limit = Number.isFinite(dur) && dur > 0 ? dur : 0;
+    const want = Number.isFinite(t) ? t : 0;
+    this.t = Math.max(0, Math.min(limit, want));
     this.syncElements(true);
     this.draw();
     this.onTime?.(this.t);

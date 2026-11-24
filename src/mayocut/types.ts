@@ -1282,12 +1282,31 @@ export function mainSpans(project: Project): { clip: MainClip; start: number; en
   });
 }
 
+/** Last usable instant of an overlay clip, tolerating corrupt fields. */
+function overlayEnd(c: { start: number; duration: number }): number {
+  // `mainClipDuration` already refuses to return NaN, but an overlay's raw
+  // fields were never checked — and one bad number here set the whole project
+  // duration to NaN. `seek()` then computed Math.max(0, Math.min(NaN, t)) = NaN,
+  // so the playhead was non-finite, `sampleTimeline` threw "Invalid timeline
+  // time" on every frame, and the app came up dead. A single corrupt clip must
+  // cost that clip, not the project.
+  const start = Number.isFinite(c.start) ? c.start : 0;
+  const dur = Number.isFinite(c.duration) && c.duration > 0 ? c.duration : 0;
+  return start + dur;
+}
+
 export function projectDuration(project: Project): number {
   const spans = mainSpans(project);
   let end = spans.length ? spans[spans.length - 1].end : 0;
-  for (const tr of project.tracks)
-    for (const c of tr.clips) end = Math.max(end, c.start + c.duration);
-  return end;
+  for (const tr of project.tracks) {
+    if (!tr || !Array.isArray(tr.clips)) continue;
+    for (const c of tr.clips) end = Math.max(end, overlayEnd(c));
+  }
+  // Belt and braces, and honestly unreachable today: with the per-clip guard
+  // above, no mutation of the test suite can make `end` non-finite, so this line
+  // is defence in depth rather than a tested path. It stays because the cost of
+  // being wrong here is the whole app failing to start.
+  return Number.isFinite(end) && end > 0 ? end : 0;
 }
 
 // ---------------------------------------------------------------------------

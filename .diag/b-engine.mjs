@@ -4319,12 +4319,19 @@ function mainSpans(project) {
     return span;
   });
 }
+function overlayEnd(c) {
+  const start = Number.isFinite(c.start) ? c.start : 0;
+  const dur = Number.isFinite(c.duration) && c.duration > 0 ? c.duration : 0;
+  return start + dur;
+}
 function projectDuration(project) {
   const spans = mainSpans(project);
   let end = spans.length ? spans[spans.length - 1].end : 0;
-  for (const tr of project.tracks)
-    for (const c of tr.clips) end = Math.max(end, c.start + c.duration);
-  return end;
+  for (const tr of project.tracks) {
+    if (!tr || !Array.isArray(tr.clips)) continue;
+    for (const c of tr.clips) end = Math.max(end, overlayEnd(c));
+  }
+  return Number.isFinite(end) && end > 0 ? end : 0;
 }
 function freezeClipFrom(clip, srcTime, hold = 3) {
   return {
@@ -5571,7 +5578,11 @@ function applyLut(table, px) {
 
 // src/mayocut/timeline.ts
 function sampleTimeline(project, time) {
-  if (!Number.isFinite(time) || time < 0) throw new RangeError("Invalid timeline time");
+  if (!Number.isFinite(time) || time < 0) {
+    throw new RangeError(
+      `Invalid timeline time (${String(time)}). The playhead must be a finite, non-negative number of seconds.`
+    );
+  }
   const spans = mainSpans(project);
   const main = [];
   for (let i = 0; i < spans.length; i++) {
@@ -6689,7 +6700,10 @@ var Engine = class {
     return projectDuration(this.project);
   }
   seek(t) {
-    this.t = Math.max(0, Math.min(this.duration(), t));
+    const dur = this.duration();
+    const limit = Number.isFinite(dur) && dur > 0 ? dur : 0;
+    const want = Number.isFinite(t) ? t : 0;
+    this.t = Math.max(0, Math.min(limit, want));
     this.syncElements(true);
     this.draw();
     this.onTime?.(this.t);

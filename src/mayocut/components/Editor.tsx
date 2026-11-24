@@ -35,6 +35,7 @@ import {
   AUTOSAVE_DEBOUNCE_MS,
   AUTOSAVE_MAX_WAIT_MS,
   describeWriteFailure,
+  repairProject,
   shouldAutosave,
 } from "../persistence";
 import { buildProxy, canBuildProxy } from "../proxy-build";
@@ -350,7 +351,23 @@ export function Editor({
           setLoadError("Project not found on this device.");
           return;
         }
-        setProject(p);
+        // A corrupt project must not brick the editor on every launch. Repair
+        // it here, at the one place a project enters the app, and write the fix
+        // back so the next open is clean too.
+        const { project: fixed, repaired } = repairProject(p);
+        setProject(fixed);
+        if (repaired.length) {
+          console.warn("Repaired out-of-range values in this project:", repaired);
+          try {
+            await db.saveProject(fixed);
+          } catch {
+            /* the repair still applies for this session */
+          }
+          toast.warning(
+            `This project had ${repaired.length} invalid value(s), which were reset so it could open. Your clips are all still here.`,
+            { duration: 12000 },
+          );
+        }
         setMedia(m);
         if (p.exportPreset) {
           setExportFps(p.exportPreset.fps);

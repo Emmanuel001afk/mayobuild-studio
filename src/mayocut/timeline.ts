@@ -68,7 +68,18 @@ export function makeRenderPlan(project: Project): RenderPlanV1 {
 
 /** Evaluate one instant. A negative or non-finite time is not a valid instant. */
 export function sampleTimeline(project: Project, time: number): TimelineSample {
-  if (!Number.isFinite(time) || time < 0) throw new RangeError("Invalid timeline time");
+  // This throw is correct — a renderer must not be handed an instant that does
+  // not exist. What was wrong was the consequence: one non-finite playhead
+  // reached here from a corrupt clip duration and the RangeError propagated
+  // through the draw loop into the error boundary, which replaced the whole
+  // editor. The clock is now clamped at its source (Engine.seek, projectDuration),
+  // so this should be unreachable in practice; the message says what to do
+  // rather than only what went wrong.
+  if (!Number.isFinite(time) || time < 0) {
+    throw new RangeError(
+      `Invalid timeline time (${String(time)}). The playhead must be a finite, non-negative number of seconds.`,
+    );
+  }
   const spans = mainSpans(project);
   const main: MainSample[] = [];
   for (let i = 0; i < spans.length; i++) {
