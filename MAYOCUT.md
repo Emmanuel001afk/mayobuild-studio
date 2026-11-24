@@ -1029,6 +1029,42 @@ a dedicated editor with presets, and moving them would be churn for no gain.
 Curves are per clip, not per track. There is still no headless rasteriser here,
 so what is verified is the values, the wiring and the persistence, not pixels.
 
+### Making the curves actually reach the screen (Stage 9)
+
+The previous stage shipped the per-property graph and said what it had not
+verified. Reviewing that claim honestly turned up **three wiring gaps** — each
+one a feature that looked finished:
+
+1. **The pixel-grade path ignored grade curves.** `drawMainItem` built a
+   `filterSource` with the curved brightness/contrast/saturation and gave it to
+   the CSS filter, but handed `drawMainGrade` the *raw* clip — and
+   `gradePixels` reads `c.adjust` directly. So on any clip that also had a
+   temperature, sharpen or vignette grade, an animated brightness was applied at
+   the start of the clip and then froze. The CSS path animated, the pixel path
+   did not, and which one you got depended on an unrelated setting.
+2. **Overlays ignored curves entirely.** The curve handling was only in the
+   main-track draw. A curve drawn on a text or sticker clip was stored, plotted
+   by the graph, and never applied — the worst failure mode, because the editor
+   showed a curve that did nothing.
+3. **Overlay scale would have snapped stickers to one size.** An overlay's
+   `scale` is a *fraction of the frame* (a sticker is 0.5, not 1), so assigning
+   a curve's absolute value would have resized every sticker the moment a curve
+   was added. It is a multiplier on the clip's own scale, and that is now
+   asserted with values where multiply and replace give different answers —
+   the first version of the test used `own == anim.scale`, where both are
+   identical, and a mutation survived it.
+
+The overlay logic moved out of the renderer into `applyOverlayCurves`, because
+the assertions that matter are about numbers, not about which function calls
+what. A source regex can confirm a call exists; it cannot show the value is
+right.
+
+Honest limits, unchanged: there is still no rasteriser in this environment, so
+what is verified is the arithmetic and the wiring — the plot is drawn from the
+same `propValueAt` the renderer calls, and both now reach every draw path, but
+no pixel has been looked at. Speed curves remain in their own editor rather than
+this graph, and curves are per clip rather than per track.
+
 ### A note on the error messages
 
 Several messages used to tell the user to switch to Chrome/Edge or to convert

@@ -35,7 +35,7 @@ import {
 } from "./types";
 import { resolveComposition } from "./timeline-resolver";
 import { easeValue, type EaseId, type Bezier4 } from "./easings";
-import { propValueAt, tracksActive } from "./property-curves";
+import { applyOverlayCurves, propValueAt, tracksActive } from "./property-curves";
 import type { CurvePoint } from "./curves";
 import { LOOK_BY_ID, LOOKS, resolveLookId, type LookFinish } from "./looks";
 import { clampGeometry, coverSourceRect, isDefaultGeometry, type FrameGeometry } from "./geometry";
@@ -2260,10 +2260,25 @@ export class Engine {
       const rampOut = Math.min(1, (c.start + c.duration - t) / 0.3);
       const fadeAlpha = c.anim === "none" ? 1 : rampIn * rampOut;
       const anim = animAt(c.keyframes, this.animBase(c), localT);
+      // Per-property curves override their axis on OVERLAYS too. They were only
+      // wired into the main-track path, so a curve drawn on a text or sticker
+      // clip was stored, plotted by the graph, and then never applied — the
+      // worst possible outcome, because the editor showed a curve that did
+      // nothing.
+      const animCurved = applyOverlayCurves(c, anim, localT);
       // an adjustment band is not drawn here; it was applied above
       if (c.kind === "adjustment") continue;
       if (c.kind === "text")
-        this.drawText(ctx, c, W, H, fadeAlpha * clamp01(anim.opacity), localT, c.duration, anim);
+        this.drawText(
+          ctx,
+          c,
+          W,
+          H,
+          fadeAlpha * clamp01(animCurved.opacity),
+          localT,
+          c.duration,
+          animCurved,
+        );
       if ((c.kind === "image" || c.kind === "video") && c.mediaId) {
         const rec = this.els.get(c.mediaId);
         if (!rec || !rec.url) continue;
@@ -2275,10 +2290,10 @@ export class Engine {
         const sw = srcW(src);
         const sh = srcH(src);
         if (!sw || !sh) continue;
-        const size = Math.max(1, anim.scale * W);
+        const size = Math.max(1, animCurved.scale * W);
         const ar = sw / sh;
-        const cx = W / 2 + anim.x * (W / 2);
-        const cy = H / 2 + anim.y * (H / 2);
+        const cx = W / 2 + animCurved.x * (W / 2);
+        const cy = H / 2 + animCurved.y * (H / 2);
         this.overlayRects.push({
           clipId: c.id,
           x: cx - size / 2,
@@ -2286,8 +2301,8 @@ export class Engine {
           w: size,
           h: size / ar,
         });
-        const rot = (anim.rotation * Math.PI) / 180;
-        const alpha = clamp01(fadeAlpha * anim.opacity);
+        const rot = (animCurved.rotation * Math.PI) / 180;
+        const alpha = clamp01(fadeAlpha * animCurved.opacity);
         const blend: GlobalCompositeOperation | null =
           c.blend && c.blend !== "normal" ? (c.blend as GlobalCompositeOperation) : null;
         if (c.chroma && sw * sh > 4) {
@@ -2817,9 +2832,14 @@ export class Engine {
     const glitching = eff === "glitch" && this.glitchWindow(localT);
     // Pixel-space grade (temperature / tint / vignette / sharpen / split-tone)
     // and LUTs need readback, so they render through the reduced offscreen pass.
+    // It must be handed the CURVED clip: gradePixels reads c.adjust directly, so
+    // an animated brightness/contrast/saturation was silently ignored as soon as
+    // the clip also had a pixel grade (temperature, sharpen, vignette…). The
+    // static CSS path got the curve and this one did not, so the same slider
+    // changed at the start of the clip and froze.
     const needsGrade = this.gradeActive(c.adjust) || curvesActive(c.curves) || hslActive(c.hsl);
     if (lut || needsGrade) {
-      this.drawMainGrade(ctx, el, W, H, c, lut ?? null);
+      this.drawMainGrade(ctx, el, W, H, filterSource, lut ?? null);
     } else if (glitching || eff === "vhs") {
       this.drawMainSliced(ctx, el, W, H, glitching, localT);
     } else {
